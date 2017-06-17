@@ -17,11 +17,11 @@ type Record struct {
 	Result *redis.StringCmd
 }
 
-func NewRecord(name string, t time.Time, a Attributes) *Record {
+func NewRecord(name string, t time.Time, labels Labels) *Record {
 	return &Record{
 		Name:   name,
 		Time:   t,
-		Labels: a,
+		Labels: labels,
 	}
 }
 
@@ -66,7 +66,7 @@ func (s RecordSequence) Results() []*Result {
 		if !ok {
 			result = &Result{
 				Event:  r.Name,
-				Labels: Attributes(r.Labels).Map(),
+				Labels: Labels(r.Labels).Map(),
 				Data:   make([]DataPoint, 0, len(s)),
 			}
 			grouped[key] = result

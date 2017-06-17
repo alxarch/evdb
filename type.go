@@ -242,60 +242,10 @@ func (t *EventType) Filters() []*Filter {
 	return t.filters
 }
 
-func (t *EventType) increment(labels []string, n float64) {
+func (t *EventType) increment(labels []string, n int64) {
 	t.counters.Increment(strings.Join(labels, labelSeparator), n)
 }
 
-// func (t *EventType) Increment(q map[string]string, n float64) {
-// 	attr := defaultPool.Get(2 * t.MaxDimSize())
-// 	defer defaultPool.Put(attr)
-// 	name := t.EventName(q)
-// 	// debug("sk %s %s", key, q)
-// 	t.counters.Increment(name, "*", n)
-// 	if len(q) == 0 {
-// 		return
-// 	}
-// 	for _, f := range t.filters {
-// 	dim_loop:
-// 		for _, dim := range f.Dimensions() {
-// 			i := 0
-// 			for _, d := range dim {
-// 				attr[i] = d
-// 				if value := q[d]; value != "" {
-// 					i++
-// 					attr[i] = value
-// 					i++
-// 				} else {
-// 					continue dim_loop
-// 				}
-// 			}
-// 			field := strings.Join(attr[:i], ":")
-// 			// debug("sk %s", field)
-// 			t.counters.Increment(name, field, n)
-// 		}
-// 	}
-// }
-
-// func (t *EventType) batch(b Batch, now time.Time) Batch {
-// 	out := make(map[CounterKey]float64)
-// 	for key, val := range b {
-// 		for _, f := range t.filters {
-// 			res := f.Resolution()
-// 			k := CounterKey{res.Key(key.name, now), key.field}
-// 			out[k] = val
-// 		}
-// 	}
-// 	return out
-// }
-//
-// func (t *EventType) Batch(now time.Time) Batch {
-// 	return t.batch(t.counters.Batch(), now)
-// }
-//
-// func (t *EventType) Flush(now time.Time) Batch {
-// 	return t.batch(t.counters.Flush(), now)
-// }
-//
 const labelSeparator = string('0')
 
 func (t *EventType) Persist(tm time.Time, r *redis.Client) error {
@@ -306,33 +256,33 @@ func (t *EventType) Persist(tm time.Time, r *redis.Client) error {
 		return nil
 	}
 	keys := make(map[string]time.Duration)
-	attr := make([]string, 2*t.maxdimsize)
-	defer t.Put(attr)
+	tmp := make([]string, 2*t.maxdimsize)
+	defer t.Put(tmp)
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
-		q := Attributes(labels).Map()
+		q := Labels(labels).Map()
 		name := t.EventName(q)
 		for _, f := range t.filters {
 			res := f.Resolution()
 			key := res.Key(name, tm)
 			keys[key] = f.MaxAge()
-			p.HIncrByFloat(key, "*", val)
+			p.HIncrBy(key, "*", val)
 		dim_loop:
 			for _, dim := range f.Dimensions() {
 				i := 0
 				for _, d := range dim {
-					attr[i] = d
+					tmp[i] = d
 					if value := q[d]; value != "" {
 						i++
-						attr[i] = value
+						tmp[i] = value
 						i++
 					} else {
 						continue dim_loop
 					}
 				}
-				field := strings.Join(attr[:i], ":")
+				field := strings.Join(tmp[:i], ":")
 				// debug("sk %s", field)
-				p.HIncrByFloat(key, field, val)
+				p.HIncrBy(key, field, val)
 			}
 		}
 	}

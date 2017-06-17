@@ -12,15 +12,13 @@ var (
 	UnregisteredEventError = errors.New("Unregistered event type")
 )
 
-func (lo *Logger) Log(name string, n float64, attr ...string) error {
+func (lo *Logger) Log(name string, n int64, attr ...string) error {
 	t := lo.Registry.Get(name)
 	if t == nil {
 		return UnregisteredEventError
 	}
 	labels := t.Labels(attr, lo.aliases)
 	t.increment(labels, n)
-	// log.Println(t.counters.Batch())
-	// lo.queue <- Event{t, n, labels}
 	return nil
 }
 
@@ -38,16 +36,12 @@ type Logger struct {
 	*Registry
 	Redis   *redis.Client
 	aliases Aliases
-	// queue   chan Event
-	// tick *time.Ticker
-	wg   sync.WaitGroup
-	done chan struct{}
+	wg      sync.WaitGroup
+	done    chan struct{}
 }
 
 type Options struct {
-	Redis redis.Options
-	// QueueSize     int           // Size of event queue buffer
-	// NumWorkers    int           // Number of event queue workers
+	Redis         redis.Options
 	FlushInterval time.Duration // Interval to flush counters
 }
 
@@ -59,16 +53,8 @@ func NewLogger(r *Registry, aliases Aliases, options Options) *Logger {
 		Registry: r,
 		aliases:  aliases,
 		Redis:    redis.NewClient(&options.Redis),
-		// queue:    make(chan Event, options.QueueSize),
-		done: make(chan struct{}),
+		done:     make(chan struct{}),
 	}
-	// if options.NumWorkers < 1 {
-	// 	options.NumWorkers = 1
-	// }
-	// lo.wg.Add(options.NumWorkers)
-	// for i := 0; i < options.NumWorkers; i++ {
-	// 	go lo.worker()
-	// }
 	if options.FlushInterval > 0 {
 		go func() {
 			lo.wg.Add(1)
@@ -88,33 +74,8 @@ func NewLogger(r *Registry, aliases Aliases, options Options) *Logger {
 	return lo
 }
 
-// func (lo *Logger) worker() {
-// 	lo.wg.Add(1)
-// 	defer lo.wg.Done()
-// 	defer func() {
-// 		lo.Persist(time.Now())
-// 	}()
-// 	for {
-// 		select {
-// 		case <-lo.done:
-// 			return
-// 		case e := <-lo.queue:
-// 			e.Type.Increment(e.Labels.Map(), e.Value)
-// 		}
-// 	}
-//
-// }
 func (lo *Logger) Close() {
 	close(lo.done)
 	lo.wg.Wait()
 	lo.Persist(time.Now())
-	// for {
-	// 	select {
-	// 	default:
-	// 		return
-	// 	case e := <-lo.queue:
-	// 		e.Type.Increment(e.Labels.Map(), e.Value)
-	// 	}
-	// }
-
 }
