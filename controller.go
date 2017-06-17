@@ -2,16 +2,17 @@ package meter
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
-
-	"github.com/go-redis/redis"
 )
 
-func (r *Registry) Mux(client redis.UniversalClient, maxresults int) *http.ServeMux {
+func (db *DB) Mux(maxresults int) *http.ServeMux {
 	resolutions := make(map[string]*Resolution)
-	for _, t := range r.types {
+	for _, t := range db.reg.types {
 		for _, f := range t.filters {
 			r := f.Resolution()
 			resolutions[r.Name] = r
@@ -20,8 +21,7 @@ func (r *Registry) Mux(client redis.UniversalClient, maxresults int) *http.Serve
 	mux := http.NewServeMux()
 	for name, res := range resolutions {
 		mux.Handle("/"+name, &Controller{
-			Redis:      client,
-			Registry:   r,
+			db:         db,
 			Resolution: res,
 			MaxRange:   res.Duration(),
 			MaxResults: maxresults,
@@ -31,9 +31,8 @@ func (r *Registry) Mux(client redis.UniversalClient, maxresults int) *http.Serve
 }
 
 type Controller struct {
-	Redis      redis.UniversalClient
 	Resolution *Resolution
-	Registry   *Registry
+	db         *DB
 	MaxResults int
 	MaxRange   time.Duration
 }
@@ -49,50 +48,34 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		res = c.Resolution
 	}
 	start, end, err := res.ParseRange(q.Get("start"), q.Get("end"), c.MaxRange)
-	delete(q, "start")
-	delete(q, "end")
 	if err != nil {
 		http.Error(w, "Invalid date range", http.StatusBadRequest)
 		return
 	}
 
 	format := q.Get("format")
-	delete(q, "format")
-
 	eventNames := q["event"]
-	delete(q, "event")
-
-	queries := PermutationPairs(q)
-	// Append an empty query for overall stats
-	if len(queries) == 0 {
-		queries = append(queries, []string{})
-	}
-	records := make([]*Record, 0, c.MaxResults)
-	for _, eventName := range eventNames {
-		if t := c.Registry.Get(eventName); t != nil {
-			for _, f := range t.Filters() {
-				if f.Resolution() == res {
-					records = append(records, t.Records(f, start, end, queries...)...)
-				}
-			}
-		}
-	}
-	if c.MaxResults > 0 && len(records) > c.MaxResults {
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		records = records[:c.MaxResults]
-	}
-	err = ReadRecords(c.Redis, records)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	_, grouped := q["groupbyevent"]
+	query := Query{
+		Resolution: res,
+		MaxResults: c.MaxResults,
+		Events:     eventNames,
+		Labels:     ParseQueryLabels(q["label"]),
+		Grouped:    grouped,
+		Start:      start,
+		End:        end,
 	}
 
 	var results interface{}
 	switch format {
 	case "results":
-		results = RecordSequence(records).Results()
+		results, err = c.db.Results(query)
 	default:
-		results = records
+		results, err = c.db.Records(query)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	enc := json.NewEncoder(w)
@@ -103,10 +86,29 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type DataPoint [2]int64
+type DataPoint struct {
+	Timestamp int64
+	Value     float64
+}
+
+func (d *DataPoint) MarshalJSON() ([]byte, error) {
+	s := fmt.Sprintf("[%d,%f]", d.Timestamp, d.Value)
+	return []byte(s), nil
+}
 
 type Result struct {
 	Event  string
 	Labels map[string]string
 	Data   []DataPoint
+}
+
+func ParseQueryLabels(values []string) url.Values {
+	labels := url.Values{}
+	for _, p := range values {
+		parts := strings.SplitN(p, ":", 2)
+		if len(parts) == 2 {
+			labels.Add(parts[0], parts[1])
+		}
+	}
+	return labels
 }

@@ -1,73 +1,120 @@
 package meter
 
 import (
-	"context"
+	"errors"
+	"sync"
 	"time"
 
-	batch "github.com/alxarch/go-batch"
 	"github.com/go-redis/redis"
 )
 
-const (
-	// DefaultBatchSize for log events
-	DefaultBatchSize = 1000
-	// DefaultFlushInterval for log events
-	DefaultFlushInterval = 5 * time.Second
+var (
+	UnregisteredEventError = errors.New("Unregistered event type")
 )
 
-type Sink struct {
-	*batch.Queue
-	Registry *Registry
-	Redis    redis.UniversalClient
-}
-
-func NewSink(r redis.UniversalClient, size int, interval time.Duration) *Sink {
-	s := &Sink{
-		Registry: DefaultRegistry,
-		Redis:    r,
+func (lo *Logger) Log(name string, n float64, attr ...string) error {
+	t := lo.Registry.Get(name)
+	if t == nil {
+		return UnregisteredEventError
 	}
-	s.Queue = &batch.Queue{
-		Size:     size,
-		Interval: interval,
-		Drainer:  s,
-	}
-	return s
-}
-
-func (s *Sink) batchCounters(batch []interface{}) (int64, TTLCounters) {
-	counters := TTLCounters{}
-	n := int64(0)
-	pool := defaultPool
-	if s.Registry != nil {
-		pool = s.Registry.Pool
-	}
-	for _, x := range batch {
-		if e, ok := x.(*Event); ok && e != nil {
-			n += e.Increment(counters)
-			// Attributes are not longer needed
-			pool.Put(e.Attributes)
-		}
-	}
-
-	return n, counters
-}
-
-// Log queues an event object to the log queue
-func (s *Sink) MustLog(e *Event) {
-	if err := s.Log(e); err != nil {
-		panic(err)
-	}
-}
-
-func (s *Sink) Log(e *Event) error {
-	return s.Queue.Add(e)
-}
-
-func (s *Sink) Drain(ctx context.Context, batch []interface{}) error {
-	_, counters := s.batchCounters(batch)
-	if _, err := counters.Persist(s.Redis); err != nil {
-		// log.Printf("Failed to drain stats: %s", err)
-		return err
-	}
+	labels := t.Labels(attr, lo.aliases)
+	t.increment(labels, n)
+	// log.Println(t.counters.Batch())
+	// lo.queue <- Event{t, n, labels}
 	return nil
+}
+
+func (lo *Logger) Persist(tm time.Time) (err error) {
+	// Use a transaction to ensure each event type is persisted entirely
+	lo.Registry.Each(func(name string, t *EventType) {
+		if err == nil {
+			err = t.Persist(tm, lo.Redis)
+		}
+	})
+	return
+}
+
+type Logger struct {
+	*Registry
+	Redis   *redis.Client
+	aliases Aliases
+	// queue   chan Event
+	// tick *time.Ticker
+	wg   sync.WaitGroup
+	done chan struct{}
+}
+
+type Options struct {
+	Redis redis.Options
+	// QueueSize     int           // Size of event queue buffer
+	// NumWorkers    int           // Number of event queue workers
+	FlushInterval time.Duration // Interval to flush counters
+}
+
+func NewLogger(r *Registry, aliases Aliases, options Options) *Logger {
+	if r == nil {
+		r = defaultRegistry
+	}
+	lo := &Logger{
+		Registry: r,
+		aliases:  aliases,
+		Redis:    redis.NewClient(&options.Redis),
+		// queue:    make(chan Event, options.QueueSize),
+		done: make(chan struct{}),
+	}
+	// if options.NumWorkers < 1 {
+	// 	options.NumWorkers = 1
+	// }
+	// lo.wg.Add(options.NumWorkers)
+	// for i := 0; i < options.NumWorkers; i++ {
+	// 	go lo.worker()
+	// }
+	if options.FlushInterval > 0 {
+		go func() {
+			lo.wg.Add(1)
+			defer lo.wg.Done()
+			tick := time.NewTicker(options.FlushInterval)
+			defer tick.Stop()
+			for {
+				select {
+				case <-lo.done:
+					return
+				case tm := <-tick.C:
+					lo.Persist(tm)
+				}
+			}
+		}()
+	}
+	return lo
+}
+
+// func (lo *Logger) worker() {
+// 	lo.wg.Add(1)
+// 	defer lo.wg.Done()
+// 	defer func() {
+// 		lo.Persist(time.Now())
+// 	}()
+// 	for {
+// 		select {
+// 		case <-lo.done:
+// 			return
+// 		case e := <-lo.queue:
+// 			e.Type.Increment(e.Labels.Map(), e.Value)
+// 		}
+// 	}
+//
+// }
+func (lo *Logger) Close() {
+	close(lo.done)
+	lo.wg.Wait()
+	lo.Persist(time.Now())
+	// for {
+	// 	select {
+	// 	default:
+	// 		return
+	// 	case e := <-lo.queue:
+	// 		e.Type.Increment(e.Labels.Map(), e.Value)
+	// 	}
+	// }
+
 }

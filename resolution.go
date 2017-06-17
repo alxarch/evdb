@@ -88,8 +88,5 @@ func (r *Resolution) MarshalTime(t time.Time) string {
 }
 
 func (r *Resolution) Key(event string, t time.Time) string {
-	// if r == nil {
-	// 	return Join(":", "stats", "*", event)
-	// }
 	return Join(":", "stats", r.Name, r.MarshalTime(t), event)
 }

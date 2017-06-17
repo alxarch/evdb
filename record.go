@@ -21,13 +21,13 @@ func NewRecord(name string, t time.Time, a Attributes) *Record {
 	return &Record{
 		Name:   name,
 		Time:   t,
-		Labels: a.Copy(),
+		Labels: a,
 	}
 }
 
-func (r *Record) Count() int64 {
+func (r *Record) Value() float64 {
 	if r.Result != nil {
-		if n, err := r.Result.Int64(); err == nil {
+		if n, err := r.Result.Float64(); err == nil {
 			return n
 		}
 	}
@@ -39,14 +39,14 @@ func (r *Record) MarshalJSON() ([]byte, error) {
 	for i := 0; i < len(r.Labels); i += 2 {
 		obj[r.Labels[i]] = r.Labels[i+1]
 	}
-	obj["count"] = r.Count()
+	obj["value"] = r.Value()
 	obj["time"] = r.Time.String()
 	obj["name"] = r.Name
 
 	return json.Marshal(obj)
 }
 
-func ReadRecords(r redis.UniversalClient, records []*Record) error {
+func ReadRecords(r redis.UniversalClient, records []Record) error {
 	pipeline := r.Pipeline()
 	defer pipeline.Close()
 	for _, r := range records {
@@ -56,7 +56,7 @@ func ReadRecords(r redis.UniversalClient, records []*Record) error {
 	return err
 }
 
-type RecordSequence []*Record
+type RecordSequence []Record
 
 func (s RecordSequence) Results() []*Result {
 	grouped := make(map[string]*Result)
@@ -71,16 +71,52 @@ func (s RecordSequence) Results() []*Result {
 			}
 			grouped[key] = result
 		}
-		result.Data = append(result.Data, DataPoint{r.Time.Unix(), r.Count()})
+		result.Data = append(result.Data, DataPoint{r.Time.Unix(), r.Value()})
 	}
 	results := make([]*Result, len(grouped))
 	i := 0
 	for _, r := range grouped {
 		sort.Slice(r.Data, func(i, j int) bool {
-			return r.Data[i][0] < r.Data[j][0]
+			return r.Data[i].Value < r.Data[j].Value
 		})
 		results[i] = r
 		i++
 	}
 	return results
+}
+
+func (s RecordSequence) Group() []*Result {
+	grouped := make(map[string]*Result)
+sloop:
+	for _, r := range s {
+		key := r.Name
+		result, ok := grouped[key]
+		if !ok {
+			result = &Result{
+				Event: r.Name,
+				Data:  make([]DataPoint, 0, len(s)),
+			}
+			grouped[key] = result
+		}
+		t := r.Time.Unix()
+		v := r.Value()
+		for i, d := range result.Data {
+			if d.Timestamp == t {
+				result.Data[i].Value += v
+				continue sloop
+			}
+		}
+		result.Data = append(result.Data, DataPoint{t, v})
+	}
+	results := make([]*Result, len(grouped))
+	i := 0
+	for _, r := range grouped {
+		sort.Slice(r.Data, func(i, j int) bool {
+			return r.Data[i].Value < r.Data[j].Value
+		})
+		results[i] = r
+		i++
+	}
+	return results
+
 }

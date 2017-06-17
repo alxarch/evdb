@@ -5,12 +5,13 @@ import "time"
 type Filter struct {
 	maxage time.Duration
 	res    *Resolution
-	dims   [][]string
+	dims   [][]string // Dimensions for this filter
 
 	maxdimsize int
-	attrmask   map[string]bool
+	attrmask   map[string]bool // Needed attributes
 }
 
+// NewFilter creates and initializes a new Filter
 func NewFilter(res *Resolution, maxage time.Duration, dims ...[]string) *Filter {
 	f := &Filter{
 		maxage:     maxage,
@@ -50,28 +51,3 @@ func (t *Filter) NeedsAttr(a string) bool {
 }
 
 // MatchQuery finds the first matching dimension for a query and returns an Attributes slice
-func (t *Filter) MatchQuery(q map[string]string) Attributes {
-	if q == nil {
-		return nil
-	} else if len(q) == 0 {
-		return Attributes{}
-	}
-	pairs := fullAttributes(2*t.MaxDimSize() + 10)
-dim_loop:
-	for _, dim := range t.dims {
-		i := 0
-		for _, d := range dim {
-			pairs[i] = d
-			if value := q[d]; value != "" {
-				i++
-				pairs[i] = value
-				i++
-			} else {
-				continue dim_loop
-			}
-		}
-		return pairs[:i]
-	}
-	PoolAttributes(pairs)
-	return nil
-}
