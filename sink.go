@@ -2,6 +2,7 @@ package meter
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -13,69 +14,60 @@ var (
 )
 
 func (lo *Logger) Log(name string, n int64, attr ...string) error {
-	t := lo.Registry.Get(name)
-	if t == nil {
-		return UnregisteredEventError
+	if e := lo.Registry.Get(name); e != nil {
+		e.Log(n, e.Labels(attr, lo.Aliases)...)
+		return nil
 	}
-	labels := t.Labels(attr, lo.aliases)
-	t.increment(labels, n)
+	return UnregisteredEventError
+}
+
+func (lo *Logger) Persist(tm time.Time) error {
+	lo.wg.Add(1)
+	defer lo.wg.Done()
+
+	errs := make(map[string]error)
+	lo.Registry.Each(func(name string, t *Event) {
+		if err := t.Persist(tm, lo.Redis); err != nil {
+			errs[name] = err
+		}
+	})
+	if len(errs) > 0 {
+		return FlushError(errs)
+	}
 	return nil
 }
 
-func (lo *Logger) Persist(tm time.Time) (err error) {
-	// Use a transaction to ensure each event type is persisted entirely
-	lo.Registry.Each(func(name string, t *EventType) {
-		if err == nil {
-			err = t.Persist(tm, lo.Redis)
+type FlushError map[string]error
+
+func (e FlushError) Error() string {
+	if len(e) > 0 {
+		names := make([]string, len(e))
+		i := 0
+		for name, _ := range e {
+			names[i] = name
+			i++
 		}
-	})
-	return
+		return fmt.Sprintf("Failed to persist events %s", names)
+	}
+	return "No error"
 }
 
 type Logger struct {
 	*Registry
 	Redis   *redis.Client
-	aliases Aliases
+	Aliases Aliases
 	wg      sync.WaitGroup
-	done    chan struct{}
 }
 
-type Options struct {
-	Redis         redis.Options
-	FlushInterval time.Duration // Interval to flush counters
-}
-
-func NewLogger(r *Registry, aliases Aliases, options Options) *Logger {
-	if r == nil {
-		r = defaultRegistry
-	}
+func NewLogger(r *redis.Client) *Logger {
 	lo := &Logger{
-		Registry: r,
-		aliases:  aliases,
-		Redis:    redis.NewClient(&options.Redis),
-		done:     make(chan struct{}),
-	}
-	if options.FlushInterval > 0 {
-		go func() {
-			lo.wg.Add(1)
-			defer lo.wg.Done()
-			tick := time.NewTicker(options.FlushInterval)
-			defer tick.Stop()
-			for {
-				select {
-				case <-lo.done:
-					return
-				case tm := <-tick.C:
-					lo.Persist(tm)
-				}
-			}
-		}()
+		Registry: defaultRegistry,
+		Aliases:  NewAliases(),
+		Redis:    r,
 	}
 	return lo
 }
 
 func (lo *Logger) Close() {
-	close(lo.done)
 	lo.wg.Wait()
-	lo.Persist(time.Now())
 }

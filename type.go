@@ -8,7 +8,17 @@ import (
 	"github.com/go-redis/redis"
 )
 
-type EventType struct {
+type Labels []string
+
+func (labels Labels) Map() map[string]string {
+	m := make(map[string]string)
+	for i := 0; i < len(labels); i += 2 {
+		m[labels[i]] = labels[i+1]
+	}
+	return m
+}
+
+type Event struct {
 	name       string
 	nameParams []string
 	filters    []*Filter
@@ -19,8 +29,8 @@ type EventType struct {
 	labels     map[string]int
 }
 
-func NewEventType(name string, nameParams []string, aliases Aliases, filters ...*Filter) *EventType {
-	t := &EventType{
+func NewEvent(name string, nameParams []string, aliases Aliases, filters ...*Filter) *Event {
+	t := &Event{
 		name:       name,
 		nameParams: nameParams,
 		filters:    filters,
@@ -64,7 +74,7 @@ func NewEventType(name string, nameParams []string, aliases Aliases, filters ...
 	return t
 
 }
-func (t *EventType) Put(labels []string) {
+func (t *Event) put(labels []string) {
 	n := len(t.labels)
 	if cap(labels) < n {
 		return
@@ -72,7 +82,7 @@ func (t *EventType) Put(labels []string) {
 	t.pool.Put(labels[:n])
 }
 
-func (t *EventType) MatchDim(labels []string, dim []string) []string {
+func (t *Event) MatchDim(labels []string, dim []string) []string {
 	dl := t.pool.Get().([]string)
 	n := 0
 	for _, d := range dim {
@@ -83,14 +93,14 @@ func (t *EventType) MatchDim(labels []string, dim []string) []string {
 				dl[n] = labels[i]
 				n++
 			}
-			t.Put(labels)
+			t.put(dl)
 			return nil
 		}
 	}
 	return dl[:n]
 
 }
-func (t *EventType) Labels(input []string, aliases Aliases) (labels []string) {
+func (t *Event) Labels(input []string, aliases Aliases) (labels []string) {
 	labels = t.pool.Get().([]string)
 	for label, i := range t.labels {
 		labels[i] = label
@@ -107,7 +117,7 @@ func (t *EventType) Labels(input []string, aliases Aliases) (labels []string) {
 	return
 }
 
-func (t *EventType) EventNameLabels(labels []string) string {
+func (t *Event) EventNameLabels(labels []string) string {
 	if dim := t.nameParams; len(dim) > 0 {
 		pairs := make([]string, len(dim)*2+1)
 		pairs[0] = t.name
@@ -129,7 +139,7 @@ func (t *EventType) EventNameLabels(labels []string) string {
 
 	return t.name
 }
-func (t *EventType) EventName(q map[string]string) string {
+func (t *Event) EventName(q map[string]string) string {
 	if dim := t.nameParams; len(dim) > 0 {
 		pairs := make([]string, len(dim)*2+1)
 		pairs[0] = t.name
@@ -151,7 +161,7 @@ func (t *EventType) EventName(q map[string]string) string {
 	return t.name
 }
 
-func (t *EventType) NeedsAttr(a string) bool {
+func (t *Event) NeedsAttr(a string) bool {
 	for _, f := range t.filters {
 		if f.NeedsAttr(a) {
 			return true
@@ -162,7 +172,7 @@ func (t *EventType) NeedsAttr(a string) bool {
 }
 
 // FilterAttributes copies an attributes slice keeping only needed attributes
-func (t *EventType) FilterAttributes(attr []string) (m map[string]string) {
+func (t *Event) FilterAttributes(attr []string) (m map[string]string) {
 	if n := len(attr); n > 0 {
 		m = make(map[string]string)
 		n -= n % 2
@@ -176,7 +186,7 @@ func (t *EventType) FilterAttributes(attr []string) (m map[string]string) {
 	return
 }
 
-func (t *EventType) MaxDimSize() int {
+func (t *Event) MaxDimSize() int {
 	return t.maxdimsize
 }
 
@@ -186,7 +196,7 @@ const (
 	AttrRequired
 )
 
-func (t *EventType) RequiresAttr(a string) bool {
+func (t *Event) RequiresAttr(a string) bool {
 	for _, r := range t.nameParams {
 		if r == a {
 			return true
@@ -195,7 +205,7 @@ func (t *EventType) RequiresAttr(a string) bool {
 	return false
 }
 
-func (t *EventType) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
+func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
 	if res == nil {
 		return nil
 	}
@@ -238,17 +248,18 @@ func (t *EventType) Records(res *Resolution, start, end time.Time, queries [][]s
 	return results
 }
 
-func (t *EventType) Filters() []*Filter {
+func (t *Event) Filters() []*Filter {
 	return t.filters
 }
 
-func (t *EventType) increment(labels []string, n int64) {
+func (t *Event) Log(n int64, labels ...string) {
 	t.counters.Increment(strings.Join(labels, labelSeparator), n)
 }
 
 const labelSeparator = string('0')
 
-func (t *EventType) Persist(tm time.Time, r *redis.Client) error {
+func (t *Event) Persist(tm time.Time, r *redis.Client) error {
+	// Use a transaction to ensure each event type is persisted entirely
 	p := r.TxPipeline()
 	defer p.Close()
 	b := t.counters.Flush()
@@ -257,7 +268,6 @@ func (t *EventType) Persist(tm time.Time, r *redis.Client) error {
 	}
 	keys := make(map[string]time.Duration)
 	tmp := make([]string, 2*t.maxdimsize)
-	defer t.Put(tmp)
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()

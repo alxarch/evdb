@@ -12,16 +12,13 @@ import (
 func Test_Registry(t *testing.T) {
 	r := m.NewRegistry()
 	f := m.NewFilter(m.ResolutionDaily, m.Daily, []string{"foo"})
-	g := m.NewEventType("goo", nil, nil, f)
+	g := m.NewEvent("goo", nil, nil, f)
 	r.Register("goo", g)
 	// now := time.Now()
 	a := m.NewAliases()
 	a.Set("FOO", "foo")
-	lo := m.NewLogger(r, a, m.Options{
-		Redis: redis.Options{Addr: ":6379"},
-		// QueueSize:  8,
-		// NumWorkers: 4,
-	})
+	lo := m.NewLogger(redis.NewClient(&redis.Options{Addr: ":6379"}))
+	lo.Registry = r
 	lo.Log("goo", 1.0, "foo", "bar")
 	lo.Log("goo", 6.0, "FOO", "baz")
 	lo.Log("goo", 1.0)

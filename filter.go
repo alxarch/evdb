@@ -49,5 +49,3 @@ func (f *Filter) Resolution() *Resolution {
 func (t *Filter) NeedsAttr(a string) bool {
 	return t.attrmask[a]
 }
-
-// MatchQuery finds the first matching dimension for a query and returns an Attributes slice
