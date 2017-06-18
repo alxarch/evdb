@@ -1,6 +1,8 @@
 package meter
 
-import "net/url"
+import (
+	"net/url"
+)
 
 type Aliases map[string]string
 
@@ -33,6 +35,6 @@ func (a Aliases) Set(aliases ...string) {
 	n := len(aliases)
 	n -= n % 2
 	for i := 0; i < n; i += 2 {
-		a[aliases[i+1]] = aliases[i]
+		a[aliases[i]] = aliases[i+1]
 	}
 }

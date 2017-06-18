@@ -22,9 +22,16 @@ func (lo *Logger) Log(name string, n int64, attr ...string) error {
 }
 
 func (lo *Logger) Persist(tm time.Time) error {
+	err := make(chan error)
 	lo.wg.Add(1)
-	defer lo.wg.Done()
+	go func() {
+		defer lo.wg.Done()
+		err <- lo.persist(tm)
+	}()
+	return <-err
 
+}
+func (lo *Logger) persist(tm time.Time) error {
 	errs := make(map[string]error)
 	lo.Registry.Each(func(name string, t *Event) {
 		if err := t.Persist(tm, lo.Redis); err != nil {
