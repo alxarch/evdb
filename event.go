@@ -12,9 +12,14 @@ import (
 type Labels []string
 
 func (labels Labels) Map() map[string]string {
+	n := len(labels)
+	n = n - n%2
+	labels = labels[:n]
 	m := make(map[string]string)
-	for i := 0; i < len(labels); i += 2 {
-		m[labels[i]] = labels[i+1]
+	if len(labels) > 0 {
+		for i := 0; i < n; i += 2 {
+			m[labels[i]] = labels[i+1]
+		}
 	}
 	return m
 }
