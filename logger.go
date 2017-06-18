@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -32,6 +33,10 @@ func (lo *Logger) MustPersist(tm time.Time, r *redis.Client) {
 	}
 }
 
+func (lo *Logger) FlushErrors() int64 {
+	return atomic.LoadInt64(&lo.errors)
+}
+
 func (lo *Logger) Persist(tm time.Time, r *redis.Client) error {
 	err := make(chan error)
 	lo.wg.Add(1)
@@ -46,6 +51,7 @@ func (lo *Logger) persist(tm time.Time, r *redis.Client) error {
 	errs := make(map[string]error)
 	lo.Registry.Each(func(name string, t *Event) {
 		if err := t.Persist(tm, r); err != nil {
+			atomic.AddInt64(&lo.errors, 1)
 			errs[name] = err
 		}
 	})
@@ -73,6 +79,7 @@ func (e FlushError) Error() string {
 type Logger struct {
 	*Registry
 	Aliases Aliases
+	errors  int64
 	wg      sync.WaitGroup
 }
 
