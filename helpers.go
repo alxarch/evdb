@@ -111,21 +111,21 @@ func SetIntervalContext(parent context.Context, d time.Duration, callback func(t
 
 }
 
-type Interval struct {
-	cancel   context.CancelFunc
-	interval time.Duration
-}
-
-func NewInterval(dt time.Duration, callback func(t time.Time)) *Interval {
-	return &Interval{
-		cancel:   SetInterval(dt, callback),
-		interval: dt,
-	}
-}
-
-func (i *Interval) Close() {
-	i.cancel()
-}
-func (i *Interval) Interval() time.Duration {
-	return i.interval
-}
+// type Interval struct {
+// 	cancel   context.CancelFunc
+// 	interval time.Duration
+// }
+//
+// func NewInterval(dt time.Duration, callback func(t time.Time)) *Interval {
+// 	return &Interval{
+// 		cancel:   SetInterval(dt, callback),
+// 		interval: dt,
+// 	}
+// }
+//
+// func (i *Interval) Close() {
+// 	i.cancel()
+// }
+// func (i *Interval) Interval() time.Duration {
+// 	return i.interval
+// }
