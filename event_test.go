@@ -12,9 +12,17 @@ var redisOptions = &redis.Options{Addr: ":6379"}
 var redisClient = redis.NewClient(redisOptions)
 
 func Test_Persist(t *testing.T) {
-	f := meter.NewFilter(meter.ResolutionDaily, meter.Daily)
+	dim := []string{"bar"}
+	f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
 	e := meter.NewEvent("foo", []string{}, f)
-	e.Log(2)
+	if has := e.HasLabel("baz"); has {
+		t.Error("Haslabel error")
+	}
+	if has := e.HasLabel("bar"); !has {
+		t.Error("Haslabel error")
+	}
+	e.Log(1)
+	e.Log(1, "bar", "baz")
 	now := time.Now()
 	e.Persist(now, redisClient)
 	key := meter.ResolutionDaily.Key(e.EventNameLabels(nil), now)
