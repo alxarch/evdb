@@ -298,3 +298,7 @@ func (t *Event) Persist(tm time.Time, r *redis.Client) error {
 	}
 	return err
 }
+
+func (e *Event) Key(res *Resolution, tm time.Time, labels ...string) string {
+	return res.Key(e.EventNameLabels(labels), tm)
+}
