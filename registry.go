@@ -3,13 +3,11 @@ package meter
 import (
 	"errors"
 	"sync"
-
-	"github.com/go-redis/redis"
 )
 
 type Registry struct {
-	types map[string]*Event
-	mu    sync.RWMutex
+	events map[string]*Event
+	mu     sync.RWMutex
 }
 
 var (
@@ -19,54 +17,50 @@ var (
 func (r *Registry) Register(name string, t *Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if nil == r.types {
-		r.types = make(map[string]*Event)
+	if nil == r.events {
+		r.events = make(map[string]*Event)
 	}
-	if _, ok := r.types[name]; ok {
+	if _, ok := r.events[name]; ok {
 		return DuplicateTypeError
 	}
-	r.types[name] = t
+	r.events[name] = t
 	return nil
 }
 
 func (r *Registry) Get(name string) *Event {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if r.types == nil {
+	if r.events == nil {
 		return nil
 	}
-	return r.types[name]
+	return r.events[name]
 }
 func (r *Registry) Each(fn func(name string, t *Event)) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for n, t := range r.types {
+	for n, t := range r.events {
 		fn(n, t)
 	}
 }
 
 var defaultRegistry = NewRegistry()
 
-func DefaultRegistry() *Registry {
-	return defaultRegistry
-}
-
-func RegisterEventType(name string, t *Event) error {
+func Register(name string, t *Event) error {
 	return defaultRegistry.Register(name, t)
 }
 
-func GetEventType(name string) *Event {
+func GetEvent(name string) *Event {
 	return defaultRegistry.Get(name)
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		types: make(map[string]*Event),
+		events: make(map[string]*Event),
 	}
 }
 
-func (r *Registry) Logger(c *redis.Client) *Logger {
-	lo := NewLogger(c)
+func (r *Registry) Logger() *Logger {
+	lo := NewLogger()
 	lo.Registry = r
 	return lo
 }

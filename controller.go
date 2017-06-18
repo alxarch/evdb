@@ -7,12 +7,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
-func (db *DB) Mux(maxresults int) *http.ServeMux {
+func (db *DB) Mux(maxrecords int) *http.ServeMux {
 	resolutions := make(map[string]*Resolution)
-	for _, t := range db.reg.types {
+	for _, t := range db.Registry.events {
 		for _, f := range t.filters {
 			r := f.Resolution()
 			resolutions[r.Name] = r
@@ -21,10 +20,9 @@ func (db *DB) Mux(maxresults int) *http.ServeMux {
 	mux := http.NewServeMux()
 	for name, res := range resolutions {
 		mux.Handle("/"+name, &Controller{
-			db:         db,
+			DB:         db,
 			Resolution: res,
-			MaxRange:   res.Duration(),
-			MaxResults: maxresults,
+			MaxRecords: maxrecords,
 		})
 	}
 	return mux
@@ -32,9 +30,8 @@ func (db *DB) Mux(maxresults int) *http.ServeMux {
 
 type Controller struct {
 	Resolution *Resolution
-	db         *DB
-	MaxResults int
-	MaxRange   time.Duration
+	DB         *DB
+	MaxRecords int
 }
 
 func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +44,7 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if c.Resolution != nil {
 		res = c.Resolution
 	}
-	start, end, err := res.ParseRange(q.Get("start"), q.Get("end"), c.MaxRange)
+	start, end, err := res.ParseRange(q.Get("start"), q.Get("end"), 0)
 	if err != nil {
 		http.Error(w, "Invalid date range", http.StatusBadRequest)
 		return
@@ -58,9 +55,9 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, grouped := q["groupbyevent"]
 	query := Query{
 		Resolution: res,
-		MaxResults: c.MaxResults,
+		MaxRecords: c.MaxRecords,
 		Events:     eventNames,
-		Labels:     ParseQueryLabels(q["label"]),
+		Labels:     ParseQueryLabels(q, "q:"),
 		Grouped:    grouped,
 		Start:      start,
 		End:        end,
@@ -69,9 +66,9 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var results interface{}
 	switch format {
 	case "results":
-		results, err = c.db.Results(query)
+		results, err = c.DB.Results(query)
 	default:
-		results, err = c.db.Records(query)
+		results, err = c.DB.Records(query)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -102,12 +99,15 @@ type Result struct {
 	Data   []DataPoint
 }
 
-func ParseQueryLabels(values []string) url.Values {
+func ParseQueryLabels(q url.Values, prefix string) url.Values {
 	labels := url.Values{}
-	for _, p := range values {
-		parts := strings.SplitN(p, ":", 2)
-		if len(parts) == 2 {
-			labels.Add(parts[0], parts[1])
+	for name, values := range q {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		label := name[len(prefix):]
+		for _, p := range values {
+			labels.Add(label, p)
 		}
 	}
 	return labels

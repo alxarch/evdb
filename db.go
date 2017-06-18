@@ -1,8 +1,8 @@
 package meter
 
 import (
+	"errors"
 	"fmt"
-	"net/url"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -15,44 +15,51 @@ type Query struct {
 	Labels     map[string][]string
 	Resolution *Resolution
 	Grouped    bool
-	MaxResults int
+	MaxRecords int
 }
 type DB struct {
-	aliases Aliases
-	reg     *Registry
-	redis   redis.UniversalClient
+	Aliases  Aliases
+	Registry *Registry
+	Redis    redis.UniversalClient
 }
 
 const DefaultMaxResults = 10000
 
-func (db *DB) LabelQueries(q url.Values) [][]string {
-	if len(q) > 0 {
-		labels := make(map[string][]string)
-		for label, values := range q {
-			labels[db.aliases.Alias(label)] = values
-		}
-		return PermutationPairs(labels)
+var (
+	MaxRecordsError = errors.New("Max records reached")
+)
+
+func (q *Query) Records(r *Registry) (rs RecordSequence, err error) {
+	var queries [][]string
+	if len(q.Labels) == 0 {
+		queries = [][]string{[]string{}}
+	} else {
+		queries = PermutationPairs(q.Labels)
 	}
-	// Append an empty query for overall stats
-	return [][]string{[]string{}}
-}
-func (db *DB) Records(q Query) (rs RecordSequence, err error) {
-	queries := db.LabelQueries(q.Labels)
 	records := []Record{}
 	for _, eventName := range q.Events {
-		if t := db.reg.Get(eventName); t != nil {
+		if t := r.Get(eventName); t != nil {
 			records = append(records, t.Records(q.Resolution, q.Start, q.End, queries)...)
 		} else {
 			return nil, fmt.Errorf("Event %s not found.", eventName)
 		}
 	}
-	if q.MaxResults > 0 && len(records) > q.MaxResults {
-		records = records[:q.MaxResults]
-	}
-	if err = ReadRecords(db.redis, records); err != nil {
-		return
+	if q.MaxRecords > 0 && len(records) > q.MaxRecords {
+		records = records[:q.MaxRecords]
+		err = MaxRecordsError
 	}
 	rs = RecordSequence(records)
+	return
+
+}
+
+func (db *DB) Records(q Query) (rs RecordSequence, err error) {
+	rs, err = q.Records(db.Registry)
+	if err == nil || err == MaxRecordsError {
+		if e := ReadRecords(db.Redis, rs); e != nil {
+			err = e
+		}
+	}
 	return
 }
 

@@ -92,9 +92,10 @@ func (t *Event) MatchDim(labels []string, dim []string) []string {
 				n++
 				dl[n] = labels[i]
 				n++
+			} else {
+				t.put(dl)
+				return nil
 			}
-			t.put(dl)
-			return nil
 		}
 	}
 	return dl[:n]
@@ -257,6 +258,12 @@ func (t *Event) Log(n int64, labels ...string) {
 }
 
 const labelSeparator = string('0')
+
+func (t *Event) MustPersist(tm time.Time, r *redis.Client) {
+	if err := t.Persist(tm, r); err != nil {
+		panic(err)
+	}
+}
 
 func (t *Event) Persist(tm time.Time, r *redis.Client) error {
 	// Use a transaction to ensure each event type is persisted entirely

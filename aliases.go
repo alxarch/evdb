@@ -38,3 +38,12 @@ func (a Aliases) Set(aliases ...string) {
 		a[aliases[i]] = aliases[i+1]
 	}
 }
+
+var defaultAliases = NewAliases()
+
+func Alias(s string) string {
+	return defaultAliases.Alias(s)
+}
+func SetAlias(aliases ...string) {
+	defaultAliases.Set(aliases...)
+}

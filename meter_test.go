@@ -17,8 +17,8 @@ func Test_Registry(t *testing.T) {
 	// now := time.Now()
 	a := m.NewAliases()
 	a.Set("FOO", "foo")
-	lo := m.NewLogger(redis.NewClient(&redis.Options{Addr: ":6379"}))
-	lo.Registry = r
+	rc := redis.NewClient(&redis.Options{Addr: ":6379"})
+	lo := r.Logger()
 	lo.Log("goo", 1.0, "foo", "bar")
 	lo.Log("goo", 6.0, "FOO", "baz")
 	lo.Log("goo", 1.0)
@@ -26,6 +26,6 @@ func Test_Registry(t *testing.T) {
 	// b := r.Get("goo").Flush(time.Now())
 	// bb := r.Get("goo").Batch(now)
 	// log.Println(b)
-	log.Println(g.Persist(time.Now(), lo.Redis))
+	log.Println(g.Persist(time.Now(), rc))
 
 }

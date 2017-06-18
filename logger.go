@@ -13,28 +13,39 @@ var (
 	UnregisteredEventError = errors.New("Unregistered event type")
 )
 
-func (lo *Logger) Log(name string, n int64, attr ...string) error {
+func (lo *Logger) MustLog(name string, n int64, labels ...string) {
+	if err := lo.Log(name, n, labels...); err != nil {
+		panic(err)
+	}
+}
+func (lo *Logger) Log(name string, n int64, labels ...string) error {
 	if e := lo.Registry.Get(name); e != nil {
-		e.Log(n, e.Labels(attr, lo.Aliases)...)
+		e.Log(n, e.Labels(labels, lo.Aliases)...)
 		return nil
 	}
 	return UnregisteredEventError
 }
 
-func (lo *Logger) Persist(tm time.Time) error {
+func (lo *Logger) MustPersist(tm time.Time, r *redis.Client) {
+	if err := lo.Persist(tm, r); err != nil {
+		panic(err)
+	}
+}
+
+func (lo *Logger) Persist(tm time.Time, r *redis.Client) error {
 	err := make(chan error)
 	lo.wg.Add(1)
 	go func() {
 		defer lo.wg.Done()
-		err <- lo.persist(tm)
+		err <- lo.persist(tm, r)
 	}()
 	return <-err
 
 }
-func (lo *Logger) persist(tm time.Time) error {
+func (lo *Logger) persist(tm time.Time, r *redis.Client) error {
 	errs := make(map[string]error)
 	lo.Registry.Each(func(name string, t *Event) {
-		if err := t.Persist(tm, lo.Redis); err != nil {
+		if err := t.Persist(tm, r); err != nil {
 			errs[name] = err
 		}
 	})
@@ -61,20 +72,35 @@ func (e FlushError) Error() string {
 
 type Logger struct {
 	*Registry
-	Redis   *redis.Client
 	Aliases Aliases
 	wg      sync.WaitGroup
 }
 
-func NewLogger(r *redis.Client) *Logger {
-	lo := &Logger{
-		Registry: defaultRegistry,
+func NewLogger() *Logger {
+	return &Logger{
+		Registry: NewRegistry(),
 		Aliases:  NewAliases(),
-		Redis:    r,
 	}
-	return lo
 }
 
 func (lo *Logger) Close() {
 	lo.wg.Wait()
+}
+
+var defaultLogger = &Logger{
+	Aliases:  defaultAliases,
+	Registry: defaultRegistry,
+}
+
+func Log(name string, n int64, labels ...string) error {
+	return defaultLogger.Log(name, n, labels...)
+}
+func MustLog(name string, n int64, labels ...string) {
+	defaultLogger.MustLog(name, n, labels...)
+}
+func Persist(tm time.Time, r *redis.Client) error {
+	return defaultLogger.Persist(tm, r)
+}
+func MustPersist(tm time.Time, r *redis.Client) {
+	defaultLogger.MustPersist(tm, r)
 }
