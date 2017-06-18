@@ -17,17 +17,9 @@ type Record struct {
 	Result *redis.StringCmd
 }
 
-func NewRecord(name string, t time.Time, labels Labels) *Record {
-	return &Record{
-		Name:   name,
-		Time:   t,
-		Labels: labels,
-	}
-}
-
-func (r *Record) Value() float64 {
+func (r *Record) Value() int64 {
 	if r.Result != nil {
-		if n, err := r.Result.Float64(); err == nil {
+		if n, err := r.Result.Int64(); err == nil {
 			return n
 		}
 	}

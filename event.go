@@ -1,6 +1,7 @@
 package meter
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -25,24 +26,29 @@ type Event struct {
 	maxdimsize int
 	counters   *Counters
 	pool       *sync.Pool
-	aliases    Aliases
 	labels     map[string]int
 }
 
-func NewEvent(name string, nameParams []string, aliases Aliases, filters ...*Filter) *Event {
+func NewEvent(name string, nameParams []string, filters ...*Filter) *Event {
 	t := &Event{
 		name:       name,
-		nameParams: nameParams,
-		filters:    filters,
-		aliases:    aliases,
+		nameParams: make([]string, 0, len(nameParams)),
+		filters:    make([]*Filter, 0, len(filters)),
 		counters:   NewCounters(),
 	}
 	maxdimsize := 0
 	n := 0
 	needed := make(map[string]int)
-	for _, f := range t.filters {
+	for _, f := range filters {
+		if f == nil {
+			continue
+		}
+		t.filters = append(t.filters, f)
 		for _, dim := range f.Dimensions() {
 			size := len(dim)
+			if size == 0 {
+				continue
+			}
 			if size > maxdimsize {
 				maxdimsize = size
 			}
@@ -54,10 +60,15 @@ func NewEvent(name string, nameParams []string, aliases Aliases, filters ...*Fil
 			}
 		}
 	}
-	for _, p := range nameParams {
-		if _, ok := needed[p]; !ok {
-			needed[p] = 2 * n
-			n++
+	if len(nameParams) > 0 {
+		for _, p := range nameParams {
+			if p != "" {
+				t.nameParams = append(t.nameParams, p)
+				if _, ok := needed[p]; !ok {
+					needed[p] = 2 * n
+					n++
+				}
+			}
 		}
 	}
 	t.labels = needed
@@ -162,48 +173,13 @@ func (t *Event) EventName(q map[string]string) string {
 	return t.name
 }
 
-func (t *Event) NeedsAttr(a string) bool {
-	for _, f := range t.filters {
-		if f.NeedsAttr(a) {
-			return true
-		}
-	}
-	return false
-
-}
-
-// FilterAttributes copies an attributes slice keeping only needed attributes
-func (t *Event) FilterAttributes(attr []string) (m map[string]string) {
-	if n := len(attr); n > 0 {
-		m = make(map[string]string)
-		n -= n % 2
-		for i := 0; i < n; i += 2 {
-			if a := attr[i]; t.NeedsAttr(a) {
-				// debug("needs %s", a)
-				m[a] = attr[i+1]
-			}
-		}
-	}
-	return
+func (t *Event) HasLabel(a string) bool {
+	_, ok := t.labels[a]
+	return ok
 }
 
 func (t *Event) MaxDimSize() int {
 	return t.maxdimsize
-}
-
-const (
-	AttrSkip int = iota
-	AttrOptional
-	AttrRequired
-)
-
-func (t *Event) RequiresAttr(a string) bool {
-	for _, r := range t.nameParams {
-		if r == a {
-			return true
-		}
-	}
-	return false
 }
 
 func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
@@ -265,7 +241,12 @@ func (t *Event) MustPersist(tm time.Time, r *redis.Client) {
 	}
 }
 
+var NilEventError = errors.New("Event is nil.")
+
 func (t *Event) Persist(tm time.Time, r *redis.Client) error {
+	if t == nil {
+		return NilEventError
+	}
 	// Use a transaction to ensure each event type is persisted entirely
 	p := r.TxPipeline()
 	defer p.Close()

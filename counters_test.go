@@ -38,3 +38,25 @@ func Test_Counter(t *testing.T) {
 		t.Errorf("Invalid set value %d", n)
 	}
 }
+
+func Test_Counters(t *testing.T) {
+	cc := meter.NewCounters()
+	if n := cc.Increment("foo", 1); n != 1 {
+		t.Errorf("Invalid counters increment %d", n)
+	}
+
+	cc.BatchIncrement(map[string]int64{
+		"foo": 2,
+		"bar": 3,
+	})
+	b := cc.Batch()
+	if foo := b["foo"]; foo != 3 {
+		t.Errorf("Invalid counters increment %d", foo)
+
+	}
+	if bar := b["bar"]; bar != 3 {
+		t.Errorf("Invalid counters increment %d", bar)
+
+	}
+
+}

@@ -95,6 +95,13 @@ var defaultLogger = &Logger{
 func Log(name string, n int64, labels ...string) error {
 	return defaultLogger.Log(name, n, labels...)
 }
+
+func LogEvent(e *Event, n int64, labels ...string) {
+	if e != nil {
+		e.Log(n, e.Labels(labels, defaultAliases)...)
+	}
+}
+
 func MustLog(name string, n int64, labels ...string) {
 	defaultLogger.MustLog(name, n, labels...)
 }

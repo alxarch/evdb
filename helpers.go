@@ -1,7 +1,6 @@
 package meter
 
 import (
-	"context"
 	"net/url"
 	"strings"
 	"time"
@@ -79,36 +78,55 @@ func PermutationPairs(input url.Values) [][]string {
 	return result
 }
 
-func SetInterval(d time.Duration, callback func(tm time.Time)) (cancel func()) {
-	done := make(chan struct{})
-	cancel = func() {
-		close(done)
-	}
-	go RunInterval(d, callback, done)
-	return
-}
+// func SetInterval(d time.Duration, callback func(tm time.Time)) (cancel func()) {
+// 	done := make(chan struct{})
+// 	cancel = func() {
+// 		close(done)
+// 	}
+// 	go RunInterval(d, callback, done)
+// 	return
+// }
+//
+// func RunInterval(d time.Duration, callback func(tm time.Time), done <-chan struct{}) {
+// 	tick := time.NewTicker(d)
+// 	defer tick.Stop()
+// 	for {
+// 		select {
+// 		case <-done:
+// 			return
+// 		case t := <-tick.C:
+// 			callback(t)
+// 		}
+// 	}
+// }
+//
+// func SetIntervalContext(parent context.Context, d time.Duration, callback func(tm time.Time)) (ctx context.Context, cancel context.CancelFunc) {
+// 	if parent == nil {
+// 		parent = context.Background()
+// 	}
+// 	ctx, cancel = context.WithCancel(parent)
+// 	go RunInterval(d, callback, ctx.Done())
+// 	return
+//
+// }
 
-func RunInterval(d time.Duration, callback func(tm time.Time), done <-chan struct{}) {
-	tick := time.NewTicker(d)
-	defer tick.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case t := <-tick.C:
-			callback(t)
+func SubQuery(q url.Values, prefix string) url.Values {
+	prefix = strings.Trim(prefix, " :")
+	if prefix == "" {
+		return q
+	}
+	prefix = prefix + ":"
+	labels := url.Values{}
+	for name, values := range q {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		label := name[len(prefix):]
+		for _, p := range values {
+			labels.Add(label, p)
 		}
 	}
-}
-
-func SetIntervalContext(parent context.Context, d time.Duration, callback func(tm time.Time)) (ctx context.Context, cancel context.CancelFunc) {
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel = context.WithCancel(parent)
-	go RunInterval(d, callback, ctx.Done())
-	return
-
+	return labels
 }
 
 // type Interval struct {

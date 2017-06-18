@@ -17,7 +17,7 @@ var (
 func (r *Registry) Register(name string, t *Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if nil == r.events {
+	if r.events == nil {
 		r.events = make(map[string]*Event)
 	}
 	if _, ok := r.events[name]; ok {

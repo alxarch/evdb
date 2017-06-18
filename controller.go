@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
-	"strings"
 )
 
 func (db *DB) Mux(maxrecords int) *http.ServeMux {
@@ -52,12 +50,12 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	format := q.Get("format")
 	eventNames := q["event"]
-	_, grouped := q["groupbyevent"]
+	_, grouped := q["grouped"]
 	query := Query{
 		Resolution: res,
 		MaxRecords: c.MaxRecords,
 		Events:     eventNames,
-		Labels:     ParseQueryLabels(q, "q:"),
+		Labels:     SubQuery(q, "q:"),
 		Grouped:    grouped,
 		Start:      start,
 		End:        end,
@@ -85,11 +83,11 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 type DataPoint struct {
 	Timestamp int64
-	Value     float64
+	Value     int64
 }
 
 func (d *DataPoint) MarshalJSON() ([]byte, error) {
-	s := fmt.Sprintf("[%d,%f]", d.Timestamp, d.Value)
+	s := fmt.Sprintf("[%d,%d]", d.Timestamp, d.Value)
 	return []byte(s), nil
 }
 
@@ -97,18 +95,4 @@ type Result struct {
 	Event  string
 	Labels map[string]string
 	Data   []DataPoint
-}
-
-func ParseQueryLabels(q url.Values, prefix string) url.Values {
-	labels := url.Values{}
-	for name, values := range q {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		label := name[len(prefix):]
-		for _, p := range values {
-			labels.Add(label, p)
-		}
-	}
-	return labels
 }

@@ -27,27 +27,29 @@ type Counters struct {
 	mu     sync.RWMutex
 }
 
-func (c *Counters) increment(d string, n int64) {
+func (c *Counters) increment(d string, n int64) int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if v, ok := c.values[d]; ok {
-		v.Inc(n)
+		return v.Inc(n)
 	} else {
 		v = &Counter{}
-		v.Inc(n)
+		total := v.Inc(n)
 		c.values[d] = v
+		return total
 	}
 
 }
-func (c *Counters) Increment(key string, n int64) {
+func (c *Counters) Increment(key string, n int64) int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if v, ok := c.values[key]; ok {
-		v.Inc(n)
+		return v.Inc(n)
 	} else {
 		c.mu.RUnlock()
-		c.increment(key, n)
+		n = c.increment(key, n)
 		c.mu.RLock()
+		return n
 	}
 }
 func NewCounters() *Counters {
