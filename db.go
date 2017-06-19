@@ -74,3 +74,11 @@ func (db *DB) Results(q Query) (results []*Result, err error) {
 	}
 	return
 }
+
+func NewDB(r redis.UniversalClient) *DB {
+	return &DB{
+		Registry: defaultRegistry,
+		Aliases:  defaultAliases,
+		Redis:    r,
+	}
+}
