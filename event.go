@@ -16,12 +16,22 @@ func (labels Labels) Map() map[string]string {
 	n = n - n%2
 	labels = labels[:n]
 	m := make(map[string]string)
-	if len(labels) > 0 {
+	if n > 0 {
 		for i := 0; i < n; i += 2 {
 			m[labels[i]] = labels[i+1]
 		}
 	}
 	return m
+}
+
+func (labels Labels) Set(pairs ...string) Labels {
+	n := len(pairs)
+	n = n - n%2
+	if n > 0 {
+		labels = append(labels, pairs[:n]...)
+	}
+	return labels
+
 }
 
 type Event struct {
