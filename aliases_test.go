@@ -11,11 +11,11 @@ func Test_NewAliases(t *testing.T) {
 	if aliases.Alias("foo") != "foo" {
 		t.Error("Invalid empty aliases")
 	}
-	aliases.Set("FOO", "foo")
+	aliases.Set("foo", "FOO")
 	if aliases.Alias("FOO") != "foo" {
 		t.Error("Invalid substitution")
 	}
-	aliases.Set("FOO", "foo", "Foo", "foo")
+	aliases.Set("foo", "FOO", "Foo")
 	if aliases.Alias("Foo") != "foo" {
 		t.Error("Invalid substitution")
 	}

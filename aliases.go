@@ -31,11 +31,9 @@ func (a Aliases) Alias(s string) string {
 	return s
 }
 
-func (a Aliases) Set(aliases ...string) {
-	n := len(aliases)
-	n -= n % 2
-	for i := 0; i < n; i += 2 {
-		a[aliases[i]] = aliases[i+1]
+func (a Aliases) Set(label string, aliases ...string) {
+	for _, alias := range aliases {
+		a[alias] = label
 	}
 }
 
@@ -44,6 +42,6 @@ var defaultAliases = NewAliases()
 func Alias(s string) string {
 	return defaultAliases.Alias(s)
 }
-func SetAlias(aliases ...string) {
-	defaultAliases.Set(aliases...)
+func SetAlias(label string, aliases ...string) {
+	defaultAliases.Set(label, aliases...)
 }

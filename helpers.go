@@ -78,38 +78,6 @@ func PermutationPairs(input url.Values) [][]string {
 	return result
 }
 
-// func SetInterval(d time.Duration, callback func(tm time.Time)) (cancel func()) {
-// 	done := make(chan struct{})
-// 	cancel = func() {
-// 		close(done)
-// 	}
-// 	go RunInterval(d, callback, done)
-// 	return
-// }
-//
-// func RunInterval(d time.Duration, callback func(tm time.Time), done <-chan struct{}) {
-// 	tick := time.NewTicker(d)
-// 	defer tick.Stop()
-// 	for {
-// 		select {
-// 		case <-done:
-// 			return
-// 		case t := <-tick.C:
-// 			callback(t)
-// 		}
-// 	}
-// }
-//
-// func SetIntervalContext(parent context.Context, d time.Duration, callback func(tm time.Time)) (ctx context.Context, cancel context.CancelFunc) {
-// 	if parent == nil {
-// 		parent = context.Background()
-// 	}
-// 	ctx, cancel = context.WithCancel(parent)
-// 	go RunInterval(d, callback, ctx.Done())
-// 	return
-//
-// }
-
 func SubQuery(q url.Values, prefix string) url.Values {
 	prefix = strings.Trim(prefix, " :")
 	if prefix == "" {
@@ -128,22 +96,3 @@ func SubQuery(q url.Values, prefix string) url.Values {
 	}
 	return labels
 }
-
-// type Interval struct {
-// 	cancel   context.CancelFunc
-// 	interval time.Duration
-// }
-//
-// func NewInterval(dt time.Duration, callback func(t time.Time)) *Interval {
-// 	return &Interval{
-// 		cancel:   SetInterval(dt, callback),
-// 		interval: dt,
-// 	}
-// }
-//
-// func (i *Interval) Close() {
-// 	i.cancel()
-// }
-// func (i *Interval) Interval() time.Duration {
-// 	return i.interval
-// }
