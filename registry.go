@@ -26,6 +26,11 @@ func (r *Registry) Register(name string, t *Event) error {
 	r.events[name] = t
 	return nil
 }
+func (r *Registry) MustRegister(name string, t *Event) {
+	if err := r.Register(name, t); err != nil {
+		panic(err)
+	}
+}
 
 func (r *Registry) Get(name string) *Event {
 	r.mu.RLock()
@@ -47,6 +52,10 @@ var defaultRegistry = NewRegistry()
 
 func Register(name string, t *Event) error {
 	return defaultRegistry.Register(name, t)
+}
+
+func MustRegister(name string, t *Event) {
+	defaultRegistry.MustRegister(name, t)
 }
 
 func GetEvent(name string) *Event {
