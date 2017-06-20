@@ -11,8 +11,9 @@ import (
 
 func Test_Registry(t *testing.T) {
 	r := m.NewRegistry()
-	f := m.NewFilter(m.ResolutionDaily, m.Daily, []string{"foo"})
-	g := m.NewEvent("goo", nil, f, nil)
+	labels := m.NormalizeLabels("foo")
+	// f := m.NewFilter(m.ResolutionDaily, m.Daily, []string{"foo"})
+	g := m.NewEvent("goo", labels...)
 	r.Register("goo", g)
 	// now := time.Now()
 	a := m.NewAliases()
@@ -31,6 +32,6 @@ func Test_Registry(t *testing.T) {
 }
 
 func Test_DefaultRegistry(t *testing.T) {
-	e := m.NewEvent("foo", []string{})
+	e := m.NewEvent("foo", "bar")
 	m.Register("foo", e)
 }

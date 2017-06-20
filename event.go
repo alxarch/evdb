@@ -2,6 +2,8 @@ package meter
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -9,192 +11,108 @@ import (
 	"github.com/go-redis/redis"
 )
 
-type Labels []string
-
-func (labels Labels) Map() map[string]string {
-	n := len(labels)
-	n = n - n%2
-	labels = labels[:n]
-	m := make(map[string]string)
-	if n > 0 {
-		for i := 0; i < n; i += 2 {
-			m[labels[i]] = labels[i+1]
-		}
-	}
-	return m
-}
-
-func (labels Labels) Set(pairs ...string) Labels {
-	n := len(pairs)
-	n = n - n%2
-	if n > 0 {
-		labels = append(labels, pairs[:n]...)
-	}
-	return labels
-
-}
-
 type Event struct {
-	name       string
-	nameParams []string
-	filters    []*Filter
-	maxdimsize int
-	counters   *Counters
-	pool       *sync.Pool
-	labels     map[string]int
+	name     string
+	counters *Counters
+	labels   []string
+	pool     *sync.Pool
+	index    map[string]int
 }
 
-func NewEvent(name string, nameParams []string, filters ...*Filter) *Event {
-	t := &Event{
-		name:       name,
-		nameParams: make([]string, 0, len(nameParams)),
-		filters:    make([]*Filter, 0, len(filters)),
-		counters:   NewCounters(),
+var isTemplateRX = regexp.MustCompile("\\{\\{[^\\}]+\\}\\}")
+
+func IsTemplateName(name string) bool {
+	return isTemplateRX.MatchString(name)
+}
+
+func NewEvent(name string, labels ...string) *Event {
+	e := &Event{
+		name:     name,
+		counters: NewCounters(),
+		labels:   NormalizeLabels(labels...),
+		index:    make(map[string]int),
 	}
-	maxdimsize := 0
-	n := 0
-	needed := make(map[string]int)
-	for _, f := range filters {
-		if f == nil {
-			continue
-		}
-		t.filters = append(t.filters, f)
-		for _, dim := range f.Dimensions() {
-			size := len(dim)
-			if size == 0 {
-				continue
-			}
-			if size > maxdimsize {
-				maxdimsize = size
-			}
-			for _, a := range dim {
-				if _, ok := needed[a]; !ok {
-					needed[a] = 2 * n
-					n++
-				}
-			}
-		}
+	for i, label := range e.labels {
+		e.index[label] = i
 	}
-	if len(nameParams) > 0 {
-		for _, p := range nameParams {
-			if p != "" {
-				t.nameParams = append(t.nameParams, p)
-				if _, ok := needed[p]; !ok {
-					needed[p] = 2 * n
-					n++
-				}
-			}
-		}
-	}
-	t.labels = needed
-	t.maxdimsize = maxdimsize
-	t.pool = &sync.Pool{
+	e.pool = &sync.Pool{
 		New: func() interface{} {
-			labels := make([]string, 2*n)
-			for label, i := range t.labels {
-				labels[i] = label
-			}
-			return labels
+			return Labels(make([]string, 2*len(e.labels)))
 		},
 	}
-	return t
+	return e
 
 }
-func (t *Event) put(labels []string) {
-	n := len(t.labels)
+func (e *Event) get() Labels {
+	labels := e.pool.Get().(Labels)
+	for label, i := range e.index {
+		labels[i] = label
+		labels[i+1] = "*"
+	}
+	return labels
+}
+func (t *Event) put(labels Labels) {
+	n := 2 * len(t.labels)
 	if cap(labels) < n {
 		return
 	}
 	t.pool.Put(labels[:n])
 }
 
-func (t *Event) MatchDim(labels []string, dim []string) []string {
-	dl := t.pool.Get().([]string)
-	n := 0
-	for _, d := range dim {
-		if i, ok := t.labels[d]; ok {
-			if i++; i < len(labels) && labels[i] != "" {
-				dl[n] = d
-				n++
-				dl[n] = labels[i]
-				n++
-			} else {
-				t.put(dl)
-				return nil
-			}
-		}
-	}
-	return dl[:n]
-
-}
-func (t *Event) Labels(input []string, aliases Aliases) (labels []string) {
-	labels = t.pool.Get().([]string)
-	for label, i := range t.labels {
-		labels[i] = label
-		labels[i+1] = ""
-	}
+func (t *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
+	labels = t.get()
 	n := len(input)
-	n = n - n%2
+	n = n - (n % 2)
 	for i := 0; i < n; i += 2 {
 		a := aliases.Alias(input[i])
-		if j, ok := t.labels[a]; ok {
+		if j, ok := t.index[a]; ok {
 			labels[j+1] = input[i+1]
 		}
 	}
 	return
 }
 
-func (t *Event) EventNameLabels(labels []string) string {
-	if dim := t.nameParams; len(dim) > 0 {
-		pairs := make([]string, len(dim)*2+1)
-		pairs[0] = t.name
-		i := 1
-		for _, d := range dim {
-			j := t.labels[d]
-			v := labels[j+1]
-			if v == "" {
-				v = "*"
-			}
-			pairs[i] = d
-			i++
-			pairs[i] = v
-			i++
-		}
-		return strings.Join(pairs, ":")
-
-	}
-
-	return t.name
+func (t *Event) Labels(input []string) (labels []string) {
+	return t.AliasedLabels(input, nil)
 }
-func (t *Event) EventName(q map[string]string) string {
-	if dim := t.nameParams; len(dim) > 0 {
-		pairs := make([]string, len(dim)*2+1)
-		pairs[0] = t.name
-		i := 1
-		for _, d := range dim {
-			v := q[d]
-			if v == "" {
-				v = "*"
+
+func Replacer(labels ...string) *strings.Replacer {
+	n := len(labels)
+	n = n - (n % 2)
+	r := make([]string, n)
+	for i := 0; i < n; i++ {
+		if (i % 2) == 0 {
+			r[i] = fmt.Sprintf("{{%s}}", labels[i])
+		} else {
+			if v := labels[i]; v == "" {
+				r[i] = "*"
+			} else {
+				r[i] = labels[i]
 			}
-			pairs[i] = d
-			i++
-			pairs[i] = v
-			i++
 		}
-		return strings.Join(pairs, ":")
-
 	}
+	return strings.NewReplacer(r...)
+}
 
-	return t.name
+func (e *Event) EventName(labels ...string) string {
+	if IsTemplateName(e.name) {
+		return Replacer(labels...).Replace(e.name)
+	}
+	return e.name
 }
 
 func (t *Event) HasLabel(a string) bool {
-	_, ok := t.labels[a]
+	_, ok := t.index[a]
 	return ok
 }
 
-func (t *Event) MaxDimSize() int {
-	return t.maxdimsize
+func (e *Event) Record(r *Resolution, t time.Time, labels []string) Record {
+	return Record{
+		Key:    e.Key(r, t, labels),
+		Field:  strings.Join(labels, ":"),
+		Time:   t,
+		Labels: labels,
+	}
 }
 
 func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
@@ -206,42 +124,13 @@ func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]strin
 		ts = append(ts, res.Round(time.Now()))
 	}
 	results := make([]Record, 0, len(queries)*(len(ts)+1))
-	for _, attr := range queries {
-		labels := t.Labels(attr, nil)
-		name := t.EventNameLabels(labels)
-		for _, f := range t.filters {
-			if f.res != res {
-				continue
-
-			}
-			for _, dim := range f.dims {
-				dl := t.MatchDim(labels, dim)
-				if dl == nil {
-					continue
-				}
-				field := "*"
-				if len(dl) > 0 {
-					field = strings.Join(dl, ":")
-				}
-				for _, tm := range ts {
-					key := res.Key(name, tm)
-					r := Record{
-						Name:   name,
-						Time:   tm,
-						Labels: dl,
-						Field:  field,
-						Key:    key,
-					}
-					results = append(results, r)
-				}
-			}
+	for _, labels := range queries {
+		labels = t.Labels(labels)
+		for _, tm := range ts {
+			results = append(results, t.Record(res, tm, labels))
 		}
 	}
 	return results
-}
-
-func (t *Event) Filters() []*Filter {
-	return t.filters
 }
 
 func (t *Event) Log(n int64, labels ...string) {
@@ -250,65 +139,82 @@ func (t *Event) Log(n int64, labels ...string) {
 
 const labelSeparator = string('0')
 
-func (t *Event) MustPersist(tm time.Time, r *redis.Client) {
-	if err := t.Persist(tm, r); err != nil {
+func (t *Event) MustPersist(tm time.Time, r *redis.Client, resolutions ...*Resolution) {
+	if err := t.Persist(tm, r, resolutions...); err != nil {
 		panic(err)
 	}
 }
 
 var NilEventError = errors.New("Event is nil.")
 
-func (t *Event) Persist(tm time.Time, r *redis.Client) error {
-	if t == nil {
+func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok bool) {
+	labels := e.get()
+	defer e.put(labels)
+	n := 0
+	for _, label := range dim {
+		if i, hasLabel := e.index[label]; hasLabel {
+			if v := q[label]; v != "" {
+				labels[i+1] = v
+				n++
+			}
+		}
+	}
+	if n == len(dim) {
+		ok = true
+		field = strings.Join(labels, ":")
+	}
+	return
+}
+
+func (e *Event) AllField() string {
+	labels := e.get()
+	defer e.put(labels)
+	return strings.Join(labels, ":")
+}
+func (e *Event) Persist(tm time.Time, r *redis.Client, resolutions ...*Resolution) error {
+	if e == nil {
 		return NilEventError
 	}
 	// Use a transaction to ensure each event type is persisted entirely
-	p := r.TxPipeline()
-	defer p.Close()
-	b := t.counters.Flush()
+	b := e.counters.Flush()
 	if len(b) == 0 {
 		return nil
 	}
+	p := r.TxPipeline()
+	defer p.Close()
 	keys := make(map[string]time.Duration)
-	tmp := make([]string, 2*t.maxdimsize)
+	all := e.AllField()
+	dims := LabelDimensions(e.labels...)
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()
-		name := t.EventName(q)
-		for _, f := range t.filters {
-			res := f.Resolution()
+		name := e.EventName(labels...)
+		for _, res := range resolutions {
+			if res == nil {
+				continue
+			}
 			key := res.Key(name, tm)
-			keys[key] = f.MaxAge()
-			p.HIncrBy(key, "*", val)
-		dim_loop:
-			for _, dim := range f.Dimensions() {
-				i := 0
-				for _, d := range dim {
-					tmp[i] = d
-					if value := q[d]; value != "" {
-						i++
-						tmp[i] = value
-						i++
-					} else {
-						continue dim_loop
-					}
+			keys[key] = res.TTL()
+			p.HIncrBy(key, all, val)
+			for _, dim := range dims {
+				if field, ok := e.DimField(dim, q); ok {
+					p.HIncrBy(key, field, val)
 				}
-				field := strings.Join(tmp[:i], ":")
-				// debug("sk %s", field)
-				p.HIncrBy(key, field, val)
 			}
 		}
 	}
 	for k, ttl := range keys {
-		p.PExpire(k, ttl)
+		if ttl > 0 {
+			p.PExpire(k, ttl)
+		}
 	}
 	_, err := p.Exec()
 	if err != nil {
-		t.counters.BatchIncrement(b)
+		e.counters.BatchIncrement(b)
 	}
 	return err
 }
 
-func (e *Event) Key(res *Resolution, tm time.Time, labels ...string) string {
-	return res.Key(e.EventNameLabels(labels), tm)
+func (e *Event) Key(res *Resolution, tm time.Time, labels []string) string {
+	return res.Key(e.EventName(labels...), tm)
 }

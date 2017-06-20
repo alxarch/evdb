@@ -21,7 +21,7 @@ func (lo *Logger) MustLog(name string, n int64, labels ...string) {
 }
 func (lo *Logger) Log(name string, n int64, labels ...string) error {
 	if e := lo.Registry.Get(name); e != nil {
-		e.Log(n, e.Labels(labels, lo.Aliases)...)
+		e.Log(n, e.AliasedLabels(labels, lo.Aliases)...)
 		return nil
 	}
 	return UnregisteredEventError
@@ -42,15 +42,25 @@ func (lo *Logger) Persist(tm time.Time, r *redis.Client) error {
 	lo.wg.Add(1)
 	go func() {
 		defer lo.wg.Done()
-		err <- lo.persist(tm, r)
+		err <- lo.persist(tm, r, lo.Resolutions...)
 	}()
 	return <-err
 
 }
-func (lo *Logger) persist(tm time.Time, r *redis.Client) error {
+func (lo *Logger) PersistAt(tm time.Time, r *redis.Client, res ...*Resolution) error {
+	err := make(chan error)
+	lo.wg.Add(1)
+	go func() {
+		defer lo.wg.Done()
+		err <- lo.persist(tm, r, res...)
+	}()
+	return <-err
+
+}
+func (lo *Logger) persist(tm time.Time, r *redis.Client, res ...*Resolution) error {
 	errs := make(map[string]error)
 	lo.Registry.Each(func(name string, t *Event) {
-		if err := t.Persist(tm, r); err != nil {
+		if err := t.Persist(tm, r, res...); err != nil {
 			atomic.AddInt64(&lo.errors, 1)
 			errs[name] = err
 		}
@@ -78,15 +88,20 @@ func (e FlushError) Error() string {
 
 type Logger struct {
 	*Registry
-	Aliases Aliases
-	errors  int64
-	wg      sync.WaitGroup
+	Aliases     Aliases
+	Resolutions []*Resolution
+	errors      int64
+	wg          sync.WaitGroup
 }
 
-func NewLogger() *Logger {
+func NewLogger(resolutions ...*Resolution) *Logger {
+	if len(resolutions) == 0 {
+		resolutions = append(resolutions, NoResolution)
+	}
 	return &Logger{
-		Registry: NewRegistry(),
-		Aliases:  NewAliases(),
+		Registry:    NewRegistry(),
+		Aliases:     NewAliases(),
+		Resolutions: resolutions,
 	}
 }
 
@@ -105,16 +120,18 @@ func Log(name string, n int64, labels ...string) error {
 
 func LogEvent(e *Event, n int64, labels ...string) {
 	if e != nil {
-		e.Log(n, e.Labels(labels, defaultAliases)...)
+		e.Log(n, e.AliasedLabels(labels, defaultAliases)...)
 	}
 }
 
 func MustLog(name string, n int64, labels ...string) {
 	defaultLogger.MustLog(name, n, labels...)
 }
-func Persist(tm time.Time, r *redis.Client) error {
-	return defaultLogger.Persist(tm, r)
+func Persist(tm time.Time, r *redis.Client, res ...*Resolution) error {
+	return defaultLogger.PersistAt(tm, r, res...)
 }
-func MustPersist(tm time.Time, r *redis.Client) {
-	defaultLogger.MustPersist(tm, r)
+func MustPersist(tm time.Time, r *redis.Client, res ...*Resolution) {
+	if err := Persist(tm, r, res...); err != nil {
+		panic(err)
+	}
 }

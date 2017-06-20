@@ -7,17 +7,10 @@ import (
 	"net/http"
 )
 
-func (db *DB) Mux(maxrecords int) *http.ServeMux {
-	resolutions := make(map[string]*Resolution)
-	for _, t := range db.Registry.events {
-		for _, f := range t.filters {
-			r := f.Resolution()
-			resolutions[r.Name] = r
-		}
-	}
+func (db *DB) Mux(maxrecords int, resolutions ...*Resolution) *http.ServeMux {
 	mux := http.NewServeMux()
-	for name, res := range resolutions {
-		mux.Handle("/"+name, &Controller{
+	for _, res := range resolutions {
+		mux.Handle("/"+res.Name, &Controller{
 			DB:         db,
 			Resolution: res,
 			MaxRecords: maxrecords,

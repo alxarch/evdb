@@ -1,18 +1,17 @@
 package meter
 
 import (
-	"strconv"
 	"time"
 
 	tc "github.com/alxarch/go-timecodec"
 )
 
-const (
-	// DailyDateFormat is the date format used by the start/end query parameters
-	DailyDateFormat  string = "2006-01-02"
-	HourlyDateFormat string = "2006-01-02-15"
-	MinlyDateFormat  string = "2006-01-02-15-04"
-)
+// const (
+// 	// DailyDateFormat is the date format used by the start/end query parameters
+// 	DailyDateFormat  string = "2006-01-02"
+// 	HourlyDateFormat string = "2006-01-02-15"
+// 	MinlyDateFormat  string = "2006-01-02-15-04"
+// )
 
 var NoResolutionCodec = tc.NewTimeCodec(func(t time.Time) string {
 	return "*"
@@ -21,10 +20,12 @@ var NoResolutionCodec = tc.NewTimeCodec(func(t time.Time) string {
 })
 
 type Resolution struct {
-	Name  string
-	codec tc.TimeCodec
-	unit  time.Duration
+	Name string
+	// step time.Duration
+	ttl  time.Duration
+	step time.Duration
 
+	codec      tc.TimeCodec
 	parseRange DateRangeParserFunc
 }
 
@@ -38,28 +39,29 @@ const (
 )
 
 var (
-	NoResolution     = NewResolution("totals", 0, NoResolutionCodec)
-	ResolutionHourly = NewResolution("hourly", Hourly, tc.LayoutCodec(HourlyDateFormat))
-	ResolutionDaily  = NewResolution("daily", Daily, tc.LayoutCodec(DailyDateFormat))
-	ResolutionMinly  = NewResolution("minly", Minly, tc.LayoutCodec(MinlyDateFormat))
-	ResolutionWeekly = NewResolution("weekly", Weekly, tc.ISOWeekCodec)
+	NoResolution = &Resolution{
+		codec:      NoResolutionCodec,
+		parseRange: DateRangeParser(NoResolutionCodec),
+	}
+	ResolutionHourly = NewResolution("hourly", Hourly, 0)
+	ResolutionDaily  = NewResolution("daily", Daily, 0)
+	ResolutionMinly  = NewResolution("minly", Minly, 0)
+	ResolutionWeekly = NewResolution("weekly", Weekly, 0)
 )
 
-func NewResolution(name string, unit time.Duration, codec tc.TimeCodec) *Resolution {
-	if codec == nil {
-		codec = tc.NewTimeCodec(func(t time.Time) string {
-			return strconv.FormatInt(t.UnixNano()/int64(unit), 10)
-		}, func(s string) (t time.Time, err error) {
-			var n int64
-			if n, err = strconv.ParseInt(s, 10, 64); err != nil {
-				return
-			}
-			return time.Time{}.Add(time.Duration(n) * time.Duration(unit)), nil
-
-		})
-	}
+func NewResolution(name string, step, ttl time.Duration) *Resolution {
+	codec := tc.UnixTimeCodec(step)
 	parser := DateRangeParser(codec)
-	return &Resolution{name, codec, unit, parser}
+	return &Resolution{name, ttl, step, codec, parser}
+}
+
+func (r *Resolution) WithTTL(ttl time.Duration) *Resolution {
+	return &Resolution{
+		Name:       r.Name,
+		ttl:        ttl,
+		codec:      r.codec,
+		parseRange: r.parseRange,
+	}
 }
 
 func (r *Resolution) ParseRange(s, e string, max time.Duration) (start, end time.Time, err error) {
@@ -67,16 +69,15 @@ func (r *Resolution) ParseRange(s, e string, max time.Duration) (start, end time
 }
 
 func (r *Resolution) Round(t time.Time) time.Time {
-	t, _ = r.UnmarshalTime(r.MarshalTime(t))
+	t, _ = r.codec.UnmarshalTime(r.codec.MarshalTime(t))
 	return t
 }
 
-func (r *Resolution) Duration() time.Duration {
-	return r.unit
-}
-
 func (r *Resolution) TimeSequence(s, e time.Time) []time.Time {
-	return TimeSequence(r.Round(s), r.Round(e), r.unit)
+	return TimeSequence(r.Round(s), r.Round(e), r.step)
+}
+func (r *Resolution) TTL() time.Duration {
+	return r.ttl
 }
 
 func (r *Resolution) UnmarshalTime(s string) (t time.Time, err error) {

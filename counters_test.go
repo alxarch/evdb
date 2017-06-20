@@ -49,7 +49,7 @@ func Test_Counters(t *testing.T) {
 		"foo": 2,
 		"bar": 3,
 	})
-	b := cc.Batch()
+	b := cc.Snapshot()
 	if foo := b["foo"]; foo != 3 {
 		t.Errorf("Invalid counters increment %d", foo)
 

@@ -42,15 +42,13 @@ func (c *Counters) increment(d string, n int64) int64 {
 }
 func (c *Counters) Increment(key string, n int64) int64 {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if v, ok := c.values[key]; ok {
-		return v.Inc(n)
-	} else {
-		c.mu.RUnlock()
+	v, ok := c.values[key]
+	c.mu.RUnlock()
+	if !ok {
 		n = c.increment(key, n)
-		c.mu.RLock()
 		return n
 	}
+	return v.Inc(n)
 }
 func NewCounters() *Counters {
 	return &Counters{
@@ -58,9 +56,9 @@ func NewCounters() *Counters {
 	}
 }
 
-func (c *Counters) Batch() Batch {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Counters) Snapshot() Batch {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	out := make(map[string]int64)
 	for desc, val := range c.values {
 		out[desc] = val.Get()
