@@ -45,6 +45,9 @@ func ReadRecords(r redis.UniversalClient, records []Record) error {
 		r.Result = pipeline.HGet(r.Key, r.Field)
 	}
 	_, err := pipeline.Exec()
+	if err == redis.Nil {
+		return nil
+	}
 	return err
 }
 
