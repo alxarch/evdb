@@ -205,6 +205,9 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 			key := res.Key(name, tm)
 			keys[key] = res.TTL()
 			p.HIncrBy(key, all, val)
+			if fields == "" {
+				continue
+			}
 			for _, dim := range dims {
 				if field, ok := e.DimField(dim, q); ok {
 					p.HIncrBy(key, field, val)

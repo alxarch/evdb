@@ -8,18 +8,15 @@ type Dimension []string
 
 func LabelDimensions(labels ...string) []Dimension {
 	result := []Dimension{}
-	m := Labels(labels).Map()
-	for k, v := range m {
-		first := len(result) == 0
-
-		if first {
-			result = append(result, []string{k, v})
+	for i, v := range labels {
+		if i == 0 {
+			result = append(result, []string{v})
 
 		} else {
 			for _, r := range result {
-				rr := make([]string, len(r), len(r)+2)
+				rr := make([]string, len(r), len(r)+1)
 				copy(rr, r)
-				rr = append(rr, k, v)
+				rr = append(rr, v)
 				result = append(result, rr)
 			}
 		}
