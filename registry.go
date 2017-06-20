@@ -68,8 +68,8 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) Logger() *Logger {
-	lo := NewLogger()
+func (r *Registry) Logger(res ...*Resolution) *Logger {
+	lo := NewLogger(res...)
 	lo.Registry = r
 	return lo
 }
