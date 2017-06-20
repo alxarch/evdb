@@ -1,0 +1,5 @@
+package: github.com/alxarch/go-meter
+import:
+- package: github.com/alxarch/go-timecodec
+- package: github.com/go-redis/redis
+  version: ~6.5.0

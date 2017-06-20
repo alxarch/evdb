@@ -1,0 +1,18 @@
+hash: 799a02a4aace0a230a9de9583d4717d677c5bb0ff16efece122dbc77c60096ba
+updated: 2017-06-20T17:39:35.249661346+03:00
+imports:
+- name: github.com/alxarch/go-timecodec
+  version: a976a747b34df5f543bb0a043fa59b19357e582c
+- name: github.com/go-redis/redis
+  version: e14976b254c5bc5f399dd0ae9314b1d02a176897
+  subpackages:
+  - internal
+  - internal/consistenthash
+  - internal/hashtag
+  - internal/pool
+  - internal/proto
+- name: go4.org
+  version: 034d17a462f7b2dcd1a4a73553ec5357ff6e6c6e
+  subpackages:
+  - syncutil
+testImports: []
