@@ -39,7 +39,7 @@ func (q *Query) Records(r *Registry) (rs RecordSequence, err error) {
 	records := []Record{}
 	for _, eventName := range q.Events {
 		if e := r.Get(eventName); e != nil {
-			records = append(records, e.Records(q.Resolution, q.Start, q.End, queries)...)
+			records = append(records, e.Records(q.Resolution, q.Start, q.End, queries...)...)
 		} else {
 			return nil, fmt.Errorf("Event %s not found.", eventName)
 		}

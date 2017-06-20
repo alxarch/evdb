@@ -124,7 +124,7 @@ func (e *Event) Record(r *Resolution, t time.Time, labels []string) Record {
 	}
 }
 
-func (e *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
+func (e *Event) Records(res *Resolution, start, end time.Time, queries ...[]string) []Record {
 	if res == nil {
 		return nil
 	}
