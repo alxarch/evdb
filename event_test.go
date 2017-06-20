@@ -33,26 +33,34 @@ func Test_Dim(t *testing.T) {
 	if f != "bar:baz" {
 		t.Error("Dim field invalid")
 	}
+	dim = []string{"bar", "baz", "bar"}
+	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
+	e = meter.NewEvent("foo", dim, meter.ResolutionDaily)
+	_, ok = e.DimField([]string{"foo"}, map[string]string{"bar": "baz"})
+	if ok {
+		t.Error("Dim field not ok")
+	}
 }
 func Test_Persist(t *testing.T) {
-	dim := []string{"bar"}
+	dim := []string{"bar", "baz"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
 	e := meter.NewEvent("foo", dim, meter.ResolutionDaily)
 	assert.True(t, e.HasLabel("bar"))
-	assert.False(t, e.HasLabel("baz"))
+	assert.True(t, e.HasLabel("baz"))
+	assert.False(t, e.HasLabel("foz"))
 	e.Log(1)
 	e.Log(13, e.Labels("bar", "baz")...)
 	now := time.Now()
 	s := e.Snapshot()
 	assert.Equal(t, map[string]int64{
-		"":           1,
-		"bar\x00baz": 13,
+		"": 1,
+		"bar\x00baz\x00baz\x00*": 13,
 	}, s)
 	e.Persist(now, redisClient)
 	s = e.Snapshot()
 	assert.Equal(t, map[string]int64{
-		"":           0,
-		"bar\x00baz": 0,
+		"": 0,
+		"bar\x00baz\x00baz\x00*": 0,
 	}, s)
 	key := meter.ResolutionDaily.Key(e.EventName(), now)
 	assert.Equal(t, "stats:daily:"+meter.ResolutionDaily.MarshalTime(now)+":foo", key)

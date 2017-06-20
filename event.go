@@ -162,7 +162,7 @@ func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok b
 	n := 0
 	for _, label := range dim {
 		if i, hasLabel := e.index[label]; hasLabel {
-			if v := q[label]; v != "" {
+			if v := q[label]; v != "" && v != "*" {
 				labels[i] = v
 				n++
 			}
