@@ -52,8 +52,8 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 func (e *Event) get() Labels {
 	labels := e.pool.Get().(Labels)
 	for label, i := range e.index {
-		labels[i] = label
-		labels[i+1] = "*"
+		labels[2*i] = label
+		labels[2*i+1] = "*"
 	}
 	return labels
 }

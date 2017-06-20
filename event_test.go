@@ -19,6 +19,8 @@ func Test_Labels(t *testing.T) {
 	e := meter.NewEvent("foo", labels, meter.ResolutionDaily)
 	la := e.Labels()
 	assert.Equal(t, la, []string{"bar", "*", "baz", "*"})
+	la = e.Labels("bar", "foo")
+	assert.Equal(t, la, []string{"bar", "foo", "baz", "*"})
 }
 
 func Test_Dim(t *testing.T) {

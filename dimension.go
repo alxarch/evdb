@@ -40,21 +40,21 @@ func Dim(labels ...string) Dimension {
 	return dim
 }
 
-type Dimensions []Dimension
+// type Dimensions []Dimension
 
-func Dims(dims ...[]string) Dimensions {
-	if len(dims) == 0 {
-		return Dimensions{}
-	}
-	out := Dimensions(make([]Dimension, 0, len(dims)))
-	for _, labels := range dims {
-		if dim := Dim(labels...); len(dim) > 0 {
-			out = append(out, dim)
-		}
-	}
-	// Sort dimensions on length in descending order
-	sort.Slice(dims, func(i int, j int) bool {
-		return len(dims[i]) > len(dims[j])
-	})
-	return out
-}
+// func Dims(dims ...[]string) Dimensions {
+// 	if len(dims) == 0 {
+// 		return Dimensions{}
+// 	}
+// 	out := Dimensions(make([]Dimension, 0, len(dims)))
+// 	for _, labels := range dims {
+// 		if dim := Dim(labels...); len(dim) > 0 {
+// 			out = append(out, dim)
+// 		}
+// 	}
+// 	// Sort dimensions on length in descending order
+// 	sort.Slice(dims, func(i int, j int) bool {
+// 		return len(dims[i]) > len(dims[j])
+// 	})
+// 	return out
+// }
