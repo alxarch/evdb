@@ -78,8 +78,11 @@ func (e *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
 	return
 }
 
-func (e *Event) Labels(input []string) (labels []string) {
+func (e *Event) Labels(input ...string) (labels []string) {
 	return e.AliasedLabels(input, nil)
+}
+func (e *Event) Field(input ...string) string {
+	return strings.Join(e.Labels(input...), ":")
 }
 
 func Replacer(labels ...string) *strings.Replacer {
@@ -131,7 +134,7 @@ func (e *Event) Records(res *Resolution, start, end time.Time, queries [][]strin
 	}
 	results := make([]Record, 0, len(queries)*(len(ts)+1))
 	for _, labels := range queries {
-		labels = e.Labels(labels)
+		labels = e.Labels(labels...)
 		for _, tm := range ts {
 			results = append(results, e.Record(res, tm, labels))
 		}
