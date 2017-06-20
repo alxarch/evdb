@@ -80,6 +80,10 @@ func (r *Resolution) MarshalTime(t time.Time) string {
 	return r.codec.MarshalTime(t)
 }
 
+func (r *Resolution) Step() time.Duration {
+	return r.step
+}
+
 func (r *Resolution) Key(event string, t time.Time) string {
 	return Join(":", "stats", r.Name, r.MarshalTime(t), event)
 }
