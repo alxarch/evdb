@@ -36,7 +36,7 @@ func (q *Query) Records(r *Registry) (rs RecordSequence, err error) {
 	} else {
 		queries = PermutationPairs(q.Labels)
 	}
-	records := []Record{}
+	records := []*Record{}
 	for _, eventName := range q.Events {
 		if e := r.Get(eventName); e != nil {
 			records = append(records, e.Records(q.Resolution, q.Start, q.End, queries...)...)

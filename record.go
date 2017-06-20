@@ -38,7 +38,7 @@ func (r *Record) MarshalJSON() ([]byte, error) {
 	return json.Marshal(obj)
 }
 
-func ReadRecords(r redis.UniversalClient, records []Record) error {
+func ReadRecords(r redis.UniversalClient, records []*Record) error {
 	pipeline := r.Pipeline()
 	defer pipeline.Close()
 	for _, r := range records {
@@ -51,7 +51,7 @@ func ReadRecords(r redis.UniversalClient, records []Record) error {
 	return err
 }
 
-type RecordSequence []Record
+type RecordSequence []*Record
 
 func (s RecordSequence) Results() []*Result {
 	grouped := make(map[string]*Result)

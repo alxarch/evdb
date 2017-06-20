@@ -115,8 +115,8 @@ func (e *Event) HasLabel(a string) bool {
 	return ok
 }
 
-func (e *Event) Record(r *Resolution, t time.Time, labels []string) Record {
-	return Record{
+func (e *Event) Record(r *Resolution, t time.Time, labels []string) *Record {
+	return &Record{
 		Key:    e.Key(r, t, labels),
 		Field:  strings.Join(labels, ":"),
 		Time:   t,
@@ -124,7 +124,7 @@ func (e *Event) Record(r *Resolution, t time.Time, labels []string) Record {
 	}
 }
 
-func (e *Event) Records(res *Resolution, start, end time.Time, queries ...[]string) []Record {
+func (e *Event) Records(res *Resolution, start, end time.Time, queries ...[]string) []*Record {
 	if res == nil {
 		return nil
 	}
@@ -132,7 +132,7 @@ func (e *Event) Records(res *Resolution, start, end time.Time, queries ...[]stri
 	if len(ts) == 0 {
 		ts = append(ts, res.Round(time.Now()))
 	}
-	results := make([]Record, 0, len(queries)*(len(ts)+1))
+	results := make([]*Record, 0, len(queries)*(len(ts)+1))
 	for _, labels := range queries {
 		labels = e.Labels(labels...)
 		for _, tm := range ts {

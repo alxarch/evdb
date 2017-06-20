@@ -1,7 +1,6 @@
 package meter_test
 
 import (
-	"log"
 	"testing"
 	"time"
 
@@ -39,28 +38,20 @@ func Test_Persist(t *testing.T) {
 	dim := []string{"bar"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
 	e := meter.NewEvent("foo", dim, meter.ResolutionDaily)
-	if has := e.HasLabel("baz"); has {
-		t.Error("Haslabel error")
-	}
-	if has := e.HasLabel("bar"); !has {
-		t.Error("Haslabel error")
-	}
+	assert.True(t, e.HasLabel("bar"))
+	assert.False(t, e.HasLabel("baz"))
 	e.Log(1)
 	e.Log(1, e.Labels("bar", "baz")...)
 	now := time.Now()
 	e.Persist(now, redisClient)
 	key := meter.ResolutionDaily.Key(e.EventName(), now)
+	assert.Equal(t, "stats:daily:"+meter.ResolutionDaily.MarshalTime(now)+":foo", key)
 	defer redisClient.Del(key)
 	result, err := redisClient.HGetAll(key).Result()
-	if err != nil {
-		t.Error(err)
-	}
-	if n := result[e.AllField()]; n != "2" {
-		t.Errorf("Invalid count %s", n)
-	}
-	if n := result["bar:baz"]; n != "1" {
-		t.Errorf("Invalid count %s", n)
-	}
-	log.Println(result)
+	assert.Nil(t, err)
+	assert.Equal(t, map[string]string{
+		e.AllField():                       "2",
+		e.Field(e.Labels("bar", "baz")...): "1",
+	}, result)
 
 }
