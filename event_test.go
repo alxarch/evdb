@@ -7,32 +7,20 @@ import (
 
 	meter "github.com/alxarch/go-meter"
 	"github.com/go-redis/redis"
+	"github.com/stretchr/testify/assert"
 )
 
 var redisOptions = &redis.Options{Addr: ":6379"}
 var redisClient = redis.NewClient(redisOptions)
 
 func Test_Labels(t *testing.T) {
-	dim := []string{"bar"}
+	labels := []string{"bar", "baz"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
-	e := meter.NewEvent("foo", dim, meter.ResolutionDaily)
-	if has := e.HasLabel("baz"); has {
-		t.Error("Haslabel error")
-	}
-	if has := e.HasLabel("bar"); !has {
-		t.Error("Haslabel error")
-	}
-	labels := e.Labels("bar", "baz")
-	if len(labels) != 2 {
-		t.Error("Invalid size")
-	}
-	if labels[0] != "bar" {
-		t.Error("Invalid label")
-	}
-	if labels[1] != "baz" {
-		t.Error("Invalid label")
-	}
+	e := meter.NewEvent("foo", labels, meter.ResolutionDaily)
+	la := e.Labels()
+	assert.Equal(t, la, []string{"bar", "*", "baz", "*"})
 }
+
 func Test_Dim(t *testing.T) {
 	dim := []string{"bar"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
