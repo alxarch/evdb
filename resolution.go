@@ -25,8 +25,7 @@ type Resolution struct {
 	ttl  time.Duration
 	step time.Duration
 
-	codec      tc.TimeCodec
-	parseRange DateRangeParserFunc
+	codec tc.TimeCodec
 }
 
 const (
@@ -40,8 +39,7 @@ const (
 
 var (
 	NoResolution = &Resolution{
-		codec:      NoResolutionCodec,
-		parseRange: DateRangeParser(NoResolutionCodec),
+		codec: NoResolutionCodec,
 	}
 	ResolutionHourly = NewResolution("hourly", Hourly, 0)
 	ResolutionDaily  = NewResolution("daily", Daily, 0)
@@ -51,21 +49,15 @@ var (
 
 func NewResolution(name string, step, ttl time.Duration) *Resolution {
 	codec := tc.UnixTimeCodec(step)
-	parser := DateRangeParser(codec)
-	return &Resolution{name, ttl, step, codec, parser}
+	return &Resolution{name, ttl, step, codec}
 }
 
 func (r *Resolution) WithTTL(ttl time.Duration) *Resolution {
 	return &Resolution{
-		Name:       r.Name,
-		ttl:        ttl,
-		codec:      r.codec,
-		parseRange: r.parseRange,
+		Name:  r.Name,
+		ttl:   ttl,
+		codec: r.codec,
 	}
-}
-
-func (r *Resolution) ParseRange(s, e string, max time.Duration) (start, end time.Time, err error) {
-	return r.parseRange(s, e, max)
 }
 
 func (r *Resolution) Round(t time.Time) time.Time {

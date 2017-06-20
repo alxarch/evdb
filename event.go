@@ -51,29 +51,29 @@ func (e *Event) get() Labels {
 	}
 	return labels
 }
-func (t *Event) put(labels Labels) {
-	n := 2 * len(t.labels)
+func (e *Event) put(labels Labels) {
+	n := 2 * len(e.labels)
 	if cap(labels) < n {
 		return
 	}
-	t.pool.Put(labels[:n])
+	e.pool.Put(labels[:n])
 }
 
-func (t *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
-	labels = t.get()
+func (e *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
+	labels = e.get()
 	n := len(input)
 	n = n - (n % 2)
 	for i := 0; i < n; i += 2 {
 		a := aliases.Alias(input[i])
-		if j, ok := t.index[a]; ok {
+		if j, ok := e.index[a]; ok {
 			labels[j+1] = input[i+1]
 		}
 	}
 	return
 }
 
-func (t *Event) Labels(input []string) (labels []string) {
-	return t.AliasedLabels(input, nil)
+func (e *Event) Labels(input []string) (labels []string) {
+	return e.AliasedLabels(input, nil)
 }
 
 func Replacer(labels ...string) *strings.Replacer {
@@ -101,8 +101,8 @@ func (e *Event) EventName(labels ...string) string {
 	return e.name
 }
 
-func (t *Event) HasLabel(a string) bool {
-	_, ok := t.index[a]
+func (e *Event) HasLabel(a string) bool {
+	_, ok := e.index[a]
 	return ok
 }
 
@@ -115,7 +115,7 @@ func (e *Event) Record(r *Resolution, t time.Time, labels []string) Record {
 	}
 }
 
-func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
+func (e *Event) Records(res *Resolution, start, end time.Time, queries [][]string) []Record {
 	if res == nil {
 		return nil
 	}
@@ -125,22 +125,22 @@ func (t *Event) Records(res *Resolution, start, end time.Time, queries [][]strin
 	}
 	results := make([]Record, 0, len(queries)*(len(ts)+1))
 	for _, labels := range queries {
-		labels = t.Labels(labels)
+		labels = e.Labels(labels)
 		for _, tm := range ts {
-			results = append(results, t.Record(res, tm, labels))
+			results = append(results, e.Record(res, tm, labels))
 		}
 	}
 	return results
 }
 
-func (t *Event) Log(n int64, labels ...string) {
-	t.counters.Increment(strings.Join(labels, labelSeparator), n)
+func (e *Event) Log(n int64, labels ...string) {
+	e.counters.Increment(strings.Join(labels, labelSeparator), n)
 }
 
 const labelSeparator = string('0')
 
-func (t *Event) MustPersist(tm time.Time, r *redis.Client, resolutions ...*Resolution) {
-	if err := t.Persist(tm, r, resolutions...); err != nil {
+func (e *Event) MustPersist(tm time.Time, r *redis.Client, resolutions ...*Resolution) {
+	if err := e.Persist(tm, r, resolutions...); err != nil {
 		panic(err)
 	}
 }
