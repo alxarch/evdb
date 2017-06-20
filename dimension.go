@@ -1,14 +1,17 @@
 package meter
 
 import (
-	"math"
 	"sort"
 )
 
 type Dimension []string
 
 func LabelDimensions(labels ...string) []Dimension {
-	result := make([]Dimension, 0, int(math.Pow(2, float64(len(labels)-1))))
+	size := (1 << uint(len(labels))) - 1 // len ** 2 - 1
+	if size < 0 {
+		return []Dimension{}
+	}
+	result := make([]Dimension, 0, size)
 	for _, v := range labels {
 		for _, r := range result {
 			rr := make([]string, len(r), len(r)+1)

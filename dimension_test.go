@@ -1,7 +1,6 @@
 package meter_test
 
 import (
-	"log"
 	"testing"
 
 	meter "github.com/alxarch/go-meter"
@@ -16,6 +15,10 @@ func Test_LabelDimensions(t *testing.T) {
 		meter.Dim("foo"),
 	})
 	dims = meter.LabelDimensions("foo")
-	log.Println(dims)
+	assert.Equal(t, dims, []meter.Dimension{
+		meter.Dim("foo"),
+	})
+	dims = meter.LabelDimensions()
+	assert.Equal(t, len(dims), 0)
 
 }
