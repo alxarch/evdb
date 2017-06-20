@@ -42,25 +42,15 @@ func (lo *Logger) Persist(tm time.Time, r *redis.Client) error {
 	lo.wg.Add(1)
 	go func() {
 		defer lo.wg.Done()
-		err <- lo.persist(tm, r, lo.Resolutions...)
+		err <- lo.persist(tm, r)
 	}()
 	return <-err
 
 }
-func (lo *Logger) PersistAt(tm time.Time, r *redis.Client, res ...*Resolution) error {
-	err := make(chan error)
-	lo.wg.Add(1)
-	go func() {
-		defer lo.wg.Done()
-		err <- lo.persist(tm, r, res...)
-	}()
-	return <-err
-
-}
-func (lo *Logger) persist(tm time.Time, r *redis.Client, res ...*Resolution) error {
+func (lo *Logger) persist(tm time.Time, r *redis.Client) error {
 	errs := make(map[string]error)
-	lo.Registry.Each(func(name string, t *Event) {
-		if err := t.Persist(tm, r, res...); err != nil {
+	lo.Registry.Each(func(name string, e *Event) {
+		if err := e.Persist(tm, r); err != nil {
 			atomic.AddInt64(&lo.errors, 1)
 			errs[name] = err
 		}
@@ -127,11 +117,11 @@ func LogEvent(e *Event, n int64, labels ...string) {
 func MustLog(name string, n int64, labels ...string) {
 	defaultLogger.MustLog(name, n, labels...)
 }
-func Persist(tm time.Time, r *redis.Client, res ...*Resolution) error {
-	return defaultLogger.PersistAt(tm, r, res...)
+func Persist(tm time.Time, r *redis.Client) error {
+	return defaultLogger.Persist(tm, r)
 }
-func MustPersist(tm time.Time, r *redis.Client, res ...*Resolution) {
-	if err := Persist(tm, r, res...); err != nil {
+func MustPersist(tm time.Time, r *redis.Client) {
+	if err := Persist(tm, r); err != nil {
 		panic(err)
 	}
 }

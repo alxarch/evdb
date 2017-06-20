@@ -12,11 +12,12 @@ import (
 )
 
 type Event struct {
-	name     string
-	counters *Counters
-	labels   []string
-	pool     *sync.Pool
-	index    map[string]int
+	name        string
+	counters    *Counters
+	labels      []string
+	pool        *sync.Pool
+	index       map[string]int
+	resolutions []*Resolution
 }
 
 var isTemplateRX = regexp.MustCompile("\\{\\{[^\\}]+\\}\\}")
@@ -25,7 +26,7 @@ func IsTemplateName(name string) bool {
 	return isTemplateRX.MatchString(name)
 }
 
-func NewEvent(name string, labels ...string) *Event {
+func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 	e := &Event{
 		name:     name,
 		counters: NewCounters(),
@@ -39,6 +40,11 @@ func NewEvent(name string, labels ...string) *Event {
 		New: func() interface{} {
 			return Labels(make([]string, 2*len(e.labels)))
 		},
+	}
+	for _, r := range res {
+		if r != nil {
+			e.resolutions = append(e.resolutions, r)
+		}
 	}
 	return e
 
@@ -139,8 +145,8 @@ func (e *Event) Log(n int64, labels ...string) {
 
 const labelSeparator = string('0')
 
-func (e *Event) MustPersist(tm time.Time, r *redis.Client, resolutions ...*Resolution) {
-	if err := e.Persist(tm, r, resolutions...); err != nil {
+func (e *Event) MustPersist(tm time.Time, r *redis.Client) {
+	if err := e.Persist(tm, r); err != nil {
 		panic(err)
 	}
 }
@@ -171,7 +177,7 @@ func (e *Event) AllField() string {
 	defer e.put(labels)
 	return strings.Join(labels, ":")
 }
-func (e *Event) Persist(tm time.Time, r *redis.Client, resolutions ...*Resolution) error {
+func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 	if e == nil {
 		return NilEventError
 	}
@@ -189,7 +195,7 @@ func (e *Event) Persist(tm time.Time, r *redis.Client, resolutions ...*Resolutio
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()
 		name := e.EventName(labels...)
-		for _, res := range resolutions {
+		for _, res := range e.resolutions {
 			if res == nil {
 				continue
 			}
