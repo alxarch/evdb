@@ -41,17 +41,27 @@ func Test_Persist(t *testing.T) {
 	assert.True(t, e.HasLabel("bar"))
 	assert.False(t, e.HasLabel("baz"))
 	e.Log(1)
-	e.Log(1, e.Labels("bar", "baz")...)
+	e.Log(13, e.Labels("bar", "baz")...)
 	now := time.Now()
+	s := e.Snapshot()
+	assert.Equal(t, map[string]int64{
+		"":           1,
+		"bar\x00baz": 13,
+	}, s)
 	e.Persist(now, redisClient)
+	s = e.Snapshot()
+	assert.Equal(t, map[string]int64{
+		"":           0,
+		"bar\x00baz": 0,
+	}, s)
 	key := meter.ResolutionDaily.Key(e.EventName(), now)
 	assert.Equal(t, "stats:daily:"+meter.ResolutionDaily.MarshalTime(now)+":foo", key)
 	defer redisClient.Del(key)
 	result, err := redisClient.HGetAll(key).Result()
 	assert.Nil(t, err)
 	assert.Equal(t, map[string]string{
-		e.AllField():                       "2",
-		e.Field(e.Labels("bar", "baz")...): "1",
+		e.AllField():                       "14",
+		e.Field(e.Labels("bar", "baz")...): "13",
 	}, result)
 
 }

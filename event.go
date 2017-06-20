@@ -146,7 +146,7 @@ func (e *Event) Log(n int64, labels ...string) {
 	e.counters.Increment(strings.Join(labels, labelSeparator), n)
 }
 
-const labelSeparator = string('0')
+const labelSeparator = "\x00"
 
 func (e *Event) MustPersist(tm time.Time, r *redis.Client) {
 	if err := e.Persist(tm, r); err != nil {
@@ -229,4 +229,8 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 
 func (e *Event) Key(res *Resolution, tm time.Time, labels []string) string {
 	return res.Key(e.EventName(labels...), tm)
+}
+
+func (e *Event) Snapshot() map[string]int64 {
+	return e.counters.Snapshot()
 }

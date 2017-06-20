@@ -57,8 +57,8 @@ func NewCounters() *Counters {
 }
 
 func (c *Counters) Snapshot() Batch {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := make(map[string]int64)
 	for desc, val := range c.values {
 		out[desc] = val.Get()
@@ -71,7 +71,7 @@ func (c *Counters) Flush() Batch {
 	defer c.mu.Unlock()
 	out := make(map[string]int64)
 	for desc, val := range c.values {
-		out[desc] = val.Set(0.0)
+		out[desc] = val.Set(0)
 	}
 	return out
 }
