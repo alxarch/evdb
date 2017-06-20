@@ -34,7 +34,7 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 		index:    make(map[string]int),
 	}
 	for i, label := range e.labels {
-		e.index[label] = i
+		e.index[label] = 2*i + 1
 	}
 	e.pool = &sync.Pool{
 		New: func() interface{} {
@@ -52,8 +52,8 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 func (e *Event) get() Labels {
 	labels := e.pool.Get().(Labels)
 	for label, i := range e.index {
-		labels[2*i] = label
-		labels[2*i+1] = "*"
+		labels[i-1] = label
+		labels[i] = "*"
 	}
 	return labels
 }
@@ -72,7 +72,7 @@ func (e *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
 	for i := 0; i < n; i += 2 {
 		a := aliases.Alias(input[i])
 		if j, ok := e.index[a]; ok {
-			labels[j+1] = input[i+1]
+			labels[j] = input[i+1]
 		}
 	}
 	return
@@ -163,7 +163,7 @@ func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok b
 	for _, label := range dim {
 		if i, hasLabel := e.index[label]; hasLabel {
 			if v := q[label]; v != "" {
-				labels[i+1] = v
+				labels[i] = v
 				n++
 			}
 		}
