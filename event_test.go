@@ -27,20 +27,17 @@ func Test_Dim(t *testing.T) {
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
 	e := meter.NewEvent("foo", dim, meter.ResolutionDaily)
 	f, ok := e.DimField([]string{"bar"}, map[string]string{"bar": "baz"})
-	if !ok {
-		t.Error("Dim field not ok")
-	}
-	if f != "bar:baz" {
-		t.Error("Dim field invalid")
-	}
-	dim = []string{"bar", "baz", "bar"}
+	assert.True(t, ok, "Dim matches field single")
+	assert.Equal(t, "bar:baz", f, "Invalid dim field %s single", f)
+	labels := []string{"bar", "baz", "bar"}
+	dim = []string{"bar", "baz"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
-	e = meter.NewEvent("foo", dim, meter.ResolutionDaily)
-	_, ok = e.DimField([]string{"foo"}, map[string]string{"bar": "baz"})
-	if ok {
-		t.Error("Dim field not ok")
-	}
+	e = meter.NewEvent("foo", labels, meter.ResolutionDaily)
+	f, ok = e.DimField(dim, map[string]string{"bar": "baz", "baz": "foo"})
+	assert.True(t, ok, "Dim matches field")
+	assert.Equal(t, "bar:baz:baz:foo", f, "Invalid dim field %s", f)
 }
+
 func Test_Persist(t *testing.T) {
 	dim := []string{"bar", "baz"}
 	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
@@ -62,14 +59,14 @@ func Test_Persist(t *testing.T) {
 		"": 0,
 		"bar\x00baz\x00baz\x00*": 0,
 	}, s)
-	key := meter.ResolutionDaily.Key(e.EventName(), now)
+	key := meter.ResolutionDaily.Key(e.EventName(nil), now)
 	assert.Equal(t, "stats:daily:"+meter.ResolutionDaily.MarshalTime(now)+":foo", key)
-	defer redisClient.Del(key)
+	// defer redisClient.Del(key)
 	result, err := redisClient.HGetAll(key).Result()
 	assert.Nil(t, err)
 	assert.Equal(t, map[string]string{
-		e.AllField():                       "14",
-		e.Field(e.Labels("bar", "baz")...): "13",
+		"*": "14",
+		e.Field("bar", "baz"): "13",
 	}, result)
 
 }

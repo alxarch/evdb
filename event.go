@@ -81,8 +81,33 @@ func (e *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
 func (e *Event) Labels(input ...string) (labels []string) {
 	return e.AliasedLabels(input, nil)
 }
+func (e *Event) field(labels, input []string) string {
+	n := len(input)
+	n = n - (n % 2)
+	j := 0
+	for i := 0; i < n; i += 2 {
+		k, v := input[i], input[i+1]
+		switch v {
+		case "", "*":
+			continue
+		default:
+			if _, ok := e.index[k]; ok {
+				labels[j] = k
+				j++
+				labels[j] = v
+				j++
+			}
+		}
+	}
+	if j == 0 {
+		return "*"
+	}
+	return strings.Join(labels[:j], ":")
+}
 func (e *Event) Field(input ...string) string {
-	return strings.Join(e.Labels(input...), ":")
+	labels := e.get()
+	defer e.put(labels)
+	return e.field(labels, input)
 }
 
 func Replacer(labels ...string) *strings.Replacer {
@@ -103,7 +128,7 @@ func Replacer(labels ...string) *strings.Replacer {
 	return strings.NewReplacer(r...)
 }
 
-func (e *Event) EventName(labels ...string) string {
+func (e *Event) EventName(labels Labels) string {
 	if IsTemplateName(e.name) {
 		return Replacer(labels...).Replace(e.name)
 	}
@@ -116,10 +141,11 @@ func (e *Event) HasLabel(a string) bool {
 }
 
 func (e *Event) Record(r *Resolution, t time.Time, labels []string) *Record {
+	name := e.EventName(labels)
 	return &Record{
-		Name:   e.EventName(labels...),
-		Key:    e.Key(r, t, labels),
-		Field:  strings.Join(labels, ":"),
+		Name:   name,
+		Key:    r.Key(name, t),
+		Field:  e.Field(labels...),
 		Time:   t,
 		Labels: labels,
 	}
@@ -161,26 +187,29 @@ func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok b
 	labels := e.get()
 	defer e.put(labels)
 	n := 0
+	i := 0
 	for _, label := range dim {
-		if i, hasLabel := e.index[label]; hasLabel {
+		if _, hasLabel := e.index[label]; hasLabel {
 			if v := q[label]; v != "" && v != "*" {
+				labels[i] = label
+				i++
 				labels[i] = v
+				i++
 				n++
 			}
 		}
 	}
 	if n == len(dim) {
 		ok = true
-		field = strings.Join(labels, ":")
+		field = strings.Join(labels[:i], ":")
 	}
 	return
 }
 
 func (e *Event) AllField() string {
-	labels := e.get()
-	defer e.put(labels)
-	return strings.Join(labels, ":")
+	return "*"
 }
+
 func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 	if e == nil {
 		return NilEventError
@@ -198,7 +227,7 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()
-		name := e.EventName(labels...)
+		name := e.EventName(labels)
 		for _, res := range e.resolutions {
 			if res == nil {
 				continue
@@ -228,8 +257,8 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 	return err
 }
 
-func (e *Event) Key(res *Resolution, tm time.Time, labels []string) string {
-	return res.Key(e.EventName(labels...), tm)
+func (e *Event) Key(res *Resolution, tm time.Time, labels Labels) string {
+	return res.Key(e.EventName(labels), tm)
 }
 
 func (e *Event) Snapshot() map[string]int64 {
