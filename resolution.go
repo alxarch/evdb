@@ -29,7 +29,7 @@ type Resolution struct {
 }
 
 const (
-	// Minly   = time.Minute
+	Minly   = time.Minute
 	Hourly  = time.Hour
 	Daily   = 24 * time.Hour
 	Weekly  = 7 * Daily
@@ -41,7 +41,7 @@ var (
 	NoResolution     = &Resolution{"totals", 0, 0, NoResolutionCodec}
 	ResolutionHourly = &Resolution{"hourly", 0, Daily, tc.LayoutCodec(HourlyDateFormat)}
 	ResolutionDaily  = &Resolution{"daily", 0, Hourly, tc.LayoutCodec(DailyDateFormat)}
-	// ResolutionMinly  = &Resolution{"minly", 0, Minly, tc.LayoutCodec(MinlyDateFormat)}
+	ResolutionMinly  = &Resolution{"minly", 0, Minly, tc.LayoutCodec(MinlyDateFormat)}
 	ResolutionWeekly = &Resolution{"weekly", 0, Weekly, tc.ISOWeekCodec}
 )
 
