@@ -73,3 +73,16 @@ func Test_Persist(t *testing.T) {
 	}, result)
 
 }
+func Test_Records(t *testing.T) {
+	dim := []string{"bar", "baz"}
+	// f := meter.NewFilter(meter.ResolutionDaily, meter.Daily, dim)
+	e := meter.NewEvent("foo", dim, meter.ResolutionDaily)
+
+	start := time.Date(2017, time.January, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2017, time.January, 16, 0, 0, 0, 0, time.UTC)
+
+	res := meter.ResolutionDaily
+	records := e.Records(res, start, end, []string{"bar", "foo"}, []string{"bar", "baz"})
+	assert.Equal(t, 32, len(records), "Invalid records length %d", len(records))
+
+}

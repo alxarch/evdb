@@ -35,8 +35,7 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if c.Resolution != nil {
 		res = c.Resolution
 	}
-	parser := DateRangeParser(res)
-	start, end, err := parser(q.Get("start"), q.Get("end"), 0)
+	start, end, err := res.ParseDateRange(q.Get("start"), q.Get("end"))
 	if err != nil {
 		http.Error(w, "Invalid date range", http.StatusBadRequest)
 		return

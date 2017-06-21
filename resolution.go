@@ -39,8 +39,8 @@ const (
 
 var (
 	NoResolution     = &Resolution{"totals", 0, 0, NoResolutionCodec}
-	ResolutionHourly = &Resolution{"hourly", 0, Daily, tc.LayoutCodec(HourlyDateFormat)}
-	ResolutionDaily  = &Resolution{"daily", 0, Hourly, tc.LayoutCodec(DailyDateFormat)}
+	ResolutionHourly = &Resolution{"hourly", 0, Hourly, tc.LayoutCodec(HourlyDateFormat)}
+	ResolutionDaily  = &Resolution{"daily", 0, Daily, tc.LayoutCodec(DailyDateFormat)}
 	ResolutionMinly  = &Resolution{"minly", 0, Minly, tc.LayoutCodec(MinlyDateFormat)}
 	ResolutionWeekly = &Resolution{"weekly", 0, Weekly, tc.ISOWeekCodec}
 )
@@ -66,6 +66,12 @@ func (r *Resolution) Round(t time.Time) time.Time {
 func (r *Resolution) TimeSequence(s, e time.Time) []time.Time {
 	return TimeSequence(r.Round(s), r.Round(e), r.step)
 }
+
+func (r *Resolution) ParseDateRange(s, e string) (start, end time.Time, err error) {
+	parser := DateRangeParser(r)
+	return parser(s, e, r.ttl)
+}
+
 func (r *Resolution) TTL() time.Duration {
 	return r.ttl
 }

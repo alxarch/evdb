@@ -26,20 +26,22 @@ func DateRangeParser(dec tc.TimeDecoder) DateRangeParserFunc {
 				return
 			}
 		}
-		min := end.Add(-max)
-		if start.IsZero() || start.After(end) || start.Before(min) {
-			start = min
+		if max > 0 {
+			min := end.Add(-max)
+			if start.IsZero() || start.After(end) || start.Before(min) {
+				start = min
+			}
 		}
 		return
 	}
 }
 
 func TimeSequence(start time.Time, end time.Time, unit time.Duration) []time.Time {
-	start = start.Round(unit)
-	end = end.Round(unit)
 	if unit == 0 {
 		return []time.Time{}
 	}
+	start = start.Round(unit)
+	end = end.Round(unit)
 	n := end.Sub(start) / unit
 
 	results := make([]time.Time, 0, n)
