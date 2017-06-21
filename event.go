@@ -117,6 +117,7 @@ func (e *Event) HasLabel(a string) bool {
 
 func (e *Event) Record(r *Resolution, t time.Time, labels []string) *Record {
 	return &Record{
+		Name:   e.EventName(labels...),
 		Key:    e.Key(r, t, labels),
 		Field:  strings.Join(labels, ":"),
 		Time:   t,
