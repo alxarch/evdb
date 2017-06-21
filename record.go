@@ -29,7 +29,9 @@ func (r *Record) Value() int64 {
 func (r *Record) MarshalJSON() ([]byte, error) {
 	obj := make(map[string]interface{})
 	for i := 0; i < len(r.Labels); i += 2 {
-		obj[r.Labels[i]] = r.Labels[i+1]
+		if k, v := r.Labels[i], r.Labels[i+1]; v != "*" {
+			obj[k] = v
+		}
 	}
 	obj["value"] = r.Value()
 	obj["time"] = r.Time.String()
