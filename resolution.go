@@ -53,6 +53,7 @@ func NewResolution(name string, step, ttl time.Duration) *Resolution {
 func (r *Resolution) WithTTL(ttl time.Duration) *Resolution {
 	return &Resolution{
 		Name:  r.Name,
+		step:  r.step,
 		ttl:   ttl,
 		codec: r.codec,
 	}
