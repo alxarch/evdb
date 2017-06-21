@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 )
 
 func (db *DB) Mux(maxrecords int, resolutions ...*Resolution) *http.ServeMux {
@@ -36,19 +37,28 @@ func (c Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		res = c.Resolution
 	}
 	start, end, err := res.ParseDateRange(q.Get("start"), q.Get("end"))
+	delete(q, "start")
+	delete(q, "end")
 	if err != nil {
 		http.Error(w, "Invalid date range", http.StatusBadRequest)
 		return
 	}
 
 	format := q.Get("format")
+	delete(q, "format")
 	eventNames := q["event"]
+	delete(q, "event")
 	_, grouped := q["grouped"]
+	delete(q, "grouped")
+	aq := url.Values{}
+	for k, v := range q {
+		aq[Alias(k)] = v
+	}
 	query := Query{
 		Resolution: res,
 		MaxRecords: c.MaxRecords,
 		Events:     eventNames,
-		Labels:     SubQuery(q, "q:"),
+		Labels:     aq,
 		Grouped:    grouped,
 		Start:      start,
 		End:        end,
