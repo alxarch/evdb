@@ -6,12 +6,12 @@ import (
 	tc "github.com/alxarch/go-timecodec"
 )
 
-// const (
-// 	// DailyDateFormat is the date format used by the start/end query parameters
-// 	DailyDateFormat  string = "2006-01-02"
-// 	HourlyDateFormat string = "2006-01-02-15"
-// 	MinlyDateFormat  string = "2006-01-02-15-04"
-// )
+const (
+	// DailyDateFormat is the date format used by the start/end query parameters
+	DailyDateFormat  string = "2006-01-02"
+	HourlyDateFormat string = "2006-01-02-15"
+	MinlyDateFormat  string = "2006-01-02-15-04"
+)
 
 var NoResolutionCodec = tc.NewTimeCodec(func(t time.Time) string {
 	return "*"
@@ -29,7 +29,7 @@ type Resolution struct {
 }
 
 const (
-	Minly   = 60 * time.Second
+	// Minly   = time.Minute
 	Hourly  = time.Hour
 	Daily   = 24 * time.Hour
 	Weekly  = 7 * Daily
@@ -38,13 +38,11 @@ const (
 )
 
 var (
-	NoResolution = &Resolution{
-		codec: NoResolutionCodec,
-	}
-	ResolutionHourly = NewResolution("hourly", Hourly, 0)
-	ResolutionDaily  = NewResolution("daily", Daily, 0)
-	ResolutionMinly  = NewResolution("minly", Minly, 0)
-	ResolutionWeekly = NewResolution("weekly", Weekly, 0)
+	NoResolution     = &Resolution{"totals", 0, 0, NoResolutionCodec}
+	ResolutionHourly = &Resolution{"hourly", 0, Daily, tc.LayoutCodec(HourlyDateFormat)}
+	ResolutionDaily  = &Resolution{"daily", 0, Hourly, tc.LayoutCodec(DailyDateFormat)}
+	// ResolutionMinly  = &Resolution{"minly", 0, Minly, tc.LayoutCodec(MinlyDateFormat)}
+	ResolutionWeekly = &Resolution{"weekly", 0, Weekly, tc.ISOWeekCodec}
 )
 
 func NewResolution(name string, step, ttl time.Duration) *Resolution {
