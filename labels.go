@@ -14,7 +14,9 @@ func (labels Labels) Map() map[string]string {
 	m := make(map[string]string)
 	if n > 0 {
 		for i := 0; i < n; i += 2 {
-			m[labels[i]] = labels[i+1]
+			if k, v := labels[i], labels[i+1]; v != "" && v != "*" {
+				m[k] = v
+			}
 		}
 	}
 	return m

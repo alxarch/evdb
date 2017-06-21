@@ -61,7 +61,7 @@ func Test_Persist(t *testing.T) {
 	}, s)
 	key := meter.ResolutionDaily.Key(e.EventName(nil), now)
 	assert.Equal(t, "stats:daily:"+meter.ResolutionDaily.MarshalTime(now)+":foo", key)
-	// defer redisClient.Del(key)
+	defer redisClient.Del(key)
 	result, err := redisClient.HGetAll(key).Result()
 	assert.Nil(t, err)
 	assert.Equal(t, map[string]string{
