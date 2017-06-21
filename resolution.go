@@ -68,6 +68,9 @@ func (r *Resolution) TimeSequence(s, e time.Time) []time.Time {
 }
 
 func (r *Resolution) ParseDateRange(s, e string) (start, end time.Time, err error) {
+	if r == nil {
+		r = NoResolution
+	}
 	parser := DateRangeParser(r)
 	return parser(s, e, r.ttl)
 }

@@ -19,6 +19,9 @@ func Test_ParseDateRange(t *testing.T) {
 	expect = time.Date(2017, time.January, 16, 0, 0, 0, 0, time.UTC)
 	assert.Equal(t, expect, end)
 
+	_, _, err = (*meter.Resolution)(nil).ParseDateRange(s, e)
+	assert.Nil(t, err)
+
 }
 
 func Test_ResTimeSequence(t *testing.T) {
