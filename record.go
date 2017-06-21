@@ -33,7 +33,7 @@ func (r *Record) MarshalJSON() ([]byte, error) {
 			obj[k] = v
 		}
 	}
-	obj["value"] = r.Value()
+	obj["count"] = r.Value()
 	obj["time"] = r.Time.String()
 	obj["name"] = r.Name
 
