@@ -74,7 +74,7 @@ func (s RecordSequence) Results() []*Result {
 	i := 0
 	for _, r := range grouped {
 		sort.Slice(r.Data, func(i, j int) bool {
-			return r.Data[i].Value < r.Data[j].Value
+			return r.Data[i].Timestamp < r.Data[j].Timestamp
 		})
 		results[i] = r
 		i++
@@ -109,7 +109,7 @@ sloop:
 	i := 0
 	for _, r := range grouped {
 		sort.Slice(r.Data, func(i, j int) bool {
-			return r.Data[i].Value < r.Data[j].Value
+			return r.Data[i].Timestamp < r.Data[j].Timestamp
 		})
 		results[i] = r
 		i++
