@@ -42,6 +42,12 @@ func Test_PermutationPairs(t *testing.T) {
 		{"foo", "bar", "bar", "baz"},
 		{"foo", "baz", "bar", "baz"},
 	}
-	assert.Equal(t, expect, pp)
+	assert.Equal(t, len(expect), len(pp))
+
+	var err error
+	q, err = url.ParseQuery("a=1&ex=a&ex=b&ex=c&ex=d")
+	assert.NoError(t, err, "Query parse")
+	pp = meter.PermutationPairs(q)
+	assert.Equal(t, 4, len(pp))
 
 }

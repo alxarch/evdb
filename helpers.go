@@ -57,46 +57,48 @@ func Join(sep string, parts ...string) string {
 }
 
 func PermutationPairs(input url.Values) [][]string {
-	result := [][]string{}
-	for k, vv := range input {
-		first := len(result) == 0
-		for i, v := range vv {
-			if first {
-				result = append(result, []string{k, v})
-			} else if i == 0 {
-				for j, r := range result {
-					result[j] = append(r, k, v)
-				}
-			} else {
-				n := len(result)
-				for i := 0; i < n; i++ {
-					r := result[i]
-					rr := make([]string, len(r), len(r))
-					copy(rr, r)
-					rr[len(rr)-1] = v
-					result = append(result, rr)
+	qs := input.Encode()
+	parts := strings.Split(qs, "&")
+
+	done := map[string]bool{}
+	results := [][]string{}
+	output := func(pp []string) {
+		qs := strings.Join(pp, "&")
+		q, _ := url.ParseQuery(qs)
+		for k, v := range q {
+			q.Set(k, v[0])
+		}
+		qs = q.Encode()
+		if !done[qs] {
+			p := make([]string, 0, 2*len(q))
+			for k, values := range q {
+				p = append(p, k, values[0])
+			}
+			done[qs] = true
+			results = append(results, p)
+		}
+
+	}
+	var generate func(int, []string)
+	generate = func(n int, pairs []string) {
+		if n == 1 {
+			output(pairs)
+		} else {
+			for i := 0; i < n-1; i++ {
+				generate(n-1, pairs)
+				tmp := pairs[n-1]
+				if (n % 2) == 0 {
+					pairs[n-1] = pairs[i]
+					pairs[i] = tmp
+				} else {
+					pairs[n-1] = pairs[0]
+					pairs[0] = tmp
 				}
 			}
+			generate(n-1, pairs)
 		}
 	}
-	return result
-}
+	generate(len(parts), parts)
 
-func SubQuery(q url.Values, prefix string) url.Values {
-	prefix = strings.Trim(prefix, " :")
-	if prefix == "" {
-		return q
-	}
-	prefix = prefix + ":"
-	labels := url.Values{}
-	for name, values := range q {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		label := name[len(prefix):]
-		for _, p := range values {
-			labels.Add(label, p)
-		}
-	}
-	return labels
+	return results
 }
