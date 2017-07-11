@@ -5,17 +5,16 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-redis/redis"
 )
 
 type Event struct {
-	name        string
-	counters    *Counters
-	labels      []string
-	pool        *sync.Pool
+	name     string
+	counters *Counters
+	labels   []string
+	// pool        *sync.Pool
 	index       map[string]int
 	resolutions []*Resolution
 }
@@ -36,11 +35,16 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 	for i, label := range e.labels {
 		e.index[label] = 2*i + 1
 	}
-	e.pool = &sync.Pool{
-		New: func() interface{} {
-			return Labels(make([]string, 2*len(e.labels)))
-		},
-	}
+	// e.pool = &sync.Pool{
+	// 	New: func() interface{} {
+	// 		labels := make([]string, 2*len(e.labels))
+	// 		for label, i := range e.index {
+	// 			labels[i-1] = label
+	// 			labels[i] = "*"
+	// 		}
+	// 		return Labels(labels)
+	// 	},
+	// }
 	for _, r := range res {
 		if r != nil {
 			e.resolutions = append(e.resolutions, r)
@@ -49,24 +53,26 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 	return e
 
 }
-func (e *Event) get() Labels {
-	labels := e.pool.Get().(Labels)
+func (e *Event) blankLabels() Labels {
+	// labels := e.pool.Get().(Labels)
+	labels := make([]string, 2*len(e.labels))
 	for label, i := range e.index {
-		labels[i-1] = label
 		labels[i] = "*"
+		labels[i-1] = label
 	}
 	return labels
 }
-func (e *Event) put(labels Labels) {
-	n := 2 * len(e.labels)
-	if cap(labels) < n {
-		return
-	}
-	e.pool.Put(labels[:n])
-}
+
+// func (e *Event) put(labels Labels) {
+// 	n := 2 * len(e.labels)
+// 	if cap(labels) < n {
+// 		return
+// 	}
+// 	e.pool.Put(labels[:n])
+// }
 
 func (e *Event) AliasedLabels(input []string, aliases Aliases) (labels Labels) {
-	labels = e.get()
+	labels = e.blankLabels()
 	n := len(input)
 	n = n - (n % 2)
 	for i := 0; i < n; i += 2 {
@@ -105,8 +111,7 @@ func (e *Event) field(labels, input []string) string {
 	return strings.Join(labels[:j], ":")
 }
 func (e *Event) Field(input ...string) string {
-	labels := e.get()
-	defer e.put(labels)
+	labels := make([]string, 2*len(e.labels))
 	return e.field(labels, input)
 }
 
@@ -184,8 +189,8 @@ func (e *Event) MustPersist(tm time.Time, r *redis.Client) {
 var NilEventError = errors.New("Event is nil.")
 
 func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok bool) {
-	labels := e.get()
-	defer e.put(labels)
+	labels := e.blankLabels()
+	// defer e.put(labels)
 	n := 0
 	i := 0
 	for _, label := range dim {
