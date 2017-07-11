@@ -31,23 +31,25 @@ func Test_TimeSequence(t *testing.T) {
 }
 
 func Test_PermutationPairs(t *testing.T) {
-	q := url.Values{
-		"foo": []string{"bar", "baz"},
-		"bar": []string{"foo", "baz"},
-	}
-	pp := meter.PermutationPairs(q)
-	expect := [][]string{
-		{"foo", "bar", "bar", "foo"},
-		{"foo", "baz", "bar", "foo"},
-		{"foo", "bar", "bar", "baz"},
-		{"foo", "baz", "bar", "baz"},
-	}
-	assert.Equal(t, len(expect), len(pp))
+	// q := url.Values{
+	// 	"foo": []string{"bar", "baz"},
+	// 	"bar": []string{"foo", "baz"},
+	// }
+	// pp := meter.PermutationPairs(q)
+	// expect := [][]string{
+	// 	{"foo", "bar", "bar", "foo"},
+	// 	{"foo", "baz", "bar", "foo"},
+	// 	{"foo", "bar", "bar", "baz"},
+	// 	{"foo", "baz", "bar", "baz"},
+	// }
+	// assert.Equal(t, len(expect), len(pp))
 
-	var err error
-	q, err = url.ParseQuery("a=1&ex=a&ex=b&ex=c&ex=d")
+	// var err error
+	assert.Equal(t, [][]string{}, meter.PermutationPairs(url.Values{}))
+
+	q, err := url.ParseQuery("c=foo&c=bar&exchange=appodeal&exchange=epom&exchange=mobfox&exchange=avocarrot&exchange=mobfox_indirect&exchange=madgic&exchange=aol&exchange=smaato&exchange=rhythmone&exchange=inneractive&exchange=aol_video&exchange=loopme&exchange=adcolony")
 	assert.NoError(t, err, "Query parse")
-	pp = meter.PermutationPairs(q)
-	assert.Equal(t, 4, len(pp))
+	pp := meter.PermutationPairs(q)
+	assert.Equal(t, 26, len(pp))
 
 }
