@@ -1,6 +1,7 @@
 package meter_test
 
 import (
+	"net/url"
 	"testing"
 	"time"
 
@@ -27,4 +28,20 @@ func Test_TimeSequence(t *testing.T) {
 	assert.Equal(t, ts[0], start)
 	assert.Equal(t, ts[15], end)
 	assert.Equal(t, []time.Time{}, meter.TimeSequence(start, end, 0))
+}
+
+func Test_PermutationPairs(t *testing.T) {
+	q := url.Values{
+		"foo": []string{"bar", "baz"},
+		"bar": []string{"foo", "baz"},
+	}
+	pp := meter.PermutationPairs(q)
+	expect := [][]string{
+		{"foo", "bar", "bar", "foo"},
+		{"foo", "baz", "bar", "foo"},
+		{"foo", "bar", "bar", "baz"},
+		{"foo", "baz", "bar", "baz"},
+	}
+	assert.Equal(t, expect, pp)
+
 }

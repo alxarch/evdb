@@ -64,14 +64,16 @@ func PermutationPairs(input url.Values) [][]string {
 			if first {
 				result = append(result, []string{k, v})
 			} else if i == 0 {
-				for i, r := range result {
-					result[i] = append(r, k, v)
+				for j, r := range result {
+					result[j] = append(r, k, v)
 				}
 			} else {
-				for _, r := range result {
-					rr := make([]string, len(r), len(r)+2)
+				n := len(result)
+				for i := 0; i < n; i++ {
+					r := result[i]
+					rr := make([]string, len(r), len(r))
 					copy(rr, r)
-					rr = append(rr, k, v)
+					rr[len(rr)-1] = v
 					result = append(result, rr)
 				}
 			}
