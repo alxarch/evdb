@@ -219,16 +219,15 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 	if e == nil {
 		return NilEventError
 	}
-	// Use a transaction to ensure each event type is persisted entirely
+	keys := make(map[string]time.Duration)
+	all := e.AllField()
+	dims := LabelDimensions(e.labels...)
+	p := r.Pipeline()
+	defer p.Close()
 	b := e.counters.Flush()
 	if len(b) == 0 {
 		return nil
 	}
-	p := r.TxPipeline()
-	defer p.Close()
-	keys := make(map[string]time.Duration)
-	all := e.AllField()
-	dims := LabelDimensions(e.labels...)
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()
@@ -256,9 +255,6 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 		}
 	}
 	_, err := p.Exec()
-	if err != nil {
-		e.counters.BatchIncrement(b)
-	}
 	return err
 }
 
