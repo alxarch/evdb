@@ -3,6 +3,7 @@ package meter
 import (
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -215,19 +216,26 @@ func (e *Event) AllField() string {
 	return "*"
 }
 
-func (e *Event) Persist(tm time.Time, r *redis.Client) error {
+func (e *Event) Persist(tm time.Time, r *redis.Client) (err error) {
 	if e == nil {
 		return NilEventError
 	}
+	b := e.counters.Flush()
+	if len(b) == 0 {
+		return nil
+	}
+	defer func() {
+		if err != nil {
+			if _, ok := err.(net.Error); ok {
+				e.counters.BatchIncrement(b)
+			}
+		}
+	}()
 	keys := make(map[string]time.Duration)
 	all := e.AllField()
 	dims := LabelDimensions(e.labels...)
 	p := r.Pipeline()
 	defer p.Close()
-	b := e.counters.Flush()
-	if len(b) == 0 {
-		return nil
-	}
 	for fields, val := range b {
 		labels := strings.Split(fields, labelSeparator)
 		q := Labels(labels).Map()
@@ -254,8 +262,8 @@ func (e *Event) Persist(tm time.Time, r *redis.Client) error {
 			p.PExpire(k, ttl)
 		}
 	}
-	_, err := p.Exec()
-	return err
+	_, err = p.Exec()
+	return
 }
 
 func (e *Event) Key(res *Resolution, tm time.Time, labels Labels) string {
