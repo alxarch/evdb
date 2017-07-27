@@ -22,6 +22,8 @@ type Event struct {
 
 var isTemplateRX = regexp.MustCompile("\\{\\{[^\\}]+\\}\\}")
 
+const LabelSeparator = "\x1f"
+
 func IsTemplateName(name string) bool {
 	return isTemplateRX.MatchString(name)
 }
@@ -109,7 +111,7 @@ func (e *Event) field(labels, input []string) string {
 	if j == 0 {
 		return "*"
 	}
-	return strings.Join(labels[:j], ":")
+	return strings.Join(labels[:j], LabelSeparator)
 }
 func (e *Event) Field(input ...string) string {
 	labels := make([]string, 2*len(e.labels))
@@ -179,7 +181,7 @@ func (e *Event) Log(n int64, labels ...string) {
 	e.counters.Increment(strings.Join(labels, labelSeparator), n)
 }
 
-const labelSeparator = "\x00"
+const labelSeparator = LabelSeparator
 
 func (e *Event) MustPersist(tm time.Time, r *redis.Client) {
 	if err := e.Persist(tm, r); err != nil {
@@ -207,7 +209,7 @@ func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok b
 	}
 	if n == len(dim) {
 		ok = true
-		field = strings.Join(labels[:i], ":")
+		field = strings.Join(labels[:i], LabelSeparator)
 	}
 	return
 }
