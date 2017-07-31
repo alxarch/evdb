@@ -21,6 +21,16 @@ func (labels Labels) Map() map[string]string {
 	}
 	return m
 }
+func (labels Labels) Get(label string) (string, bool) {
+	n := len(labels)
+	n = n - (n % 2)
+	for i := 0; i < n; i += 2 {
+		if labels[i] == label {
+			return labels[i+1], true
+		}
+	}
+	return "", false
+}
 
 func (labels Labels) Set(pairs ...string) Labels {
 	n := len(pairs)

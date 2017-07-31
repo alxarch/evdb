@@ -189,7 +189,11 @@ func (e *Event) MustPersist(tm time.Time, r *redis.Client) {
 	}
 }
 
-var NilEventError = errors.New("Event is nil.")
+var (
+	NilEventError          = errors.New("Event is nil.")
+	NilResolutionError     = errors.New("Resolution is nil.")
+	InvalidEventLabelError = errors.New("Invalid event label.")
+)
 
 func (e *Event) DimField(dim Dimension, q map[string]string) (field string, ok bool) {
 	labels := e.blankLabels()
@@ -274,4 +278,11 @@ func (e *Event) Key(res *Resolution, tm time.Time, labels Labels) string {
 
 func (e *Event) Snapshot() map[string]int64 {
 	return e.counters.Snapshot()
+}
+
+func (e *Event) ValueIndex(label string) int {
+	if i, ok := e.index[label]; ok {
+		return i
+	}
+	return -1
 }
