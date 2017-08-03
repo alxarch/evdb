@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 )
 
 func (db *DB) Mux(maxrecords int, resolutions ...*Resolution) *http.ServeMux {
@@ -54,15 +53,11 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	delete(q, "event")
 	_, grouped := q["grouped"]
 	delete(q, "grouped")
-	aq := url.Values{}
-	for k, v := range q {
-		aq[Alias(k)] = v
-	}
 	query := Query{
 		Resolution: res,
 		MaxRecords: c.MaxRecords,
 		Events:     eventNames,
-		Labels:     aq,
+		Labels:     q,
 		Grouped:    grouped,
 		Start:      start,
 		End:        end,
@@ -100,7 +95,7 @@ func (d *DataPoint) MarshalJSON() ([]byte, error) {
 
 type Result struct {
 	Event  string
-	Labels map[string]string
+	Labels Labels
 	Data   []DataPoint
 }
 
@@ -132,10 +127,10 @@ func (c *SummaryController) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	delete(q, "event")
 	group := q.Get("group")
 	delete(q, "group")
-	labels := []string{}
+	labels := Labels(make(map[string]string, len(q)))
 	for k, v := range q {
 		if len(v) > 0 {
-			labels = append(labels, k, v[0])
+			labels[k] = v[0]
 		}
 	}
 	ts := TimeSequence(start, end, res.Step())

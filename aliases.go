@@ -45,3 +45,11 @@ func Alias(s string) string {
 func SetAlias(label string, aliases ...string) {
 	defaultAliases.Set(label, aliases...)
 }
+
+func (aliases Aliases) AliasedQuery(q map[string][]string) map[string][]string {
+	aliased := make(map[string][]string, len(aliases))
+	for key, labels := range q {
+		aliased[aliases.Alias(key)] = labels
+	}
+	return aliased
+}

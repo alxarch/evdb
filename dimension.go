@@ -6,6 +6,7 @@ import (
 
 type Dimension []string
 
+// LabelDimensions creates all possible label combinations for a set of labels
 func LabelDimensions(labels ...string) []Dimension {
 	size := (1 << uint(len(labels))) - 1 // len ** 2 - 1
 	if size < 0 {
@@ -38,6 +39,29 @@ func Dim(labels ...string) Dimension {
 	}
 	sort.Strings(dim)
 	return dim
+}
+
+func (dim Dimension) Field(labels Labels) (field string, ok bool) {
+	if len(labels) == 0 {
+		return
+	}
+	n := len(dim)
+	if n == 0 {
+		return
+	}
+	tmp := make([]string, 2*n)
+	i := 0
+	for _, label := range dim {
+		if v, hasValue := labels[label]; hasValue && v != "" {
+			tmp[i] = label
+			i++
+			tmp[i] = v
+			i++
+		} else {
+			return
+		}
+	}
+	return Field(tmp), true
 }
 
 // type Dimensions []Dimension

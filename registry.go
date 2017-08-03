@@ -11,19 +11,19 @@ type Registry struct {
 }
 
 var (
-	DuplicateTypeError = errors.New("Duplicate type registration.")
+	DuplicateEventError = errors.New("Duplicate event registration.")
 )
 
-func (r *Registry) Register(name string, t *Event) error {
+func (r *Registry) Register(name string, e *Event) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.events == nil {
 		r.events = make(map[string]*Event)
 	}
 	if _, ok := r.events[name]; ok {
-		return DuplicateTypeError
+		return DuplicateEventError
 	}
-	r.events[name] = t
+	r.events[name] = e
 	return nil
 }
 func (r *Registry) MustRegister(name string, t *Event) {
@@ -40,6 +40,7 @@ func (r *Registry) Get(name string) *Event {
 	}
 	return r.events[name]
 }
+
 func (r *Registry) Each(fn func(name string, t *Event)) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -68,8 +69,8 @@ func NewRegistry() *Registry {
 	}
 }
 
-func (r *Registry) Logger(res ...*Resolution) *Logger {
-	lo := NewLogger(res...)
+func (r *Registry) Logger() *Logger {
+	lo := NewLogger()
 	lo.Registry = r
 	return lo
 }

@@ -11,7 +11,7 @@ import (
 
 func Test_Registry(t *testing.T) {
 	r := m.NewRegistry()
-	labels := m.NormalizeLabels("foo")
+	labels := []string{"foo"}
 	// f := m.NewFilter(m.ResolutionDaily, m.Daily, []string{"foo"})
 	g := m.NewEvent("goo", labels)
 	r.Register("goo", g)
@@ -20,9 +20,9 @@ func Test_Registry(t *testing.T) {
 	a.Set("FOO", "foo")
 	rc := redis.NewClient(&redis.Options{Addr: ":6379"})
 	lo := r.Logger()
-	lo.Log("goo", 1.0, "foo", "bar")
-	lo.Log("goo", 6.0, "FOO", "baz")
-	lo.Log("goo", 1.0)
+	lo.Log("goo", 1.0, m.Labels{"foo": "bar"})
+	lo.Log("goo", 6.0, nil)
+	lo.Log("goo", 1.0, nil)
 	lo.Close()
 	// b := r.Get("goo").Flush(time.Now())
 	// bb := r.Get("goo").Batch(now)

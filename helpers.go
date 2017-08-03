@@ -3,6 +3,8 @@ package meter
 import (
 	"net/url"
 	"strings"
+	"text/template"
+	"text/template/parse"
 	"time"
 
 	"github.com/alxarch/go-timecodec"
@@ -56,7 +58,7 @@ func Join(sep string, parts ...string) string {
 	return strings.Join(parts, sep)
 }
 
-func PermutationPairs(input url.Values) [][]string {
+func QueryPermutations(input url.Values) []map[string]string {
 	vcount := []int{}
 	keys := []string{}
 	combinations := [][]int{}
@@ -83,12 +85,12 @@ func PermutationPairs(input url.Values) [][]string {
 		}
 	}
 	generate([]int{})
-	results := [][]string{}
+	results := make([]map[string]string, 0, len(combinations))
 	for _, comb := range combinations {
-		result := []string{}
+		result := make(map[string]string, len(comb))
 		for i, j := range comb {
 			key := keys[i]
-			result = append(result, key, input[key][j])
+			result[key] = input[key][j]
 		}
 		if len(result) > 0 {
 			results = append(results, result)
@@ -98,69 +100,138 @@ func PermutationPairs(input url.Values) [][]string {
 }
 
 // func PermutationPairs(input url.Values) [][]string {
-// 	qs := input.Encode()
-// 	parts := strings.Split(qs, "&")
-// 	if len(parts) > 4 {
-// 		parts = parts[:4]
-// 	}
-//
-// 	// done := map[string]bool{}
-// 	results := [][]string{}
-// 	// qch := make(chan string)
-// 	// wg := sync.WaitGroup{}
-// 	// output := func(pp []string) {
-// 	// 	// qs := strings.Join(pp, "&")
-// 	// 	// q, _ := url.ParseQuery(qs)
-// 	// 	// for k, v := range q {
-// 	// 	// 	q.Set(k, v[0])
-// 	// 	// }
-// 	// 	// log.Println(q.Encode())
-// 	// 	// qch <- q.Encode()
-// 	// 	wg.Done()
-// 	// }
-// 	var generate func(int, []string)
-// 	t := 0
-// 	generate = func(n int, pairs []string) {
-// 		if n == 1 {
-// 			results = append(results, pairs)
-// 			// wg.Add(1)
-// 			// log.Println(t)
-// 			t++
-// 			// go output(pairs)
-// 		} else {
-// 			for i := 0; i < n-1; i++ {
-// 				generate(n-1, pairs)
-// 				tmp := pairs[n-1]
-// 				if (n % 2) == 0 {
-// 					pairs[n-1] = pairs[i]
-// 					pairs[i] = tmp
-// 				} else {
-// 					pairs[n-1] = pairs[0]
-// 					pairs[0] = tmp
-// 				}
-// 			}
-// 			generate(n-1, pairs)
+// 	vcount := []int{}
+// 	keys := []string{}
+// 	combinations := [][]int{}
+// 	for k, v := range input {
+// 		if c := len(v); c > 0 {
+// 			keys = append(keys, k)
+// 			vcount = append(vcount, c)
 // 		}
 // 	}
-// 	generate(len(parts), parts)
-// 	log.Println(len(results))
-// 	// go func() {
-// 	// 	for qs := range qch {
-// 	// 		log.Println("A")
-// 	// 		q, _ := url.ParseQuery(qs)
-// 	//
-// 	// 		if !done[qs] {
-// 	// 			p := make([]string, 0, 2*len(q))
-// 	// 			for k, values := range q {
-// 	// 				p = append(p, k, values[0])
-// 	// 			}
-// 	// 			done[qs] = true
-// 	// 			results = append(results, p)
-// 	// 		}
-// 	// 	}
-// 	// }()
-// 	// wg.Wait()
-// 	// close(qch)
-//
+// 	var generate func([]int)
+// 	generate = func(comb []int) {
+// 		if i := len(comb); i == len(vcount) {
+// 			combinations = append(combinations, comb)
+// 			return
+// 		} else {
+// 			for j := 0; j < vcount[i]; j++ {
+// 				next := make([]int, i+1)
+// 				if i > 0 {
+// 					copy(next[:i], comb)
+// 				}
+// 				next[i] = j
+// 				generate(next)
+// 			}
+// 		}
+// 	}
+// 	generate([]int{})
+// 	results := [][]string{}
+// 	for _, comb := range combinations {
+// 		result := []string{}
+// 		for i, j := range comb {
+// 			key := keys[i]
+// 			result = append(result, key, input[key][j])
+// 		}
+// 		if len(result) > 0 {
+// 			results = append(results, result)
+// 		}
+// 	}
 // 	return results
+// }
+
+const LeftDelim = "{{"
+const RightDelim = "}}"
+
+func NameTemplate(name string) (tpl *template.Template, err error) {
+	var trees map[string]*parse.Tree
+	if trees, err = parse.Parse(name, name, LeftDelim, RightDelim); err != nil {
+		return
+	}
+	tree := trees[name]
+	if len(tree.Root.Nodes) == 1 && tree.Root.Nodes[0].Type() == parse.NodeText {
+		return
+	}
+	tpl, err = template.New(name).AddParseTree(name, tree)
+	tpl = tpl.Option("missingkey=zero")
+	return
+
+}
+
+// const DefaultBufferSize = 4096
+
+// var pool = &sync.Pool{
+// 	New: func() interface{} {
+// 		return make([]byte, DefaultBufferSize)
+// 	},
+// }
+//
+// func fieldBuffer() []byte {
+// 	return pool.Get().([]byte)
+// }
+// func poolBuffer(b []byte) {
+// 	c := cap(b)
+// 	if c < DefaultBufferSize {
+// 		return
+// 	}
+// 	pool.Put(b[:c])
+// }
+//
+// func (e *Event) capLabelSize(n int) int {
+// 	if max := len(e.labels); n > max {
+// 		return max
+// 	}
+// 	return n
+//
+// }
+// func ValueField(values []string) string {
+// 	switch len(values) {
+// 	case 0:
+// 		return ""
+// 	case 1:
+// 		return values[0]
+// 	case 2:
+// 		// Special case for common small values.
+// 		// Remove if golang.org/issue/6714 is fixed
+// 		return values[0] + sLabelSeparator + values[1]
+// 	case 3:
+// 		// Special case for common small values.
+// 		// Remove if golang.org/issue/6714 is fixed
+// 		return values[0] + sLabelSeparator + values[1] + sLabelSeparator + values[2]
+// 	}
+//
+// 	b := fieldBuffer()
+// 	defer poolBuffer(b)
+// 	bp := copy(b, values[0])
+// 	for _, s := range values[1:] {
+// 		b[bp] = LabelSeparator
+// 		bp++
+// 		bp += copy(b[bp:], s)
+// 	}
+// 	return string(b[:bp])
+// }
+
+// func (e *Event) bField(labels Labels) string {
+// 	if len(labels) == 0 || len(e.labels) == 0 {
+// 		return sFieldTerminator
+// 	}
+//
+// 	b := fieldBuffer()
+// 	defer poolBuffer(b)
+// 	bp := 0
+// 	for _, label := range e.labels {
+// 		if v, ok := labels[label]; ok && v != "" {
+// 			if bp != 0 {
+// 				b[bp] = LabelSeparator
+// 				bp++
+// 			}
+// 			bp += copy(b[bp:], label)
+// 			b[bp] = LabelSeparator
+// 			bp++
+// 			bp += copy(b[bp:], v)
+// 		}
+// 	}
+// 	b[bp] = FieldTerminator
+// 	bp++
+// 	return string(b[:bp])
 // }

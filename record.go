@@ -13,7 +13,7 @@ type Record struct {
 	Time   time.Time
 	Key    string
 	Field  string
-	Labels []string
+	Labels Labels
 	Result *redis.StringCmd
 }
 
@@ -28,8 +28,8 @@ func (r *Record) Value() int64 {
 
 func (r *Record) MarshalJSON() ([]byte, error) {
 	obj := make(map[string]interface{})
-	for i := 0; i < len(r.Labels); i += 2 {
-		if k, v := r.Labels[i], r.Labels[i+1]; v != "*" {
+	for k, v := range r.Labels {
+		if v != "*" && v != "" {
 			obj[k] = v
 		}
 	}
@@ -63,7 +63,7 @@ func (s RecordSequence) Results() []*Result {
 		if !ok {
 			result = &Result{
 				Event:  r.Name,
-				Labels: Labels(r.Labels).Map(),
+				Labels: r.Labels,
 				Data:   make([]DataPoint, 0, len(s)),
 			}
 			grouped[key] = result

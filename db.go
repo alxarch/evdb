@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -33,11 +32,11 @@ var (
 )
 
 func (q *Query) Records(r *Registry) (rs RecordSequence, err error) {
-	var queries [][]string
+	var queries []map[string]string
 	if len(q.Labels) == 0 {
-		queries = [][]string{[]string{}}
+		queries = []map[string]string{}
 	} else {
-		queries = PermutationPairs(q.Labels)
+		queries = QueryPermutations(q.Labels)
 	}
 	records := []*Record{}
 	for _, eventName := range q.Events {
@@ -57,6 +56,9 @@ func (q *Query) Records(r *Registry) (rs RecordSequence, err error) {
 }
 
 func (db *DB) Records(q Query) (rs RecordSequence, err error) {
+	if db.Aliases != nil {
+		q.Labels = db.Aliases.AliasedQuery(q.Labels)
+	}
 	rs, err = q.Records(db.Registry)
 	if err == nil || err == MaxRecordsError {
 		if e := ReadRecords(db.Redis, rs); e != nil {
@@ -81,7 +83,7 @@ func (db *DB) Results(q Query) (results []*Result, err error) {
 type SummaryQuery struct {
 	Time       time.Time
 	Event      string
-	Labels     []string
+	Labels     Labels
 	Group      string
 	Resolution *Resolution
 }
@@ -102,16 +104,18 @@ func (db *DB) SummaryScan(q SummaryQuery) (sum Summary, err error) {
 	if event == nil {
 		return nil, UnregisteredEventError
 	}
-	group := db.Aliases.Alias(q.Group)
+	group := q.Group
+	if db.Aliases != nil {
+		group = db.Aliases.Alias(group)
+	}
 	if !event.HasLabel(group) {
 		return nil, InvalidEventLabelError
 	}
-	labels := event.AliasedLabels(q.Labels, db.Aliases)
-	var match string
-	{
-		labels[event.ValueIndex(group)] = "*"
-		match = event.Field(labels...)
+	labels := q.Labels
+	if db.Aliases != nil {
+		labels = event.AliasedLabels(labels, db.Aliases)
 	}
+	match := event.MatchField(group, labels)
 	cursor := uint64(0)
 	key := event.Key(res, q.Time, labels)
 	fields := []string{}
@@ -132,15 +136,12 @@ func (db *DB) SummaryScan(q SummaryQuery) (sum Summary, err error) {
 	}
 	sum = Summary(make(map[string]int64, len(values)))
 	for i, field := range fields {
-		labels := Labels(strings.Split(field, LabelSeparator))
-		if key, ok := labels.Get(group); ok {
+		if key, ok := ParseField(field)[group]; ok {
 			switch value := values[i].(type) {
 			case string:
 				if n, e := strconv.ParseInt(value, 10, 64); e == nil {
 					sum[key] += n
 				}
-			case int64:
-				sum[key] += value
 			}
 		}
 	}

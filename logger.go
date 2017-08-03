@@ -14,51 +14,10 @@ var (
 	UnregisteredEventError = errors.New("Unregistered event type")
 )
 
-func (lo *Logger) MustLog(name string, n int64, labels ...string) {
-	if err := lo.Log(name, n, labels...); err != nil {
+func (lo *Logger) MustLog(name string, n int64, labels Labels) {
+	if err := lo.Log(name, n, labels); err != nil {
 		panic(err)
 	}
-}
-func (lo *Logger) Log(name string, n int64, labels ...string) error {
-	if e := lo.Registry.Get(name); e != nil {
-		e.Log(n, e.AliasedLabels(labels, lo.Aliases)...)
-		return nil
-	}
-	return UnregisteredEventError
-}
-
-func (lo *Logger) MustPersist(tm time.Time, r *redis.Client) {
-	if err := lo.Persist(tm, r); err != nil {
-		panic(err)
-	}
-}
-
-func (lo *Logger) FlushErrors() int64 {
-	return atomic.LoadInt64(&lo.errors)
-}
-
-func (lo *Logger) Persist(tm time.Time, r *redis.Client) error {
-	err := make(chan error)
-	lo.wg.Add(1)
-	go func() {
-		defer lo.wg.Done()
-		err <- lo.persist(tm, r)
-	}()
-	return <-err
-
-}
-func (lo *Logger) persist(tm time.Time, r *redis.Client) error {
-	errs := make(map[string]error)
-	lo.Registry.Each(func(name string, e *Event) {
-		if err := e.Persist(tm, r); err != nil {
-			atomic.AddInt64(&lo.errors, 1)
-			errs[name] = err
-		}
-	})
-	if len(errs) > 0 {
-		return FlushError(errs)
-	}
-	return nil
 }
 
 type FlushError map[string]error
@@ -78,20 +37,57 @@ func (e FlushError) Error() string {
 
 type Logger struct {
 	*Registry
-	Aliases     Aliases
-	Resolutions []*Resolution
-	errors      int64
-	wg          sync.WaitGroup
+	Aliases Aliases
+	errors  int64
+	wg      sync.WaitGroup
 }
 
-func NewLogger(resolutions ...*Resolution) *Logger {
-	if len(resolutions) == 0 {
-		resolutions = append(resolutions, NoResolution)
+func (lo *Logger) Log(name string, n int64, labels Labels) error {
+	if e := lo.Registry.Get(name); e != nil {
+		e.LogWith(n, e.AliasedLabels(labels, lo.Aliases))
+		return nil
 	}
+	return UnregisteredEventError
+}
+
+func (lo *Logger) MustPersist(tm time.Time, r *redis.Client) {
+	if err := lo.Persist(tm, r); err != nil {
+		panic(err)
+	}
+}
+
+func (lo *Logger) FlushErrors() int64 {
+	return atomic.LoadInt64(&lo.errors)
+}
+
+func (lo *Logger) Persist(tm time.Time, r redis.UniversalClient) error {
+	err := make(chan error)
+	lo.wg.Add(1)
+	go func() {
+		defer lo.wg.Done()
+		err <- lo.persist(tm, r)
+	}()
+	return <-err
+
+}
+func (lo *Logger) persist(tm time.Time, r redis.UniversalClient) error {
+	errs := make(map[string]error)
+	lo.Registry.Each(func(name string, e *Event) {
+		if err := e.Persist(tm, r); err != nil {
+			atomic.AddInt64(&lo.errors, 1)
+			errs[name] = err
+		}
+	})
+	if len(errs) > 0 {
+		return FlushError(errs)
+	}
+	return nil
+}
+
+func NewLogger() *Logger {
 	return &Logger{
-		Registry:    NewRegistry(),
-		Aliases:     NewAliases(),
-		Resolutions: resolutions,
+		Registry: NewRegistry(),
+		Aliases:  NewAliases(),
 	}
 }
 
@@ -104,23 +100,30 @@ var defaultLogger = &Logger{
 	Registry: defaultRegistry,
 }
 
-func Log(name string, n int64, labels ...string) error {
-	return defaultLogger.Log(name, n, labels...)
+func Log(name string, n int64, labels Labels) error {
+	return defaultLogger.Log(name, n, labels)
 }
 
-func LogEvent(e *Event, n int64, labels ...string) {
+func LogEvent(e *Event, n int64, labels Labels) {
 	if e != nil {
-		e.Log(n, e.AliasedLabels(labels, defaultAliases)...)
+		e.LogWith(n, e.AliasedLabels(labels, defaultAliases))
+	}
+}
+func LogEventWithLabelValues(e *Event, n int64, values ...string) {
+	if e != nil {
+		e.LogWithLabelValues(n, values...)
 	}
 }
 
-func MustLog(name string, n int64, labels ...string) {
-	defaultLogger.MustLog(name, n, labels...)
+func MustLog(name string, n int64, labels Labels) {
+	defaultLogger.MustLog(name, n, labels)
 }
-func Persist(tm time.Time, r *redis.Client) error {
+
+func Persist(tm time.Time, r redis.UniversalClient) error {
 	return defaultLogger.Persist(tm, r)
 }
-func MustPersist(tm time.Time, r *redis.Client) {
+
+func MustPersist(tm time.Time, r redis.UniversalClient) {
 	if err := Persist(tm, r); err != nil {
 		panic(err)
 	}
