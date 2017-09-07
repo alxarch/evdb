@@ -31,16 +31,16 @@ func Test_ReadWrite(t *testing.T) {
 	q := url.Values{}
 	q.Set("foo", "bar")
 	q.Set("bar", "baz")
-	data := []byte{}
-	field := meter2.AppendMatchField(data[:0], desc.Labels(), "", map[string]string{
-		"foo": "bar",
-		"bar": "baz",
-	})
-	result, err := db.Scan("meter:\x1fdaily\x1f2017-09-07\x1ftest", string(field))
-	log.Println("Counter", string(field), result, err)
+	// data := []byte{}
+	// field := meter2.AppendMatchField(data[:0], desc.Labels(), "", map[string]string{
+	// 	"foo": "bar",
+	// 	"bar": "baz",
+	// })
+	// result, err := db.Scan("meter:\x1fdaily\x1f2017-09-07\x1ftest", string(field))
+	// log.Println("Counter", string(field), result, err)
 	sq := meter2.ScanQuery{
 		Event:      "test",
-		Start:      time.Now().Add(-72 * time.Hour),
+		Start:      time.Now().Add(-72 * 3 * time.Hour),
 		End:        time.Now(),
 		Query:      q,
 		Resolution: meter2.ResolutionDaily,
@@ -53,7 +53,7 @@ func Test_ReadWrite(t *testing.T) {
 			log.Println(r)
 		}
 	}()
-	err = db.ScanQuery(sq, results)
+	err := db.ScanQuery(sq, results)
 	close(results)
 	<-done
 	log.Println(err)

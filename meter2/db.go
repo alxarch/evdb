@@ -142,7 +142,7 @@ func AppendField(data []byte, labels, values []string) []byte {
 	return data
 }
 
-// TODO: Write metrics in parallel
+// TODO: Write metrics in parallel with fan out
 
 func (db *DB) Gather(col Collector) error {
 	ch := make(chan Metric)
@@ -292,20 +292,19 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 			data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
 			key := string(data)
 			wg.Add(1)
-			go func(key, field string, tm time.Time, r ScanResult) {
-				r.count, r.err = db.Scan(key, field)
-				results <- r
+			go func(r ScanResult) {
+				db.Scan(key, field, r, results)
 				wg.Done()
-			}(key, field, tm, result)
+			}(result)
 		}
 	}
 	wg.Wait()
 
 	return
 }
-func (db *DB) Scan(key string, field string) (n int64, err error) {
+func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
 	var fields []string
-	scan := db.Redis.HScan(key, 0, field, -1).Iterator()
+	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
 	for scan.Next() {
 		fields = append(fields, scan.Val())
 	}
@@ -318,18 +317,20 @@ func (db *DB) Scan(key string, field string) (n int64, err error) {
 	var reply []interface{}
 	reply, err = db.Redis.HMGet(key, fields...).Result()
 	if err != nil {
+		if err == redis.Nil {
+			err = nil
+		}
 		return
 	}
+	r.count = 0
 	for _, x := range reply {
 		if a, ok := x.(string); ok {
-			if count, e := strconv.ParseInt(a, 10, 64); e == nil {
-				n += count
-			} else {
-				err = e
-				return
+			if n, e := strconv.ParseInt(a, 10, 64); e == nil {
+				r.count += n
 			}
 		}
 	}
+	results <- r
 
 	return
 
