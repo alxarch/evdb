@@ -9,8 +9,6 @@ type Result struct {
 	Event  string
 	Labels LabelValues
 	Data   DataPointSequence
-
-	key, field string
 }
 
 type DataPoint struct {
@@ -59,11 +57,17 @@ func (s DataPointSequence) MarshalJSON() ([]byte, error) {
 	return data, nil
 }
 
-type ResultSequence []Result
+type Results []Result
 
-func (s ResultSequence) Find(key, field string) int {
+func (s Results) Find(event string, values LabelValues) int {
+iloop:
 	for i, r := range s {
-		if r.key == key && r.field == field {
+		if r.Event == event && len(values) == len(r.Labels) {
+			for key, value := range values {
+				if r.Labels[key] != value {
+					continue iloop
+				}
+			}
 			return i
 		}
 	}

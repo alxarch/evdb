@@ -27,7 +27,7 @@ func Test_ReadWrite(t *testing.T) {
 	db.Registry = reg
 	n := event.WithLabelValues([]string{"bar", "baz"}).Add(1)
 	log.Println("Counter", n)
-	db.Gather2(event)
+	db.Gather(event)
 	q := url.Values{}
 	q.Set("foo", "bar")
 	q.Set("bar", "baz")
