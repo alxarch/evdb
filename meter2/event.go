@@ -16,28 +16,6 @@ var (
 	ErrInvalidEventLabel = errors.New("Invalid event label.")
 )
 
-func indexOf(values []string, s string) int {
-	for i := 0; i < len(values); i++ {
-		if values[i] == s {
-			return i
-		}
-	}
-	return -1
-}
-
-func distinct(values ...string) []string {
-	j := 0
-	for _, value := range values {
-		if indexOf(values[:j], value) != -1 {
-			continue
-		}
-		values[j] = value
-		j++
-	}
-	return values[:j]
-
-}
-
 var nilDesc = &Desc{err: ErrNilDesc}
 
 func NewEvent(desc *Desc) Event {
@@ -45,15 +23,6 @@ func NewEvent(desc *Desc) Event {
 		desc = nilDesc
 	}
 	return newCounterEvent(desc)
-}
-
-func checkDistinct(values []string) int {
-	for i, value := range values {
-		if indexOf(values[:i], value) != -1 {
-			return i
-		}
-	}
-	return -1
 }
 
 type counterEvent struct {
@@ -146,4 +115,26 @@ func valuesHash(values []string) (h uint64) {
 		h = hashAddByte(h, separatorByte)
 	}
 	return h
+}
+
+func indexOf(values []string, s string) int {
+	for i := 0; i < len(values); i++ {
+		if values[i] == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func distinct(values ...string) []string {
+	j := 0
+	for _, value := range values {
+		if indexOf(values[:j], value) != -1 {
+			continue
+		}
+		values[j] = value
+		j++
+	}
+	return values[:j]
+
 }

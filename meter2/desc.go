@@ -1,9 +1,5 @@
 package meter2
 
-import (
-	"bytes"
-)
-
 type Desc struct {
 	name        string
 	err         error
@@ -36,9 +32,6 @@ func (d *Desc) Error() error {
 func (d *Desc) Name() string {
 	return d.name
 }
-func (d *Desc) AppendName(b *bytes.Buffer) {
-	b.WriteString(d.name)
-}
 func (d *Desc) Labels() []string {
 	return d.labels
 }
@@ -47,18 +40,10 @@ func (d *Desc) Resolutions() []Resolution {
 }
 
 func (d *Desc) LabelIndex(label string) int {
-	if d != nil {
-		for i := 0; i < len(d.labels); i++ {
-			if label == d.labels[i] {
-				return i
-			}
-
-		}
-	}
-	return -1
+	return indexOf(d.labels, label)
 }
 func (d *Desc) HasLabel(label string) bool {
-	return d.LabelIndex(label) != -1
+	return indexOf(d.labels, label) != -1
 }
 
 type DescriptorFunc func() *Desc
