@@ -260,14 +260,37 @@ func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
 	return QueryPermutations(queries)
 }
 
+func (db *DB) Query(q ScanQuery) (Results, error) {
+	results := Results{}
+	ch := make(chan ScanResult, 1)
+	go func() {
+		for r := range ch {
+			results = r.AppendResults(results)
+		}
+	}()
+	err := db.ScanQuery(q, ch)
+	close(ch)
+	return results, err
+}
+
 func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	event := db.Registry.Get(q.Event)
 	if event == nil {
 		return ErrUnregisteredEvent
 	}
-	queries := q.QueryValues(event.Describe())
+	desc := event.Describe()
+	if desc == nil {
+		return ErrNilDesc
+	}
+	if q.Group != "" && !desc.HasLabel(q.Group) {
+		return ErrInvalidEventLabel
+	}
+	queries := q.QueryValues(desc)
 	if queries == nil {
 		return nil
+	}
+	if len(queries) == 0 {
+		queries = append(queries, map[string]string{})
 	}
 	ts := q.Resolution.TimeSequence(q.Start, q.End)
 	if len(ts) == 0 {
@@ -275,36 +298,38 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	}
 	wg := &sync.WaitGroup{}
 	result := ScanResult{
-		Name:  q.Event,
-		Group: q.Group,
+		Name: q.Event,
 	}
 	for _, values := range queries {
 		result.Values = values
 		m := event.WithLabels(values)
 		if m == nil {
-			result.err = ErrInvalidEventLabel
-			results <- result
 			continue
 		}
-		desc := m.Describe()
+		desc = m.Describe()
 		if desc == nil {
-			result.err = ErrNilDesc
+			continue
+		}
+
+		if e := desc.Error(); e != nil {
+			result.err = e
 			results <- result
 			continue
 		}
+
 		result.Name = desc.Name()
 		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
-		field := string(data)
+		match := string(data)
 		// Let redis client pool size determine parallel requests
 		for _, tm := range ts {
 			result.Time = tm
 			data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
 			key := string(data)
 			wg.Add(1)
-			go func(r ScanResult) {
-				db.Scan(key, field, q.Group, r, results)
+			go func(r ScanResult, key string) {
+				db.Scan(key, match, q.Group, r, results)
 				wg.Done()
-			}(result)
+			}(result, key)
 		}
 	}
 	wg.Wait()
@@ -386,7 +411,7 @@ func (db *DB) Scan(key, match, group string, r ScanResult, results chan<- ScanRe
 func (r ScanResult) AppendResults(results Results) Results {
 	p := DataPoint{r.Time.Unix(), r.count}
 	if results != nil {
-		if i := results.Find(r.Name, r.Values); i != -1 {
+		if i := results.Find(r.Name, r.Group, r.Values); i != -1 {
 			results[i].Data = append(results[i].Data, p)
 			return results
 		}
@@ -394,6 +419,7 @@ func (r ScanResult) AppendResults(results Results) Results {
 	return append(results, Result{
 		Event:  r.Name,
 		Labels: r.Values,
+		Group:  r.Group,
 		Data:   DataPoints{p},
 	})
 

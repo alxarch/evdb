@@ -7,6 +7,7 @@ import (
 
 type Result struct {
 	Event  string
+	Group  string
 	Labels LabelValues
 	Data   DataPoints
 }
@@ -59,10 +60,10 @@ func (s DataPoints) MarshalJSON() ([]byte, error) {
 
 type Results []Result
 
-func (s Results) Find(event string, values LabelValues) int {
+func (s Results) Find(event, group string, values LabelValues) int {
 iloop:
 	for i, r := range s {
-		if r.Event == event && len(values) == len(r.Labels) {
+		if r.Event == event && r.Group == group && len(values) == len(r.Labels) {
 			for key, value := range values {
 				if r.Labels[key] != value {
 					continue iloop
