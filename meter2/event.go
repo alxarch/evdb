@@ -109,8 +109,8 @@ const separatorByte byte = 255
 
 func valuesHash(values []string) (h uint64) {
 	h = hashNew()
-	for _, v := range values {
-		h = hashAdd(h, v)
+	for i := 0; i < len(values); i++ {
+		h = hashAdd(h, values[i])
 		h = hashAddByte(h, separatorByte)
 	}
 	return h
@@ -128,11 +128,10 @@ func indexOf(values []string, s string) int {
 func distinct(values ...string) []string {
 	j := 0
 	for _, value := range values {
-		if indexOf(values[:j], value) != -1 {
-			continue
+		if indexOf(values[:j], value) == -1 {
+			values[j] = value
+			j++
 		}
-		values[j] = value
-		j++
 	}
 	return values[:j]
 
