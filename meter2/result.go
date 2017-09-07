@@ -8,36 +8,36 @@ import (
 type Result struct {
 	Event  string
 	Labels LabelValues
-	Data   DataPointSequence
+	Data   DataPoints
 }
 
 type DataPoint struct {
 	Timestamp, Value int64
 }
 
-type DataPointSequence []DataPoint
+type DataPoints []DataPoint
 
-var _ sort.Interface = DataPointSequence{}
+var _ sort.Interface = DataPoints{}
 
-func (s DataPointSequence) Sort() {
+func (s DataPoints) Sort() {
 	sort.Sort(s)
 }
 
-func (s DataPointSequence) Len() int {
+func (s DataPoints) Len() int {
 	return len(s)
 }
 
-func (s DataPointSequence) Swap(i, j int) {
+func (s DataPoints) Swap(i, j int) {
 	tmp := s[i]
 	s[i] = s[j]
 	s[j] = tmp
 }
 
-func (s DataPointSequence) Less(i, j int) bool {
+func (s DataPoints) Less(i, j int) bool {
 	return s[i].Timestamp < s[j].Timestamp
 }
 
-func (s DataPointSequence) MarshalJSON() ([]byte, error) {
+func (s DataPoints) MarshalJSON() ([]byte, error) {
 	if s == nil {
 		return nil, nil
 	}

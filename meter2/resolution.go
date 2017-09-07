@@ -118,29 +118,3 @@ func (r Resolution) WithStep(step time.Duration) Resolution {
 	r.step = step
 	return r
 }
-
-//
-// func (r Resolution) Key(event string, t time.Time) string {
-// 	return r.KeyWithPrefix(DefaultKeyPrefix, event, t)
-// }
-//
-// func (r Resolution) KeyWithPrefix(prefix, event string, t time.Time) (k string) {
-// 	b := bget()
-// 	r.AppendKeyWithPrefix(prefix, event, t, b)
-// 	k = b.String()
-// 	bput(b)
-// 	return
-// }
-//
-// func (r Resolution) AppendKeyWithPrefix(prefix, event string, t time.Time, b *bytes.Buffer) {
-// 	if prefix != "" {
-// 		b.WriteString(prefix)
-// 		b.WriteByte(':')
-// 	}
-// 	b.WriteString(r.name)
-// 	b.WriteByte(':')
-// 	b.WriteString(r.MarshalTime(t))
-// 	b.WriteByte(':')
-// 	b.WriteString(event)
-// 	return
-// }

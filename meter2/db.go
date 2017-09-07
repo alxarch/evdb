@@ -3,6 +3,7 @@ package meter2
 import (
 	"log"
 	"net/url"
+	"regexp"
 	"strconv"
 	"sync"
 	"time"
@@ -12,6 +13,8 @@ import (
 )
 
 const DefaultKeyPrefix = "meter:"
+
+var quoteMeta = regexp.QuoteMeta
 
 type DB struct {
 	Redis     redis.UniversalClient
@@ -139,6 +142,8 @@ func AppendField(data []byte, labels, values []string) []byte {
 	return data
 }
 
+// TODO: Write metrics in parallel
+
 func (db *DB) Gather(col Collector) error {
 	ch := make(chan Metric)
 	result := make(chan error)
@@ -161,14 +166,15 @@ func (db *DB) Gather(col Collector) error {
 			desc := m.Describe()
 			name := desc.Name()
 			labels := desc.Labels()
-			for _, layout := range desc.Layouts() {
-
-				res := layout.Resolution
+			for _, res := range desc.Resolutions() {
 				data = db.AppendKey(data[:0], res, name, tm)
 				key := string(data)
 				data = AppendField(data[:0], labels, values)
 				// log.Println(res.Name(), key, string(data))
 				pipeline.HIncrBy(key, string(data), n)
+				if ttl := res.TTL(); ttl > 0 {
+					pipeline.Expire(key, ttl)
+				}
 				pipelineSize++
 			}
 		}
@@ -191,6 +197,7 @@ func (db *DB) Gather(col Collector) error {
 type ScanResult struct {
 	Name   string
 	Time   time.Time
+	Group  string
 	Values LabelValues
 	err    error
 	count  int64
@@ -233,6 +240,13 @@ func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
 	if d == nil {
 		return nil
 	}
+	if q.Group != "" {
+		if !d.HasLabel(q.Group) {
+			return nil
+		}
+		delete(q.Query, q.Group)
+	}
+
 	queries := d.MatchingQueries(q.Query)
 	return QueryPermutations(queries)
 }
@@ -252,7 +266,8 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	}
 	wg := &sync.WaitGroup{}
 	result := ScanResult{
-		Name: q.Event,
+		Name:  q.Event,
+		Group: q.Group,
 	}
 	for _, values := range queries {
 		result.Values = values
@@ -331,7 +346,7 @@ func (r ScanResult) AppendResults(results Results) Results {
 	return append(results, Result{
 		Event:  r.Name,
 		Labels: r.Values,
-		Data:   DataPointSequence{p},
+		Data:   DataPoints{p},
 	})
 
 }
