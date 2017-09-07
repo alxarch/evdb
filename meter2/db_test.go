@@ -2,6 +2,7 @@ package meter2_test
 
 import (
 	"log"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -49,5 +50,10 @@ func Test_ReadWrite(t *testing.T) {
 	}
 	results, err := db.Query(sq)
 	log.Println(err, results)
+	s := httptest.NewServer(db)
+	// s.Start()
+	defer s.Close()
+	res, err := s.Client().Get(s.URL + "?event=foo&start=2017&end=2017&res=daily")
+	log.Println(res.Status, err)
 
 }
