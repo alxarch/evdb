@@ -3,8 +3,8 @@ package meter2
 import (
 	"log"
 	"net/url"
-	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,8 +13,6 @@ import (
 )
 
 const DefaultKeyPrefix = "meter:"
-
-var quoteMeta = regexp.QuoteMeta
 
 type DB struct {
 	Redis     redis.UniversalClient
@@ -203,13 +201,24 @@ type ScanResult struct {
 	count  int64
 }
 
+func AppendMatch(data []byte, s string) []byte {
+	for i := 0; i < len(s); i++ {
+		switch b := s[i]; b {
+		case '*', '[', ']', '?', '^':
+			data = append(data, '\\', b)
+		default:
+			data = append(data, b)
+		}
+	}
+	return data
+}
 func AppendMatchField(data []byte, labels []string, group string, q map[string]string) []byte {
 	for i := 0; i < len(labels); i++ {
 		if i > 0 {
 			data = append(data, LabelSeparator)
 		}
 		label := labels[i]
-		data = append(data, quoteMeta(label)...)
+		data = AppendMatch(data, label)
 		data = append(data, LabelSeparator)
 		if label == group {
 			data = append(data, '[', '^', NilByte, ']', '*')
@@ -217,7 +226,7 @@ func AppendMatchField(data []byte, labels []string, group string, q map[string]s
 		}
 		if q != nil {
 			if v, ok := q[label]; ok {
-				data = append(data, quoteMeta(v)...)
+				data = AppendMatch(data, v)
 				continue
 			}
 		}
@@ -293,7 +302,7 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 			key := string(data)
 			wg.Add(1)
 			go func(r ScanResult) {
-				db.Scan(key, field, r, results)
+				db.Scan(key, field, q.Group, r, results)
 				wg.Done()
 			}(result)
 		}
@@ -302,7 +311,24 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 
 	return
 }
-func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
+
+func scanField(val []byte, field, group string) []byte {
+	i := strings.Index(field, group)
+	if i == -1 {
+		return val
+	}
+	i += len(group)
+	for j := i; j < len(field); j++ {
+		if field[j] == LabelSeparator || field[j] == FieldTerminator {
+			return append(val, field[i:j]...)
+		}
+	}
+	return val
+}
+
+const sLabelSeparator = "\x1f"
+
+func (db *DB) Scan(key, match, group string, r ScanResult, results chan<- ScanResult) (err error) {
 	var fields []string
 	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
 	for scan.Next() {
@@ -322,13 +348,34 @@ func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (
 		}
 		return
 	}
+	var grouped map[string]int64
+	var val []byte
+	if group != "" {
+		group = r.Group + sLabelSeparator
+		val = []byte(group)
+		grouped = make(map[string]int64, len(fields))
+	}
+	// Just in case
 	r.count = 0
-	for _, x := range reply {
+	for i, x := range reply {
 		if a, ok := x.(string); ok {
 			if n, e := strconv.ParseInt(a, 10, 64); e == nil {
-				r.count += n
+				if group != "" {
+					val = scanField(val[:0], fields[i], group)
+					grouped[string(val)] += n
+				} else {
+					r.count += n
+				}
 			}
 		}
+	}
+	if group != "" {
+		for g, count := range grouped {
+			r.Group = g
+			r.count = count
+			results <- r
+		}
+		return
 	}
 	results <- r
 
