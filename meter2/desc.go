@@ -42,6 +42,14 @@ func (d *Desc) Labels() []string {
 func (d *Desc) Resolutions() []Resolution {
 	return d.resolutions
 }
+func (d *Desc) Resolution(name string) (r Resolution, ok bool) {
+	for _, res := range d.resolutions {
+		if res.Name() == name {
+			return res, true
+		}
+	}
+	return
+}
 
 func (d *Desc) LabelIndex(label string) int {
 	return indexOf(d.labels, label)

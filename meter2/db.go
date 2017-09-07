@@ -245,7 +245,7 @@ type ScanQuery struct {
 	Start, End time.Time
 	Group      string
 	Query      url.Values
-	Resolution Resolution
+	Resolution string
 }
 
 func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
@@ -263,7 +263,7 @@ func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
 	return QueryPermutations(queries)
 }
 
-func (db *DB) Query(q ScanQuery) (Results, error) {
+func (db *DB) Query(queries ...ScanQuery) (Results, error) {
 	results := Results{}
 	ch := make(chan ScanResult, 1)
 	go func() {
@@ -271,12 +271,23 @@ func (db *DB) Query(q ScanQuery) (Results, error) {
 			results = r.AppendResults(results)
 		}
 	}()
-	err := db.ScanQuery(q, ch)
+	wg := new(sync.WaitGroup)
+	for _, q := range queries {
+		wg.Add(1)
+		go func(q ScanQuery) {
+			db.ScanQuery(q, ch)
+			wg.Done()
+		}(q)
+	}
+	wg.Wait()
 	close(ch)
-	return results, err
+	return results, nil
 }
 
 func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
+	result := ScanResult{
+		Name: q.Event,
+	}
 	event := db.Registry.Get(q.Event)
 	if event == nil {
 		return ErrUnregisteredEvent
@@ -295,14 +306,15 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	if len(queries) == 0 {
 		queries = append(queries, map[string]string{})
 	}
-	ts := q.Resolution.TimeSequence(q.Start, q.End)
+	res, ok := desc.Resolution(q.Resolution)
+	if !ok {
+		return nil
+	}
+	ts := res.TimeSequence(q.Start, q.End)
 	if len(ts) == 0 {
 		return nil
 	}
 	wg := &sync.WaitGroup{}
-	result := ScanResult{
-		Name: q.Event,
-	}
 	for _, values := range queries {
 		result.Values = values
 		m := event.WithLabels(values)
@@ -326,7 +338,7 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 		// Let redis client pool size determine parallel requests
 		for _, tm := range ts {
 			result.Time = tm
-			data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
+			data = db.AppendKey(data[:0], res, desc.Name(), tm)
 			key := string(data)
 			wg.Add(1)
 			go func(r ScanResult, key string) {

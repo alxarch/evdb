@@ -45,7 +45,7 @@ func Test_ReadWrite(t *testing.T) {
 		End:        time.Now(),
 		Query:      q,
 		Group:      "foo",
-		Resolution: meter2.ResolutionDaily,
+		Resolution: "daily",
 	}
 	results, err := db.Query(sq)
 	log.Println(err, results)
