@@ -20,7 +20,11 @@ type Collector interface {
 
 func NewDesc(name string, labels []string, res ...Resolution) *Desc {
 	d := new(Desc)
-	labels = distinct(labels...)
+	if labels != nil {
+		labels = distinct(labels...)
+	} else {
+		labels = []string{}
+	}
 	d.name, d.labels = name, labels
 	d.resolutions = distinctNonZeroResolutions(res...)
 	return d
