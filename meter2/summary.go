@@ -76,7 +76,7 @@ func (db *DB) MatchField(labels []string, group string, values LabelValues) (f s
 }
 
 func (db *DB) SummaryScan(q SummaryQuery) (sum Summary, err error) {
-	event := db.registry.Get(q.Event)
+	event := db.Registry.Get(q.Event)
 	if event == nil {
 		return nil, ErrUnregisteredEvent
 	}

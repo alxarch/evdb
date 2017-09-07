@@ -73,6 +73,10 @@ func newCounterEvent(d *Desc) *counterEvent {
 
 func (e *counterEvent) Collect(ch chan<- Metric) {
 	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.values == nil {
+		return
+	}
 	for _, counters := range e.values {
 		for _, c := range counters {
 			ch <- c
@@ -91,7 +95,7 @@ func (e *counterEvent) WithLabelValues(values []string) Metric {
 func (e *counterEvent) FindOrCreate(values []string, d Descriptor) (m Metric, created bool) {
 	h := valuesHash(values)
 	var v *Counter
-	if v = e.find(h, values); v == nil {
+	if v = e.Find(h, values); v == nil {
 		e.mu.Lock()
 		if v = e.find(h, values); v == nil {
 			v = NewCounter(values...)
@@ -103,8 +107,19 @@ func (e *counterEvent) FindOrCreate(values []string, d Descriptor) (m Metric, cr
 	}
 	return v, created
 }
-
 func (e *counterEvent) find(h uint64, values []string) *Counter {
+	collisions := e.values[h]
+	if collisions != nil {
+		for _, c := range collisions {
+			if c.matches(values) {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+func (e *counterEvent) Find(h uint64, values []string) *Counter {
 	e.mu.RLock()
 	collisions := e.values[h]
 	e.mu.RUnlock()

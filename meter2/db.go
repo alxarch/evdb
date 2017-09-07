@@ -3,8 +3,10 @@ package meter2
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	tc "github.com/alxarch/go-timecodec"
@@ -15,12 +17,16 @@ const DefaultKeyPrefix = "meter:"
 
 type DB struct {
 	Redis     redis.UniversalClient
-	registry  *Registry
+	Registry  *Registry
 	KeyPrefix string
 }
 
 func NewDB(r redis.UniversalClient) *DB {
-	return &DB{r, defaultRegistry, DefaultKeyPrefix}
+	db := new(DB)
+	db.Redis = r
+	db.Registry = defaultRegistry
+	db.KeyPrefix = DefaultKeyPrefix
+	return db
 }
 
 type Query struct {
@@ -108,7 +114,7 @@ func (dims Dimensions) FirstMatch(q map[string]string) Dimension {
 }
 
 func (db *DB) Records(q Query, pipeline redis.Pipeliner, ch chan<- Record) {
-	event := db.registry.Get(q.event)
+	event := db.Registry.Get(q.event)
 	if event == nil {
 		return
 	}
@@ -158,7 +164,7 @@ func (db *DB) Records(q Query, pipeline redis.Pipeliner, ch chan<- Record) {
 		for _, tm := range ts {
 			r.tm = tm
 			b.Reset()
-			db.AppendKey(q.res, r.name, tm, b)
+			db.AppendKeyBuffer(q.res, r.name, tm, b)
 			r.key = b.String()
 			if pipeline != nil {
 				r.result = pipeline.HGet(r.key, r.field)
@@ -260,13 +266,26 @@ const FieldTerminator = '\x1e'
 
 func (db DB) Key(r Resolution, event string, t time.Time) (k string) {
 	b := bget()
-	db.AppendKey(r, event, t, b)
+	db.AppendKeyBuffer(r, event, t, b)
 	k = b.String()
 	bput(b)
 	return
 }
 
-func (db DB) AppendKey(r Resolution, event string, t time.Time, b *bytes.Buffer) {
+func (db DB) AppendKey(data []byte, r Resolution, event string, t time.Time) []byte {
+	if db.KeyPrefix != "" {
+		data = append(data, db.KeyPrefix...)
+		data = append(data, LabelSeparator)
+	}
+	data = append(data, r.Name()...)
+	data = append(data, LabelSeparator)
+	data = append(data, r.MarshalTime(t)...)
+	data = append(data, LabelSeparator)
+	data = append(data, event...)
+	return data
+}
+
+func (db DB) AppendKeyBuffer(r Resolution, event string, t time.Time, b *bytes.Buffer) {
 	if db.KeyPrefix != "" {
 		b.WriteString(db.KeyPrefix)
 		b.WriteByte(':')
@@ -368,7 +387,7 @@ func (db DB) aggregate(c Collector) jobs {
 			for _, layout := range desc.Layouts() {
 				res, dims := layout.Resolution, layout.Dimensions
 				buf.Reset()
-				db.AppendKey(res, name, tm, buf)
+				db.AppendKeyBuffer(res, name, tm, buf)
 				key := buf.String()
 				j := b[key]
 				if j == nil {
@@ -402,6 +421,181 @@ func (db DB) aggregate(c Collector) jobs {
 	return <-result
 }
 
+const NilByte byte = 0
+
+func AppendField(data []byte, labels, values []string) []byte {
+	n := len(values)
+	for i := 0; i < len(labels); i++ {
+		label := labels[i]
+		if i > 0 {
+			data = append(data, LabelSeparator)
+		}
+		data = append(data, label...)
+		data = append(data, LabelSeparator)
+		if i < n {
+			value := values[i]
+			data = append(data, value...)
+		} else {
+			data = append(data, NilByte)
+		}
+	}
+	data = append(data, FieldTerminator)
+	return data
+}
+
+func (db *DB) Gather2(col Collector) error {
+	ch := make(chan Metric)
+	result := make(chan error)
+	go func() {
+		pipeline := db.Redis.Pipeline()
+		defer pipeline.Close()
+		data := []byte{}
+		tm := time.Now()
+		pipelineSize := 0
+		for m := range ch {
+			if m == nil {
+				continue
+			}
+			n := m.Set(0)
+			if n == 0 {
+				// log.Println("Empty counter")
+				continue
+			}
+			values := m.Values()
+			desc := m.Describe()
+			name := desc.Name()
+			labels := desc.Labels()
+			for _, layout := range desc.Layouts() {
+
+				res := layout.Resolution
+				data = db.AppendKey(data[:0], res, name, tm)
+				key := string(data)
+				data = AppendField(data[:0], labels, values)
+				// log.Println(res.Name(), key, string(data))
+				pipeline.HIncrBy(key, string(data), n)
+				pipelineSize++
+			}
+		}
+		if pipelineSize == 0 {
+			result <- nil
+			return
+		}
+		if _, err := pipeline.Exec(); err != nil && err != redis.Nil {
+			log.Println(err)
+			result <- err
+			return
+		}
+		result <- nil
+	}()
+	col.Collect(ch)
+	close(ch)
+	return <-result
+}
+
+type ScanResult struct {
+	Name   string
+	Time   time.Time
+	Values LabelValues
+	err    error
+	count  int64
+}
+
+func AppendMatchField(data []byte, labels []string, group string, q map[string]string) []byte {
+	for i := 0; i < len(labels); i++ {
+		if i > 0 {
+			data = append(data, LabelSeparator)
+		}
+		label := labels[i]
+		data = append(data, quoteMeta(label)...)
+		data = append(data, LabelSeparator)
+		if label == group {
+			data = append(data, '[', '^', NilByte, ']', '*')
+			continue
+		}
+		if q != nil {
+			if v, ok := q[label]; ok {
+				data = append(data, quoteMeta(v)...)
+				continue
+			}
+		}
+		data = append(data, '*')
+
+	}
+	data = append(data, FieldTerminator)
+	return data
+}
+
+type ScanQuery struct {
+	Event      string
+	Start, End time.Time
+	Group      string
+	Values     map[string]string
+	Resolution Resolution
+}
+
+func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
+	event := db.Registry.Get(q.Event)
+	if event == nil {
+		return ErrUnregisteredEvent
+	}
+	m := event.WithLabels(q.Values)
+	if m == nil {
+		return ErrInvalidEventLabel
+	}
+	desc := m.Describe()
+	if desc == nil {
+		return ErrNilDesc
+	}
+	ts := q.Resolution.TimeSequence(q.Start, q.End)
+	data := AppendMatchField(nil, desc.Labels(), q.Group, q.Values)
+	field := string(data)
+	// Let redis client pool size determine parallel requests
+	wg := &sync.WaitGroup{}
+	for _, tm := range ts {
+		data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
+		key := string(data)
+		wg.Add(1)
+		go func(key, field string, tm time.Time) {
+			n, err := db.Scan(key, field)
+			results <- ScanResult{Name: desc.Name(), Values: q.Values, Time: tm, count: n, err: err}
+			wg.Done()
+		}(key, field, tm)
+	}
+	wg.Wait()
+
+	return
+}
+func (db *DB) Scan(key string, field string) (n int64, err error) {
+	var fields []string
+	scan := db.Redis.HScan(key, 0, field, -1).Iterator()
+	for scan.Next() {
+		fields = append(fields, scan.Val())
+	}
+	if err = scan.Err(); err != nil {
+		return
+	}
+	if len(fields) == 0 {
+		return
+	}
+	var reply []interface{}
+	reply, err = db.Redis.HMGet(key, fields...).Result()
+	if err != nil {
+		return
+	}
+	for _, x := range reply {
+		if a, ok := x.(string); ok {
+			if count, e := strconv.ParseInt(a, 10, 64); e == nil {
+				n += count
+			} else {
+				err = e
+				return
+			}
+		}
+	}
+
+	return
+
+}
 func (db *DB) Gather(col Collector) error {
 	jobs := db.aggregate(col)
 	if len(jobs) == 0 {
