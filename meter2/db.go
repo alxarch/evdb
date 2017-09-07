@@ -157,19 +157,18 @@ func (db *DB) Gather(col Collector) error {
 			}
 			n := m.Set(0)
 			if n == 0 {
-				// log.Println("Empty counter")
 				continue
 			}
 			values := m.Values()
 			desc := m.Describe()
 			name := desc.Name()
 			labels := desc.Labels()
+			data = AppendField(data[:0], labels, values)
+			field := string(data)
 			for _, res := range desc.Resolutions() {
 				data = db.AppendKey(data[:0], res, name, tm)
 				key := string(data)
-				data = AppendField(data[:0], labels, values)
-				// log.Println(res.Name(), key, string(data))
-				pipeline.HIncrBy(key, string(data), n)
+				pipeline.HIncrBy(key, field, n)
 				if ttl := res.TTL(); ttl > 0 {
 					pipeline.Expire(key, ttl)
 				}
