@@ -45,9 +45,3 @@ func (d *Desc) LabelIndex(label string) int {
 func (d *Desc) HasLabel(label string) bool {
 	return indexOf(d.labels, label) != -1
 }
-
-type DescriptorFunc func() *Desc
-
-func (f DescriptorFunc) Describe() *Desc {
-	return f()
-}

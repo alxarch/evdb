@@ -10,8 +10,8 @@ type Counter struct {
 
 var _ Metric = &Counter{}
 
-func NewCounter(values ...string) *Counter {
-	return &Counter{values: values}
+func NewCounter(d *Desc, values ...string) *Counter {
+	return &Counter{desc: d, values: values}
 }
 
 func (v *Counter) matches(values []string) bool {

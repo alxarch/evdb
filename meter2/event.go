@@ -57,18 +57,17 @@ func (e *counterEvent) WithLabels(values LabelValues) Metric {
 	return e.WithLabelValues(values.Values(e.desc.labels))
 }
 func (e *counterEvent) WithLabelValues(values []string) Metric {
-	m, _ := e.FindOrCreate(values, e.desc)
+	m, _ := e.FindOrCreate(values)
 	return m
 }
 
-func (e *counterEvent) FindOrCreate(values []string, d Descriptor) (m Metric, created bool) {
+func (e *counterEvent) FindOrCreate(values []string) (m Metric, created bool) {
 	h := valuesHash(values)
 	var v *Counter
 	if v = e.Find(h, values); v == nil {
 		e.mu.Lock()
 		if v = e.find(h, values); v == nil {
-			v = NewCounter(values...)
-			v.desc = d.Describe()
+			v = NewCounter(e.desc, values...)
 			e.values[h] = append(e.values[h], v)
 			created = true
 		}
