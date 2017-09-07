@@ -529,8 +529,16 @@ type ScanQuery struct {
 	Event      string
 	Start, End time.Time
 	Group      string
-	Values     map[string]string
+	Query      url.Values
 	Resolution Resolution
+}
+
+func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
+	if d == nil {
+		return nil
+	}
+	queries := d.MatchingQueries(q.Query)
+	return QueryPermutations(queries)
 }
 
 func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
@@ -538,28 +546,47 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	if event == nil {
 		return ErrUnregisteredEvent
 	}
-	m := event.WithLabels(q.Values)
-	if m == nil {
-		return ErrInvalidEventLabel
-	}
-	desc := m.Describe()
-	if desc == nil {
-		return ErrNilDesc
+	queries := q.QueryValues(event.Describe())
+	if queries == nil {
+		return nil
 	}
 	ts := q.Resolution.TimeSequence(q.Start, q.End)
-	data := AppendMatchField(nil, desc.Labels(), q.Group, q.Values)
-	field := string(data)
-	// Let redis client pool size determine parallel requests
+	if len(ts) == 0 {
+		return nil
+	}
 	wg := &sync.WaitGroup{}
-	for _, tm := range ts {
-		data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
-		key := string(data)
-		wg.Add(1)
-		go func(key, field string, tm time.Time) {
-			n, err := db.Scan(key, field)
-			results <- ScanResult{Name: desc.Name(), Values: q.Values, Time: tm, count: n, err: err}
-			wg.Done()
-		}(key, field, tm)
+	result := ScanResult{
+		Name: q.Event,
+	}
+	for _, values := range queries {
+		result.Values = values
+		m := event.WithLabels(values)
+		if m == nil {
+			result.err = ErrInvalidEventLabel
+			results <- result
+			continue
+		}
+		desc := m.Describe()
+		if desc == nil {
+			result.err = ErrNilDesc
+			results <- result
+			continue
+		}
+		result.Name = desc.Name()
+		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
+		field := string(data)
+		// Let redis client pool size determine parallel requests
+		for _, tm := range ts {
+			result.Time = tm
+			data = db.AppendKey(data[:0], q.Resolution, desc.Name(), tm)
+			key := string(data)
+			wg.Add(1)
+			go func(key, field string, tm time.Time, r ScanResult) {
+				r.count, r.err = db.Scan(key, field)
+				results <- r
+				wg.Done()
+			}(key, field, tm, result)
+		}
 	}
 	wg.Wait()
 

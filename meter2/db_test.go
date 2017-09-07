@@ -2,6 +2,7 @@ package meter2_test
 
 import (
 	"log"
+	"net/url"
 	"testing"
 	"time"
 
@@ -27,19 +28,21 @@ func Test_ReadWrite(t *testing.T) {
 	n := event.WithLabelValues([]string{"bar", "baz"}).Add(1)
 	log.Println("Counter", n)
 	db.Gather2(event)
-	q := map[string]string{
+	q := url.Values{}
+	q.Set("foo", "bar")
+	q.Set("bar", "baz")
+	data := []byte{}
+	field := meter2.AppendMatchField(data[:0], desc.Labels(), "", map[string]string{
 		"foo": "bar",
 		"bar": "baz",
-	}
-	data := []byte{}
-	field := meter2.AppendMatchField(data[:0], desc.Labels(), "", q)
+	})
 	result, err := db.Scan("meter:\x1fdaily\x1f2017-09-07\x1ftest", string(field))
 	log.Println("Counter", string(field), result, err)
 	sq := meter2.ScanQuery{
 		Event:      "test",
 		Start:      time.Now().Add(-72 * time.Hour),
 		End:        time.Now(),
-		Values:     q,
+		Query:      q,
 		Resolution: meter2.ResolutionDaily,
 	}
 	results := make(chan meter2.ScanResult, 1)
