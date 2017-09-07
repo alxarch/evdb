@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/araddon/dateparse"
 )
@@ -55,6 +56,12 @@ func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
 	}
 	delete(q, QueryParamEnd)
 	s.Query = q
+	if now := time.Now(); s.End.After(now) {
+		s.End = now
+	}
+	if s.Start.IsZero() || s.Start.After(s.End) {
+		s.Start = s.End
+	}
 	for i, name := range eventNames {
 		s.Event = name
 		queries[i] = s
