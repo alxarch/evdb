@@ -15,8 +15,8 @@ import (
 const DefaultKeyPrefix = "meter:"
 
 type DB struct {
-	Redis     redis.UniversalClient
-	Registry  *Registry
+	Redis redis.UniversalClient
+	*Registry
 	KeyPrefix string
 }
 
@@ -141,6 +141,10 @@ func AppendField(data []byte, labels, values []string) []byte {
 }
 
 // TODO: Write metrics in parallel with fan out
+
+func (db *DB) Sync() error {
+	return db.Gather(db.Registry)
+}
 
 func (db *DB) Gather(col Collector) error {
 	ch := make(chan Metric)
