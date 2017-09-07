@@ -46,16 +46,19 @@ func (d *Desc) Resolutions() []Resolution {
 	return d.resolutions
 }
 
-func (d *Desc) HasLabel(s string) bool {
-	if d == nil || d.labels == nil {
-		return false
-	}
-	for _, label := range d.labels {
-		if label == s {
-			return true
+func (d *Desc) LabelIndex(label string) int {
+	if d != nil {
+		for i := 0; i < len(d.labels); i++ {
+			if label == d.labels[i] {
+				return i
+			}
+
 		}
 	}
-	return false
+	return -1
+}
+func (d *Desc) HasLabel(label string) bool {
+	return d.LabelIndex(label) != -1
 }
 
 type DescriptorFunc func() *Desc
