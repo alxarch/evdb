@@ -22,7 +22,7 @@ func NewDesc(name string, labels []string, res ...Resolution) *Desc {
 	d := new(Desc)
 	labels = distinct(labels...)
 	d.name, d.labels = name, labels
-	d.resolutions = res
+	d.resolutions = distinctNonZeroResolutions(res...)
 	return d
 }
 
@@ -44,4 +44,22 @@ func (d *Desc) LabelIndex(label string) int {
 }
 func (d *Desc) HasLabel(label string) bool {
 	return indexOf(d.labels, label) != -1
+}
+
+func distinctNonZeroResolutions(res ...Resolution) []Resolution {
+	n := 0
+iloop:
+	for i := 0; i < len(res); i++ {
+		if res[i].IsZero() {
+			continue
+		}
+		for j := 0; j < n; j++ {
+			if res[i].Name() == res[j].Name() {
+				continue iloop
+			}
+		}
+		res[n] = res[i]
+		n++
+	}
+	return res[:n]
 }
