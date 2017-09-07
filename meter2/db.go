@@ -249,17 +249,16 @@ type ScanQuery struct {
 }
 
 func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
-	if d == nil {
+	if d == nil || q.Query == nil {
 		return nil
 	}
+	queries := d.MatchingQueries(q.Query)
 	if q.Group != "" {
 		if !d.HasLabel(q.Group) {
 			return nil
 		}
-		delete(q.Query, q.Group)
+		delete(queries, q.Group)
 	}
-
-	queries := d.MatchingQueries(q.Query)
 	return QueryPermutations(queries)
 }
 
