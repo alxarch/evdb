@@ -61,3 +61,9 @@ func (c *Registry) Register(event Event) error {
 	c.events[name] = event
 	return nil
 }
+
+func (c *Registry) MustRegister(event Event) {
+	if err := c.Register(event); err != nil {
+		panic(err)
+	}
+}

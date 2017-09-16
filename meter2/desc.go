@@ -1,5 +1,7 @@
 package meter2
 
+import "net/url"
+
 type Desc struct {
 	name        string
 	err         error
@@ -74,4 +76,16 @@ iloop:
 		n++
 	}
 	return res[:n]
+}
+
+func (d Desc) QueryWithLabels(values LabelValues) ScanQuery {
+	return d.QueryWithLabelValues(values.Values(d.labels)...)
+}
+
+func (d Desc) QueryWithLabelValues(values ...string) ScanQuery {
+	s := ScanQuery{Event: d.Name(), Query: url.Values{}}
+	for i := 0; i < len(values) && i < len(d.labels); i++ {
+		s.Query.Set(d.labels[i], values[i])
+	}
+	return s
 }

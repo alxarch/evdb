@@ -3,6 +3,7 @@ package meter2
 import (
 	"sort"
 	"strconv"
+	"time"
 )
 
 type Result struct {
@@ -17,6 +18,15 @@ type DataPoint struct {
 }
 
 type DataPoints []DataPoint
+
+func (data DataPoints) Find(tm time.Time) (int64, bool) {
+	for i := 0; i < len(data); i++ {
+		if data[i].Timestamp == tm.Unix() {
+			return data[i].Value, true
+		}
+	}
+	return 0, false
+}
 
 var _ sort.Interface = DataPoints{}
 

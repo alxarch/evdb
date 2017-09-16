@@ -143,17 +143,16 @@ func AppendField(data []byte, labels, values []string) []byte {
 // TODO: Write metrics in parallel with fan out
 
 func (db *DB) Sync() error {
-	return db.Gather(db.Registry)
+	return db.Gather(db.Registry, time.Now())
 }
 
-func (db *DB) Gather(col Collector) error {
+func (db *DB) Gather(col Collector, tm time.Time) error {
 	ch := make(chan Metric)
 	result := make(chan error)
 	go func() {
 		pipeline := db.Redis.Pipeline()
 		defer pipeline.Close()
 		data := []byte{}
-		tm := time.Now()
 		pipelineSize := 0
 		for m := range ch {
 			if m == nil {
@@ -169,10 +168,21 @@ func (db *DB) Gather(col Collector) error {
 			labels := desc.Labels()
 			data = AppendField(data[:0], labels, values)
 			field := string(data)
+			t := m.Type()
 			for _, res := range desc.Resolutions() {
 				data = db.AppendKey(data[:0], res, name, tm)
 				key := string(data)
-				pipeline.HIncrBy(key, field, n)
+				switch t {
+				case MetricTypeIncrement:
+					pipeline.HIncrBy(key, field, n)
+				case MetricTypeUpdateOnce:
+					pipeline.HSetNX(key, field, n)
+				case MetricTypeUpdate:
+					pipeline.HSet(key, field, n)
+				default:
+					continue
+				}
+
 				if ttl := res.TTL(); ttl > 0 {
 					pipeline.Expire(key, ttl)
 				}
@@ -240,14 +250,35 @@ func AppendMatchField(data []byte, labels []string, group string, q map[string]s
 	return data
 }
 
+type QueryMode uint8
+
+const (
+	QueryModeScan QueryMode = iota
+	QueryModeExact
+)
+
+func (m QueryMode) String() string {
+	switch m {
+	case QueryModeExact:
+		return "exact"
+	case QueryModeScan:
+		return "scan"
+	}
+	return "querymodeinvalid"
+}
+
 type ScanQuery struct {
 	Event      string
+	Mode       QueryMode
 	Start, End time.Time
 	Group      string
 	Query      url.Values
 	Resolution string
 }
 
+func NewScanQuery() ScanQuery {
+	return ScanQuery{Query: url.Values{}}
+}
 func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
 	if d == nil || q.Query == nil {
 		return nil
@@ -274,7 +305,12 @@ func (db *DB) Query(queries ...ScanQuery) (Results, error) {
 	for _, q := range queries {
 		wg.Add(1)
 		go func(q ScanQuery) {
-			db.ScanQuery(q, ch)
+			switch q.Mode {
+			case QueryModeExact:
+				db.ExactQuery(q, ch)
+			case QueryModeScan:
+				db.ScanQuery(q, ch)
+			}
 			wg.Done()
 		}(q)
 	}
@@ -283,35 +319,84 @@ func (db *DB) Query(queries ...ScanQuery) (Results, error) {
 	return results, nil
 }
 
-func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
+func (db *DB) resolveQuery(q ScanQuery) (
+	event Event,
+	desc *Desc,
+	queries []map[string]string,
+	res Resolution,
+	ts []time.Time,
+	err error) {
+	if event = db.Registry.Get(q.Event); event == nil {
+		err = ErrUnregisteredEvent
+		return
+	}
+	if desc = event.Describe(); desc == nil {
+		err = ErrNilDesc
+		return
+	}
+	if q.Group != "" && !desc.HasLabel(q.Group) {
+		err = ErrInvalidEventLabel
+		return
+	}
+	if queries = q.QueryValues(desc); queries == nil {
+		return
+	} else if len(queries) == 0 {
+		queries = append(queries, map[string]string{})
+	}
+	if r, hasResolution := desc.Resolution(q.Resolution); hasResolution {
+		res = r
+		ts = r.TimeSequence(q.Start, q.End)
+	}
+	return
+
+}
+
+func (db *DB) ExactQuery(q ScanQuery, results chan<- ScanResult) error {
+	event, desc, queries, res, ts, err := db.resolveQuery(q)
+	if err != nil || len(queries) == 0 || len(ts) == 0 {
+		return err
+	}
+	pipeline := db.Redis.Pipeline()
+	defer pipeline.Close()
+	var replies []*redis.StringCmd
+	// data = AppendField(data, desc.Labels(), m.Values())
+	data := []byte{}
+	for _, values := range queries {
+		m := event.WithLabels(values)
+		data = AppendField(data[:0], desc.Labels(), m.Values())
+		field := string(data)
+		for _, tm := range ts {
+			data = db.AppendKey(data[:0], res, desc.Name(), tm)
+			key := string(data)
+			replies = append(replies, pipeline.HGet(key, field))
+		}
+	}
+	if _, err = pipeline.Exec(); err != nil && err != redis.Nil {
+		return err
+	}
+	for i, values := range queries {
+		for j, tm := range ts {
+			reply := replies[i*len(ts)+j]
+			n, err := reply.Int64()
+			results <- ScanResult{
+				Name:   desc.Name(),
+				Time:   tm,
+				Values: values,
+				count:  n,
+				err:    err,
+			}
+		}
+	}
+	return nil
+}
+
+func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) error {
 	result := ScanResult{
 		Name: q.Event,
 	}
-	event := db.Registry.Get(q.Event)
-	if event == nil {
-		return ErrUnregisteredEvent
-	}
-	desc := event.Describe()
-	if desc == nil {
-		return ErrNilDesc
-	}
-	if q.Group != "" && !desc.HasLabel(q.Group) {
-		return ErrInvalidEventLabel
-	}
-	queries := q.QueryValues(desc)
-	if queries == nil {
-		return nil
-	}
-	if len(queries) == 0 {
-		queries = append(queries, map[string]string{})
-	}
-	res, ok := desc.Resolution(q.Resolution)
-	if !ok {
-		return nil
-	}
-	ts := res.TimeSequence(q.Start, q.End)
-	if len(ts) == 0 {
-		return nil
+	event, desc, queries, res, ts, err := db.resolveQuery(q)
+	if err != nil || len(queries) == 0 || len(ts) == 0 {
+		return err
 	}
 	wg := &sync.WaitGroup{}
 	for _, values := range queries {
@@ -332,7 +417,9 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 		}
 
 		result.Name = desc.Name()
+		// data = AppendField(data, desc.Labels(), m.Values())
 		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
+
 		match := string(data)
 		// Let redis client pool size determine parallel requests
 		for _, tm := range ts {
@@ -348,7 +435,7 @@ func (db *DB) ScanQuery(q ScanQuery, results chan<- ScanResult) (err error) {
 	}
 	wg.Wait()
 
-	return
+	return nil
 }
 
 func scanField(val []byte, field, group string) []byte {

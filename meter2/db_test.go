@@ -13,7 +13,7 @@ import (
 
 var reg = meter2.NewRegistry()
 var desc = meter2.NewDesc("test", []string{"foo", "bar"}, meter2.ResolutionDaily)
-var event = meter2.NewEvent(desc)
+var event = meter2.NewCounterEvent(desc)
 var rc = redis.NewClient(&redis.Options{
 	Addr: ":6379",
 	DB:   3,
@@ -29,7 +29,7 @@ func Test_ReadWrite(t *testing.T) {
 	n := event.WithLabelValues([]string{"bar", "baz"}).Add(1)
 	event.WithLabelValues([]string{"bax"}).Add(1)
 	log.Println("Counter", n)
-	db.Gather(event)
+	db.Gather(event, time.Now())
 	q := url.Values{}
 	// q.Set("foo", "bar")
 	// q.Set("bar", "baz")

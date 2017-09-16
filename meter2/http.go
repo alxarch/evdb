@@ -16,6 +16,7 @@ const (
 	QueryParamStart      = "start"
 	QueryParamEnd        = "end"
 	QueryParamGroup      = "group"
+	QueryParamMode       = "mode"
 )
 
 func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
@@ -62,8 +63,14 @@ func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
 	if s.Start.IsZero() || s.Start.After(s.End) {
 		s.Start = s.End
 	}
+	var mode QueryMode
+	if q.Get(QueryParamMode) == "exact" {
+		mode = QueryModeExact
+	}
+	delete(q, QueryParamMode)
 	for i, name := range eventNames {
 		s.Event = name
+		s.Mode = mode
 		queries[i] = s
 	}
 	return
