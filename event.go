@@ -30,33 +30,6 @@ const FieldTerminator = '\x1e'
 const sFieldTerminator = string(FieldTerminator)
 const sLabelSeparator = string(LabelSeparator)
 
-// func (labels Labels) Field(b []byte) string {
-// 	n := len(labels)
-// 	n -= n % 2
-// 	switch n {
-// 	case 0:
-// 		return string(FieldTerminator)
-// 	case 2:
-// 		// Special case for common small values.
-// 		// Remove if golang.org/issue/6714 is fixed
-// 		return labels[0] + sLabelSeparator + labels[1] + sFieldTerminator
-// 	}
-// 	if b == nil {
-// 		size := n
-// 		for i := 0; i < n; i++ {
-// 			size += len(labels[i])
-// 		}
-// 		b = make([]byte, size)
-// 	}
-// 	bp := copy(b, labels[0])
-// 	for _, s := range labels[1:n] {
-// 		b[bp] = LabelSeparator
-// 		bp++
-// 		bp += copy(b[bp:], s)
-// 	}
-// 	return string(b)
-//
-// }
 func Field(labels []string) string {
 	n := len(labels)
 	n -= n % 2
@@ -87,10 +60,6 @@ func ParseField(field string) Labels {
 	}
 	return labels
 }
-
-// func IsTemplateName(name string) bool {
-// 	return isTemplateRX.MatchString(name)
-// }
 
 func unqLabels(labels ...string) []string {
 	unq := make(map[string]bool, len(labels))
@@ -123,16 +92,6 @@ func NewEvent(name string, labels []string, res ...*Resolution) *Event {
 	for i, label := range labels {
 		e.index[label] = i
 	}
-	// e.pool = &sync.Pool{
-	// 	New: func() interface{} {
-	// 		labels := make([]string, 2*len(e.labels))
-	// 		for label, i := range e.index {
-	// 			labels[i-1] = label
-	// 			labels[i] = "*"
-	// 		}
-	// 		return Labels(labels)
-	// 	},
-	// }
 	for _, r := range res {
 		if r != nil {
 			e.resolutions = append(e.resolutions, r)
@@ -212,37 +171,6 @@ func (e *Event) Field(input Labels) string {
 	}
 	return "*"
 }
-
-// func Replacer(labels ...string) *strings.Replacer {
-// 	n := len(labels)
-// 	n = n - (n % 2)
-// 	r := make([]string, n)
-// 	for i := 0; i < n; i++ {
-// 		if (i % 2) == 0 {
-// 			r[i] = fmt.Sprintf("{{%s}}", labels[i])
-// 		} else {
-// 			if v := labels[i]; v == "" {
-// 				r[i] = "*"
-// 			} else {
-// 				r[i] = labels[i]
-// 			}
-// 		}
-// 	}
-// 	return strings.NewReplacer(r...)
-// }
-
-// func (e *Event) Replacer(labels map[string]string) *strings.Replacer {
-// 	n := len(e.labels)
-// 	tmp := make([]string, 2*n)
-// 	i := 0
-// 	for _, label := range e.labels {
-// 		tmp[i] = label
-// 		i++
-// 		tmp[i] = labels[label]
-// 		i++
-// 	}
-// 	return strings.NewReplacer(tmp...)
-// }
 
 var emptyLabels = Labels(map[string]string{})
 
