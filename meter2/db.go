@@ -279,6 +279,35 @@ type ScanQuery struct {
 func NewScanQuery() ScanQuery {
 	return ScanQuery{Query: url.Values{}}
 }
+func (q ScanQuery) Between(start, end time.Time) ScanQuery {
+	q.Start, q.End = start, end
+	return q
+}
+func (q ScanQuery) At(res Resolution) ScanQuery {
+	q.Resolution = res.Name()
+	return q
+}
+func (q ScanQuery) Where(label string, value ...string) ScanQuery {
+	if q.Query == nil {
+		q.Query = url.Values{}
+	}
+	q.Query[label] = value
+	return q
+}
+func (q ScanQuery) GroupBy(label string) ScanQuery {
+	q.Group = label
+	q.Mode = QueryModeScan
+	return q
+}
+func (q ScanQuery) Exact() ScanQuery {
+	q.Mode = QueryModeExact
+	return q
+}
+func (q ScanQuery) From(event string) ScanQuery {
+	q.Event = event
+	return q
+}
+
 func (q ScanQuery) QueryValues(d *Desc) []map[string]string {
 	if d == nil || q.Query == nil {
 		return nil
