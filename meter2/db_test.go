@@ -26,8 +26,8 @@ func init() {
 func Test_ReadWrite(t *testing.T) {
 	db := meter2.NewDB(rc)
 	db.Registry = reg
-	n := event.WithLabelValues([]string{"bar", "baz"}).Add(1)
-	event.WithLabelValues([]string{"bax"}).Add(1)
+	n := event.WithLabelValues("bar", "baz").Add(1)
+	event.WithLabelValues("bax").Add(1)
 	log.Println("Counter", n)
 	db.Gather(event, time.Now())
 	q := url.Values{}

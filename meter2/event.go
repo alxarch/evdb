@@ -7,7 +7,7 @@ import (
 
 type Event interface {
 	WithLabels(labels LabelValues) Metric
-	WithLabelValues(values []string) Metric
+	WithLabelValues(values ...string) Metric
 	Descriptor
 	Collector
 }
@@ -75,9 +75,11 @@ func (e *counterEvent) Collect(ch chan<- Metric) {
 }
 
 func (e *counterEvent) WithLabels(values LabelValues) Metric {
-	return e.WithLabelValues(values.Values(e.desc.labels))
+	lv := values.Values(e.desc.labels)
+	m, _ := e.FindOrCreate(lv)
+	return m
 }
-func (e *counterEvent) WithLabelValues(values []string) Metric {
+func (e *counterEvent) WithLabelValues(values ...string) Metric {
 	m, _ := e.FindOrCreate(values)
 	return m
 }
