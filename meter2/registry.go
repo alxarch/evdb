@@ -41,6 +41,21 @@ func (c *Registry) Get(name string) (e Event) {
 	return
 }
 
+func (c *Registry) Incr(name string, values LabelValues) error {
+	return c.IncrBy(1, name, values)
+}
+
+func (c *Registry) IncrBy(n int64, name string, values LabelValues) error {
+	c.mu.RLock()
+	e := c.events[name]
+	c.mu.RUnlock()
+	if e == nil {
+		return ErrUnregisteredEvent
+	}
+	e.WithLabels(values).Add(1)
+	return nil
+}
+
 func (c *Registry) Register(event Event) error {
 	if event == nil {
 		return ErrNilEvent
