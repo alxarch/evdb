@@ -1,12 +1,15 @@
 package meter2
 
-import "net/url"
+import (
+	"time"
+)
 
 type Desc struct {
 	name        string
 	err         error
 	resolutions []Resolution
 	labels      []string
+	t           MetricType
 }
 
 func (d *Desc) Describe() *Desc {
@@ -19,15 +22,24 @@ type Descriptor interface {
 type Collector interface {
 	Collect(chan<- Metric)
 }
+type Gatherer interface {
+	Gather(col Collector, tm time.Time) error
+}
 
-func NewDesc(name string, labels []string, res ...Resolution) *Desc {
+func NewCounterDesc(name string, labels []string, res ...Resolution) *Desc {
+	return NewDesc(MetricTypeIncrement, name, labels, res...)
+}
+func NewValueDesc(name string, labels []string, res ...Resolution) *Desc {
+	return NewDesc(MetricTypeUpdate, name, labels, res...)
+}
+func NewDesc(t MetricType, name string, labels []string, res ...Resolution) *Desc {
 	d := new(Desc)
 	if labels != nil {
 		labels = distinct(labels...)
 	} else {
 		labels = []string{}
 	}
-	d.name, d.labels = name, labels
+	d.t, d.name, d.labels = t, name, labels
 	d.resolutions = distinctNonZeroResolutions(res...)
 	return d
 }
@@ -37,6 +49,9 @@ func (d *Desc) Error() error {
 }
 func (d *Desc) Name() string {
 	return d.name
+}
+func (d *Desc) Type() MetricType {
+	return d.t
 }
 func (d *Desc) Labels() []string {
 	return d.labels
@@ -60,6 +75,16 @@ func (d *Desc) HasLabel(label string) bool {
 	return indexOf(d.labels, label) != -1
 }
 
+func (d *Desc) LabelValues(values []string) LabelValues {
+	lvs := LabelValues{}
+	for i := 0; i < len(d.labels) && i < len(values); i++ {
+		if v := values[i]; v != "" {
+			lvs[d.labels[i]] = values[i]
+		}
+	}
+	return lvs
+}
+
 func distinctNonZeroResolutions(res ...Resolution) []Resolution {
 	n := 0
 iloop:
@@ -76,16 +101,4 @@ iloop:
 		n++
 	}
 	return res[:n]
-}
-
-func (d Desc) QueryWithLabels(values LabelValues) ScanQuery {
-	return d.QueryWithLabelValues(values.Values(d.labels)...)
-}
-
-func (d Desc) QueryWithLabelValues(values ...string) ScanQuery {
-	s := ScanQuery{Event: d.Name(), Query: url.Values{}}
-	for i := 0; i < len(values) && i < len(d.labels); i++ {
-		s.Query.Set(d.labels[i], values[i])
-	}
-	return s
 }

@@ -26,14 +26,6 @@ func NewRegistry() *Registry {
 
 var defaultRegistry = NewRegistry()
 
-func (c *Registry) Collect(ch chan<- Metric) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, event := range c.events {
-		event.Collect(ch)
-	}
-}
-
 func (c *Registry) Get(name string) (e Event) {
 	c.mu.RLock()
 	e = c.events[name]
@@ -41,19 +33,14 @@ func (c *Registry) Get(name string) (e Event) {
 	return
 }
 
-func (c *Registry) Incr(name string, values LabelValues) error {
-	return c.IncrBy(1, name, values)
-}
-
-func (c *Registry) IncrBy(n int64, name string, values LabelValues) error {
+func (c *Registry) Events() []Event {
 	c.mu.RLock()
-	e := c.events[name]
-	c.mu.RUnlock()
-	if e == nil {
-		return ErrUnregisteredEvent
+	events := make([]Event, 0, len(c.events))
+	for _, event := range c.events {
+		events = append(events, event)
 	}
-	e.WithLabels(values).Add(1)
-	return nil
+	c.mu.RUnlock()
+	return events
 }
 
 func (c *Registry) Register(event Event) error {
@@ -81,4 +68,15 @@ func (c *Registry) MustRegister(event Event) {
 	if err := c.Register(event); err != nil {
 		panic(err)
 	}
+}
+
+type Registries []*Registry
+
+func (r Registries) Get(name string) Event {
+	for i := 0; i < len(r); i++ {
+		if event := r[i].Get(name); event != nil {
+			return event
+		}
+	}
+	return nil
 }

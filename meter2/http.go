@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/araddon/dateparse"
+	"github.com/alxarch/go-meter/meter2/tcodec"
 )
 
 const (
@@ -19,15 +19,13 @@ const (
 	QueryParamMode       = "mode"
 )
 
-func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
+func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err error) {
 	eventNames := q[QueryParamEvent]
-	queries = make([]ScanQuery, len(eventNames))
 	delete(q, QueryParamEvent)
 	if len(eventNames) == 0 {
 		err = fmt.Errorf("Missing query.%s", QueryParamEvent)
 		return
 	}
-	s := ScanQuery{}
 	if _, ok := q[QueryParamResolution]; ok {
 		s.Resolution = q.Get(QueryParamResolution)
 		delete(q, QueryParamResolution)
@@ -36,14 +34,14 @@ func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
 		return
 	}
 	if _, ok := q[QueryParamGroup]; ok {
-		s.Group = q.Get(QueryParamGroup)
+		s.Group = q[QueryParamGroup]
 		delete(q, QueryParamGroup)
 	}
 
 	if start, ok := q[QueryParamStart]; !ok {
 		err = fmt.Errorf("Missing query.%s", QueryParamStart)
 		return
-	} else if s.Start, err = dateparse.ParseAny(start[0]); err != nil {
+	} else if s.Start, err = tdec.UnmarshalTime(start[0]); err != nil {
 		err = fmt.Errorf("Invalid query.%s: %s", QueryParamStart, err)
 		return
 	}
@@ -51,7 +49,7 @@ func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
 	if end, ok := q[QueryParamEnd]; !ok {
 		err = fmt.Errorf("Missing query.%s", QueryParamEnd)
 		return
-	} else if s.End, err = dateparse.ParseAny(end[0]); err != nil {
+	} else if s.End, err = tdec.UnmarshalTime(end[0]); err != nil {
 		err = fmt.Errorf("Invalid query.%s: %s", QueryParamEnd, err)
 		return
 	}
@@ -68,28 +66,32 @@ func ParseQuery(q url.Values) (queries []ScanQuery, err error) {
 		mode = QueryModeExact
 	}
 	delete(q, QueryParamMode)
-	for i, name := range eventNames {
-		s.Event = name
-		s.Mode = mode
-		queries[i] = s
-	}
+	s.Events = eventNames
+	s.Mode = mode
 	return
 
 }
 
-func (db *DB) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+type Controller struct {
+	DB          *DB
+	Registry    *Registry
+	TimeDecoder tcodec.TimeDecoder
+}
+
+func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		code := http.StatusMethodNotAllowed
 		http.Error(w, http.StatusText(code), code)
 		return
 	}
 	q := r.URL.Query()
-	queries, err := ParseQuery(q)
+	qb, err := ParseQuery(q, c.TimeDecoder)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	results, _ := db.Query(queries...)
+	queries := qb.Queries(c.Registry)
+	results, _ := c.DB.Query(queries...)
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.Encode(results)

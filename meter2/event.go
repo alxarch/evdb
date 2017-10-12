@@ -6,8 +6,8 @@ import (
 )
 
 type Event interface {
-	WithLabels(labels LabelValues) Metric
-	WithLabelValues(values ...string) Metric
+	WithLabels(labels LabelValues) Counter
+	WithLabelValues(values ...string) Counter
 	Descriptor
 	Collector
 }
@@ -17,106 +17,90 @@ type Resetable interface {
 }
 
 var (
-	ErrInvalidEventLabel = errors.New("Invalid event label.")
+	ErrInvalidEventLabel = errors.New("Invalid event label")
+	ErrInvalidGroupLabel = errors.New("Invalid group label")
+	ErrInvalidResolution = errors.New("Invalid event resolution")
 )
 
 var nilDesc = &Desc{err: ErrNilDesc}
 
-func NewCounterEvent(desc *Desc) Event {
+func NewEvent(desc *Desc) Event {
 	if desc == nil {
 		desc = nilDesc
 	}
-	return newCounterEvent(desc, MetricTypeIncrement)
-}
-func NewEvent(desc *Desc, t MetricType) Event {
-	if desc == nil {
-		desc = nilDesc
-	}
-	return newCounterEvent(desc, t)
-
+	return newEvent(desc)
 }
 
-type counterEvent struct {
-	values map[uint64][]*Counter
-	t      MetricType
-	mu     sync.RWMutex
-	desc   *Desc
+type event struct {
+	counters map[uint64][]Counter
+	mu       sync.RWMutex
+	desc     *Desc
 }
 
 // Reset clears all stored counters
 // WARNING: If a counter is referenced elsewere it will not be collected by Collect()
-func (c *counterEvent) Reset() {
+func (c *event) Reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.values = make(map[uint64][]*Counter)
+	c.counters = make(map[uint64][]Counter)
 }
 
-var _ Event = &counterEvent{}
+var _ Event = &event{}
 
-func newCounterEvent(d *Desc, t MetricType) *counterEvent {
-	return &counterEvent{
-		values: make(map[uint64][]*Counter),
-		t:      t,
-		desc:   d,
+func newEvent(d *Desc) *event {
+	return &event{
+		counters: make(map[uint64][]Counter),
+		desc:     d,
 	}
 }
 
-func (e *counterEvent) Collect(ch chan<- Metric) {
+func (e *event) Collect(ch chan<- Metric) {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if e.values == nil {
+	if len(e.counters) == 0 {
+		e.mu.RUnlock()
 		return
 	}
-	for _, counters := range e.values {
+	for _, counters := range e.counters {
 		for _, c := range counters {
-			ch <- c
+			ch <- counterMetric{c, e.desc}
 		}
 	}
-}
-
-func (e *counterEvent) WithLabels(values LabelValues) Metric {
-	lv := values.Values(e.desc.labels)
-	m, _ := e.FindOrCreate(lv)
-	return m
-}
-func (e *counterEvent) WithLabelValues(values ...string) Metric {
-	m, _ := e.FindOrCreate(values)
-	return m
-}
-
-func (e *counterEvent) FindOrCreate(values []string) (m Metric, created bool) {
-	h := valuesHash(values)
-	var v *Counter
-	if v = e.Find(h, values); v == nil {
-		e.mu.Lock()
-		if v = e.find(h, values); v == nil {
-			v = newCounter(e.desc, e.t, values...)
-			e.values[h] = append(e.values[h], v)
-			created = true
-		}
-		e.mu.Unlock()
-	}
-	return v, created
-}
-func (e *counterEvent) find(h uint64, values []string) *Counter {
-	collisions := e.values[h]
-	if collisions != nil {
-		for _, c := range collisions {
-			if c.matches(values) {
-				return c
-			}
-		}
-	}
-	return nil
-}
-
-func (e *counterEvent) Find(h uint64, values []string) *Counter {
-	e.mu.RLock()
-	collisions := e.values[h]
 	e.mu.RUnlock()
-	if collisions != nil {
-		for _, c := range collisions {
-			if c.matches(values) {
+}
+
+func (e *event) WithLabels(values LabelValues) Counter {
+	lv := values.Values(e.desc.labels)
+	m := e.findOrCreate(lv)
+	return m
+}
+func (e *event) WithLabelValues(values ...string) Counter {
+	return e.findOrCreate(values)
+}
+
+func (e *event) findOrCreate(values []string) (c Counter) {
+	h := valuesHash(values)
+	e.mu.RLock()
+	counters := e.counters[h]
+	for i := 0; i < len(counters); i++ {
+		if c = counters[i]; matchValues(c.Values(), values) {
+			e.mu.RUnlock()
+			return
+		}
+	}
+	e.mu.RUnlock()
+	e.mu.Lock()
+	if c = e.find(h, values); c == nil {
+		c = newSafeCounter(values...)
+		e.counters[h] = append(e.counters[h], c)
+	}
+	e.mu.Unlock()
+	return
+}
+
+func (e *event) find(h uint64, values []string) Counter {
+	if counters := e.counters[h]; counters != nil {
+		for _, c := range counters {
+			if matchValues(c.Values(), values) {
 				return c
 			}
 		}
@@ -124,7 +108,7 @@ func (e *counterEvent) Find(h uint64, values []string) *Counter {
 	return nil
 }
 
-func (e *counterEvent) Describe() *Desc {
+func (e *event) Describe() *Desc {
 	return e.desc
 }
 
@@ -157,5 +141,4 @@ func distinct(values ...string) []string {
 		}
 	}
 	return values[:j]
-
 }

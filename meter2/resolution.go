@@ -3,7 +3,7 @@ package meter2
 import (
 	"time"
 
-	tc "github.com/alxarch/go-timecodec"
+	"github.com/alxarch/go-meter/meter2/tcodec"
 	"github.com/araddon/dateparse"
 )
 
@@ -14,11 +14,11 @@ const (
 	MinlyDateFormat  string = "2006-01-02-15-04"
 )
 
-var NoResolutionCodec = tc.NewTimeCodec(func(t time.Time) string {
-	return "*"
-}, func(s string) (t time.Time, e error) {
-	return
-})
+// var NoResolutionCodec = tcodec.NewTimeCodec(func(t time.Time) string {
+// 	return "*"
+// }, func(s string) (t time.Time, e error) {
+// 	return
+// })
 
 type Resolution struct {
 	name string
@@ -26,7 +26,7 @@ type Resolution struct {
 	ttl  time.Duration
 	step time.Duration
 
-	codec tc.TimeCodec
+	codec tcodec.TimeCodec
 }
 
 const (
@@ -39,15 +39,15 @@ const (
 )
 
 var (
-	NoResolution     = Resolution{"totals", 0, 0, NoResolutionCodec}
-	ResolutionHourly = Resolution{"hourly", 0, Hourly, tc.LayoutCodec(HourlyDateFormat)}
-	ResolutionDaily  = Resolution{"daily", 0, Daily, tc.LayoutCodec(DailyDateFormat)}
-	ResolutionMinly  = Resolution{"minly", 0, Minly, tc.LayoutCodec(MinlyDateFormat)}
-	ResolutionWeekly = Resolution{"weekly", 0, Weekly, tc.ISOWeekCodec}
+	// NoResolution     = Resolution{"totals", 0, 0, NoResolutionCodec}
+	ResolutionHourly = Resolution{"hourly", 0, Hourly, tcodec.LayoutCodec(HourlyDateFormat)}
+	ResolutionDaily  = Resolution{"daily", 0, Daily, tcodec.LayoutCodec(DailyDateFormat)}
+	ResolutionMinly  = Resolution{"minly", 0, Minly, tcodec.LayoutCodec(MinlyDateFormat)}
+	ResolutionWeekly = Resolution{"weekly", 0, Weekly, tcodec.ISOWeekCodec}
 )
 
 func NewResolution(name string, step, ttl time.Duration) Resolution {
-	return Resolution{name, ttl, step, tc.UnixTimeCodec(step)}
+	return Resolution{name, ttl, step, tcodec.UnixTimeCodec(step)}
 }
 
 var zeroResolution = Resolution{}
@@ -74,17 +74,20 @@ func (r Resolution) WithTTL(ttl time.Duration) Resolution {
 }
 
 func (r Resolution) WithLayout(layout string) Resolution {
-	r.codec = tc.LayoutCodec(layout)
+	r.codec = tcodec.LayoutCodec(layout)
 	return r
 }
 
-func (r Resolution) WithCodec(codec tc.TimeCodec) Resolution {
+func (r Resolution) WithCodec(codec tcodec.TimeCodec) Resolution {
 	r.codec = codec
 	return r
 }
 
 func (r Resolution) Round(t time.Time) time.Time {
-	return tc.Round(t, r.step).In(t.Location())
+	return t.Truncate(r.step)
+}
+func (r Resolution) AddSteps(t time.Time, n int) time.Time {
+	return t.Truncate(r.step).Add(time.Duration(n) * r.Step())
 }
 
 func (r Resolution) TimeSequence(s, e time.Time) []time.Time {
@@ -105,7 +108,7 @@ func (r Resolution) UnmarshalTime(s string) (t time.Time, err error) {
 
 func (r Resolution) MarshalTime(t time.Time) string {
 	if r.codec == nil {
-		return tc.Round(t, r.step).String()
+		return t.Truncate(r.step).String()
 	}
 	return r.codec.MarshalTime(t)
 }
@@ -117,4 +120,20 @@ func (r Resolution) Step() time.Duration {
 func (r Resolution) WithStep(step time.Duration) Resolution {
 	r.step = step
 	return r
+}
+
+func TimeSequence(start time.Time, end time.Time, unit time.Duration) []time.Time {
+	if unit == 0 {
+		return []time.Time{}
+	}
+	start = start.Truncate(unit).In(start.Location())
+	end = end.Truncate(unit).In(end.Location())
+	n := end.Sub(start) / unit
+
+	results := make([]time.Time, 0, n)
+
+	for s := start; end.Sub(s) >= 0; s = s.Add(unit) {
+		results = append(results, s)
+	}
+	return results
 }
