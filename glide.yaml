@@ -1,6 +1,9 @@
 package: github.com/alxarch/go-meter
 import:
-- package: github.com/alxarch/go-timecodec
 - package: github.com/go-redis/redis
-  version: ~6.5.0
+  version: ^6.7.2
+testImport:
 - package: github.com/stretchr/testify
+  version: v1.1.4
+  subpackages:
+  - assert

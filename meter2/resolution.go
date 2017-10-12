@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/alxarch/go-meter/meter2/tcodec"
-	"github.com/araddon/dateparse"
 )
 
 const (
@@ -100,9 +99,6 @@ func (r Resolution) TimeSequence(s, e time.Time) []time.Time {
 // }
 
 func (r Resolution) UnmarshalTime(s string) (t time.Time, err error) {
-	if r.codec == nil {
-		return dateparse.ParseAny(s)
-	}
 	return r.codec.UnmarshalTime(s)
 }
 
