@@ -89,8 +89,7 @@ func AppendField(data []byte, labels, values []string) []byte {
 // 	return db.Registry.Sync(db, tm)
 // }
 
-func (db *DB) Gather(col Collector, tm time.Time) error {
-	pipelineSize := 0
+func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error) {
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
 	ch := make(chan Metric)
@@ -138,11 +137,9 @@ func (db *DB) Gather(col Collector, tm time.Time) error {
 	col.Collect(ch)
 	close(ch)
 	if pipelineSize != 0 {
-		if _, err := pipeline.Exec(); err != nil && err != redis.Nil {
-			return err
-		}
+		_, err = pipeline.Exec()
 	}
-	return nil
+	return
 }
 
 type ScanResult struct {
