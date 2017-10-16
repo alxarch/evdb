@@ -194,10 +194,12 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 		return results, nil
 	}
 	ch := make(chan ScanResult, len(queries))
+	r := make(chan Results)
 	go func() {
 		for r := range ch {
 			results = results.Append(r)
 		}
+		r <- results
 	}()
 	wg := new(sync.WaitGroup)
 	for _, q := range queries {
@@ -214,7 +216,7 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	}
 	wg.Wait()
 	close(ch)
-	return results, nil
+	return <-r, nil
 }
 
 func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {

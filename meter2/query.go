@@ -138,6 +138,7 @@ func (qb QueryBuilder) Queries(r ...*Registry) (queries []Query) {
 	q := Query{
 		Mode:  qb.Mode,
 		Start: qb.Start,
+		Group: qb.Group,
 		End:   qb.End,
 	}
 	regs := Registries(r)
