@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alxarch/go-meter/meter2/tcodec"
+	"github.com/alxarch/go-meter/meter/tcodec"
 )
 
 func Test_LayoutCodec(t *testing.T) {

@@ -1,4 +1,4 @@
-package meter2
+package meter
 
 // Inline and byte-free variant of hash/fnv's fnv64a.
 

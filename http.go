@@ -1,4 +1,4 @@
-package meter2
+package meter
 
 import (
 	"encoding/json"
@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/alxarch/go-meter/meter2/tcodec"
+	"github.com/alxarch/go-meter/tcodec"
 )
 
 const (

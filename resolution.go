@@ -1,9 +1,9 @@
-package meter2
+package meter
 
 import (
 	"time"
 
-	"github.com/alxarch/go-meter/meter2/tcodec"
+	"github.com/alxarch/go-meter/tcodec"
 )
 
 const (

@@ -1,4 +1,4 @@
-package meter2
+package meter
 
 import (
 	"time"
