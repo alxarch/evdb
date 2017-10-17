@@ -435,14 +435,16 @@ func (db *DB) Scan(key, match string, group []string, r ScanResult, results chan
 type pair struct {
 	Label, Value string
 }
+type FrequencyMap map[string]map[string]int64
 
-func (db *DB) ValueScan(event Event, res Resolution, start, end time.Time) map[string]map[string]int64 {
+// ValueScan return a frequency map of event label values
+func (db *DB) ValueScan(event Descriptor, res Resolution, start, end time.Time) FrequencyMap {
 	desc := event.Describe()
 	labels := desc.Labels()
 	ch := make(chan pair, len(labels))
-	result := make(chan map[string]map[string]int64)
+	result := make(chan FrequencyMap)
 	go func() {
-		results := make(map[string]map[string]int64, len(labels))
+		results := FrequencyMap{}
 		for i := 0; i < len(labels); i++ {
 			results[labels[i]] = make(map[string]int64)
 		}

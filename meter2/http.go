@@ -90,8 +90,17 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	queries := qb.Queries(c.Registry)
-	results, _ := c.DB.Query(queries...)
+
+	var results interface{}
+	switch r.URL.Path {
+	case "/values":
+		qb.Events = qb.Events[:1]
+		q := qb.Queries(c.Registry)[0]
+		results = c.DB.ValueScan(q.Event, q.Resolution, q.Start, q.End)
+	default:
+		queries := qb.Queries(c.Registry)
+		results, _ = c.DB.Query(queries...)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
 	enc.Encode(results)
