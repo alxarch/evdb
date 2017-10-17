@@ -93,7 +93,9 @@ func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
 	ch := make(chan Metric)
+	size := make(chan int64)
 	go func() {
+		var psize int64
 		data := []byte{}
 		keysTTL := make(map[string]time.Duration)
 		for m := range ch {
@@ -126,16 +128,18 @@ func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error
 					continue
 				}
 
-				pipelineSize++
-			}
-			for key, ttl := range keysTTL {
-				pipeline.Expire(key, ttl)
-				pipelineSize++
+				psize++
 			}
 		}
+		for key, ttl := range keysTTL {
+			pipeline.Expire(key, ttl)
+			psize++
+		}
+		size <- psize
 	}()
 	col.Collect(ch)
 	close(ch)
+	pipelineSize = <-size
 	if pipelineSize != 0 {
 		_, err = pipeline.Exec()
 	}
@@ -425,5 +429,54 @@ func (db *DB) Scan(key, match string, group []string, r ScanResult, results chan
 		results <- r
 	}
 	return
+
+}
+
+type pair struct {
+	Label, Value string
+}
+
+func (db *DB) ValueScan(event Event, res Resolution, start, end time.Time) map[string]map[string]int64 {
+	desc := event.Describe()
+	labels := desc.Labels()
+	ch := make(chan pair, len(labels))
+	result := make(chan map[string]map[string]int64)
+	go func() {
+		results := make(map[string]map[string]int64, len(labels))
+		for i := 0; i < len(labels); i++ {
+			results[labels[i]] = make(map[string]int64)
+		}
+		for p := range ch {
+			results[p.Label][p.Value] += 1
+		}
+		result <- results
+	}()
+
+	wg := new(sync.WaitGroup)
+	data := []byte{}
+	ts := TimeSequence(start, end, res.Step())
+	for i := range ts {
+		wg.Add(1)
+		data = db.AppendKey(data[:0], res, desc.Name(), ts[i])
+		key := string(data)
+		go func(key string) {
+			field := make([]string, len(labels))
+			scan := db.Redis.HScan(key, 0, "*", -1).Iterator()
+			for scan.Next() {
+				field = parseField(field[:0], scan.Val())
+				for i := 0; i < len(labels); i++ {
+					if j := fieldIndexOf(field, labels[i]); j != -1 {
+						if val := field[j+1]; val != sNilByte {
+							ch <- pair{labels[i], field[j+1]}
+						}
+					}
+				}
+			}
+			wg.Done()
+		}(key)
+	}
+	wg.Wait()
+	close(ch)
+	return <-result
 
 }
