@@ -216,7 +216,10 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	}
 	wg.Wait()
 	close(scan)
-	return <-results, nil
+	if r := <-results; r != nil {
+		return r, nil
+	}
+	return Results{}, nil
 }
 
 func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
