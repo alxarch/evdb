@@ -122,6 +122,26 @@ func (s Results) Find(event string, values LabelValues) *Result {
 	}
 }
 
+func CollectResults(scan <-chan ScanResult) <-chan Results {
+	out := make(chan Results)
+	go func() {
+		var results Results
+		for r := range scan {
+			if len(r.Group) != 0 && len(r.Values) != 0 {
+				for key := range r.Values {
+					if indexOf(r.Group, key) < 0 {
+						delete(r.Values, key)
+					}
+				}
+			}
+			results = results.Append(r)
+		}
+		out <- results
+	}()
+	return out
+
+}
+
 func (results Results) Append(r ScanResult) Results {
 	values := r.Values
 	if r.Group != nil {

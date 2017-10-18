@@ -2,6 +2,16 @@ package meter
 
 type LabelValues map[string]string
 
+func FieldLabels(field []string) LabelValues {
+	n := len(field)
+	n -= n % 2
+	values := LabelValues(make(map[string]string, n/2))
+	for i := 0; i < n; i += 2 {
+		values[field[i]] = field[i+1]
+	}
+	return values
+}
+
 func (values LabelValues) Values(labels []string) []string {
 	if values == nil {
 		return nil

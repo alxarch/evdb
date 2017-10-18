@@ -104,7 +104,7 @@ func (r Resolution) UnmarshalTime(s string) (t time.Time, err error) {
 
 func (r Resolution) MarshalTime(t time.Time) string {
 	if r.codec == nil {
-		return t.Truncate(r.step).String()
+		return t.Truncate(r.step).In(t.Location()).String()
 	}
 	return r.codec.MarshalTime(t)
 }

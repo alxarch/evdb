@@ -1,7 +1,8 @@
 package meter_test
 
 import (
-	"log"
+	"encoding/json"
+	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,7 +10,6 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter"
-	"github.com/alxarch/go-meter/tcodec"
 	"github.com/go-redis/redis"
 )
 
@@ -27,14 +27,15 @@ func init() {
 }
 
 func Test_ReadWrite(t *testing.T) {
+	defer rc.FlushDB()
 	db := meter.NewDB(rc)
-	// db.Registry = reg
 	n := event.WithLabelValues("bar", "baz").Add(1)
 	if n != 1 {
 		t.Errorf("Invalid counter %d", n)
 	}
 	event.WithLabelValues("bax").Add(1)
-	n, err := db.Gather(event, time.Now())
+	now := time.Now().In(time.UTC)
+	n, err := db.Gather(event, now)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
@@ -44,8 +45,8 @@ func Test_ReadWrite(t *testing.T) {
 	q := url.Values{}
 	sq := meter.QueryBuilder{
 		Events:     []string{"test"},
-		Start:      time.Now().Add(-72 * 3 * time.Hour),
-		End:        time.Now(),
+		Start:      now.Add(-72 * 3 * time.Hour),
+		End:        now,
 		Query:      q,
 		Group:      []string{"foo"},
 		Resolution: "daily",
@@ -55,22 +56,36 @@ func Test_ReadWrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if len(results) != 1 {
-		t.Errorf("Invalid results %d", len(results))
+	if len(results) != 2 {
+		t.Errorf("Invalid results len %d", len(results))
+	} else if n := results[0].Data[0].Value; n != 1 {
+		t.Errorf("Invalid group results %d", n)
 	}
 
-	c := meter.Controller{DB: db, Registry: reg, TimeDecoder: tcodec.LayoutCodec("2006")}
+	c := meter.Controller{DB: db, Registry: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()
-	res, err := s.Client().Get(s.URL + "?event=foo&start=2017&end=2017&res=daily")
+	dt := now.Format(meter.DailyDateFormat)
+	res, err := s.Client().Get(s.URL + "?event=test&start=" + dt + "&end=" + dt + "&res=daily&foo=bar")
 	if res.StatusCode != http.StatusOK {
 		t.Errorf("Invalid response status %d: %s", res.StatusCode, res.Status)
 	}
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
+	data, _ := ioutil.ReadAll(res.Body)
+	res.Body.Close()
+	results = meter.Results{}
+	json.Unmarshal(data, &results)
+	r := results.Find("test", meter.LabelValues{"foo": "bar"})
+	if r == nil {
+		t.Errorf("Result not found %s", results)
+	}
 
-	values := db.ValueScan(event, resol, time.Now(), time.Now())
-	log.Println(values)
+	values := db.ValueScan(event, resol, now, now)
+	if values["foo"] == nil {
+		t.Errorf("Missing 'foo'")
+	}
+	// log.Println(values)
 }

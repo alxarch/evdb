@@ -168,6 +168,9 @@ func AppendMatch(data []byte, s string) []byte {
 }
 
 func AppendMatchField(data []byte, labels []string, group []string, q map[string]string) []byte {
+	if len(group) == 0 && len(q) == 0 {
+		return append(data, '*')
+	}
 	for i := 0; i < len(labels); i++ {
 		if i != 0 {
 			data = append(data, LabelSeparator)
@@ -175,7 +178,7 @@ func AppendMatchField(data []byte, labels []string, group []string, q map[string
 		label := labels[i]
 		data = AppendMatch(data, label)
 		data = append(data, LabelSeparator)
-		if indexOf(group, label) < 0 {
+		if indexOf(group, label) >= 0 {
 			data = append(data, '[', '^', NilByte, ']', '*')
 			continue
 		}
@@ -193,34 +196,27 @@ func AppendMatchField(data []byte, labels []string, group []string, q map[string
 }
 
 func (db *DB) Query(queries ...Query) (Results, error) {
-	results := Results{}
 	if len(queries) == 0 {
-		return results, nil
+		return Results{}, nil
 	}
-	ch := make(chan ScanResult, len(queries))
-	r := make(chan Results)
-	go func() {
-		for r := range ch {
-			results = results.Append(r)
-		}
-		r <- results
-	}()
+	scan := make(chan ScanResult, len(queries))
+	results := CollectResults(scan)
 	wg := new(sync.WaitGroup)
 	for _, q := range queries {
 		wg.Add(1)
 		go func(q Query) {
 			switch q.Mode {
 			case QueryModeExact:
-				db.ExactQuery(ch, q)
+				db.ExactQuery(scan, q)
 			case QueryModeScan:
-				db.ScanQuery(ch, q)
+				db.ScanQuery(scan, q)
 			}
 			wg.Done()
 		}(q)
 	}
 	wg.Wait()
-	close(ch)
-	return <-r, nil
+	close(scan)
+	return <-results, nil
 }
 
 func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
@@ -303,7 +299,7 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 			key := string(data)
 			wg.Add(1)
 			go func(r ScanResult, key string) {
-				db.Scan(key, match, q.Group, r, results)
+				db.Scan(key, match, r, results)
 				wg.Done()
 			}(result, key)
 		}
@@ -332,101 +328,68 @@ func parseField(values []string, field string) []string {
 	return values
 }
 
-func fieldIndexOf(field []string, v string) int {
-	n := len(field)
-	n -= n % 2
-	for i := 0; i < n; i += 2 {
-		if field[i] == v {
-			return i
-		}
-	}
-	return -1
-}
+// func fieldIndexOf(field []string, v string) int {
+// 	n := len(field)
+// 	n -= n % 2
+// 	for i := 0; i < n; i += 2 {
+// 		if field[i] == v {
+// 			return i
+// 		}
+// 	}
+// 	return -1
+// }
 
-func parseGroup(pairs []string, group string) LabelValues {
-	pairs = parseField(pairs, group)
-	n := len(pairs)
-	n -= n % 2
-	values := make(map[string]string, n/2)
-	for i := 0; i < n; i += 2 {
-		if v := pairs[i+1]; v != sNilByte {
-			values[pairs[i]] = pairs[i+1]
-		}
-	}
-	return LabelValues(values)
-}
+// func parseGroup(pairs []string, group string) LabelValues {
+// 	pairs = parseField(pairs, group)
+// 	n := len(pairs)
+// 	n -= n % 2
+// 	values := make(map[string]string, n/2)
+// 	for i := 0; i < n; i += 2 {
+// 		if v := pairs[i+1]; v != sNilByte {
+// 			values[pairs[i]] = pairs[i+1]
+// 		}
+// 	}
+// 	return LabelValues(values)
+// }
 
-func scanField(val []byte, field []string, group []string) ([]byte, bool) {
-	for i := 0; i < len(group); i++ {
-		if j := fieldIndexOf(field, group[i]); j < 0 || field[j+1] == sNilByte {
-			return val, false
-		} else {
-			if i != 0 {
-				val = append(val, LabelSeparator)
-			}
-			val = append(val, group[i]...)
-			val = append(val, LabelSeparator)
-			val = append(val, field[j+1]...)
-		}
-	}
-	val = append(val, FieldTerminator)
-	return val, true
-}
+// func scanField(val []byte, field []string, group []string) ([]byte, bool) {
+// 	for i := 0; i < len(group); i++ {
+// 		if j := fieldIndexOf(field, group[i]); j < 0 || field[j+1] == sNilByte {
+// 			return val, false
+// 		} else {
+// 			if i != 0 {
+// 				val = append(val, LabelSeparator)
+// 			}
+// 			val = append(val, group[i]...)
+// 			val = append(val, LabelSeparator)
+// 			val = append(val, field[j+1]...)
+// 		}
+// 	}
+// 	val = append(val, FieldTerminator)
+// 	return val, true
+// }
 
 // const sLabelSeparator = "\x1f"
 
-func (db *DB) Scan(key, match string, group []string, r ScanResult, results chan<- ScanResult) (err error) {
-	var fields []string
+func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
 	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
+	i := 0
+	var pairs []string
+	group := len(r.Group) != 0
 	for scan.Next() {
-		fields = append(fields, scan.Val())
+		if i%2 == 0 {
+			if group {
+				pairs = parseField(pairs[:0], scan.Val())
+				r.Values = FieldLabels(pairs)
+			}
+		} else {
+			r.count, r.err = strconv.ParseInt(scan.Val(), 10, 64)
+			results <- r
+		}
+		i++
 	}
 	if err = scan.Err(); err != nil {
 		return
-	}
-	if len(fields) == 0 {
-		return
-	}
-	var reply []interface{}
-	reply, err = db.Redis.HMGet(key, fields...).Result()
-	if err != nil {
-		if err == redis.Nil {
-			err = nil
-		}
-		return
-	}
-	var grouped map[string]int64
-	var val []byte
-	var field []string
-	if len(group) != 0 {
-		val = []byte{}
-		grouped = make(map[string]int64, len(fields))
-		field = make([]string, len(group)*2)
-	}
-	// Just in case
-	r.count = 0
-	for i, x := range reply {
-		if a, ok := x.(string); ok {
-			if n, e := strconv.ParseInt(a, 10, 64); e == nil {
-				if grouped != nil {
-					field = parseField(field[:0], fields[i])
-					if val, ok = scanField(val[:0], field, group); ok {
-						grouped[string(val)] += n
-					}
-				} else {
-					r.count += n
-				}
-			}
-		}
-	}
-	if grouped == nil {
-		results <- r
-		return
-	}
-	for g, count := range grouped {
-		r.Values = parseGroup(field[:0], g)
-		r.count = count
-		results <- r
 	}
 	return
 
@@ -434,6 +397,7 @@ func (db *DB) Scan(key, match string, group []string, r ScanResult, results chan
 
 type pair struct {
 	Label, Value string
+	Count        int64
 }
 type FrequencyMap map[string]map[string]int64
 
@@ -449,7 +413,7 @@ func (db *DB) ValueScan(event Descriptor, res Resolution, start, end time.Time) 
 			results[labels[i]] = make(map[string]int64)
 		}
 		for p := range ch {
-			results[p.Label][p.Value] += 1
+			results[p.Label][p.Value] += p.Count
 		}
 		result <- results
 	}()
@@ -462,17 +426,21 @@ func (db *DB) ValueScan(event Descriptor, res Resolution, start, end time.Time) 
 		data = db.AppendKey(data[:0], res, desc.Name(), ts[i])
 		key := string(data)
 		go func(key string) {
+			var n int64
 			field := make([]string, len(labels))
 			scan := db.Redis.HScan(key, 0, "*", -1).Iterator()
+			i := 0
 			for scan.Next() {
-				field = parseField(field[:0], scan.Val())
-				for i := 0; i < len(labels); i++ {
-					if j := fieldIndexOf(field, labels[i]); j != -1 {
-						if val := field[j+1]; val != sNilByte {
-							ch <- pair{labels[i], field[j+1]}
+				if i%2 == 0 {
+					field = parseField(field[:0], scan.Val())
+				} else if n, _ = strconv.ParseInt(scan.Val(), 10, 64); n != 0 {
+					for j := 0; j < len(field); j += 2 {
+						if label, val := field[j], field[j+1]; val != sNilByte {
+							ch <- pair{label, val, n}
 						}
 					}
 				}
+				i++
 			}
 			wg.Done()
 		}(key)
