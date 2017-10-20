@@ -9,7 +9,7 @@ import (
 	"github.com/go-redis/redis"
 )
 
-const DefaultKeyPrefix = "meter:"
+const DefaultKeyPrefix = "meter"
 
 type DB struct {
 	Redis redis.UniversalClient
