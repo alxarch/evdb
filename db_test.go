@@ -1,4 +1,4 @@
-package redismeter_test
+package meter_test
 
 import (
 	"encoding/json"
@@ -10,7 +10,6 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter"
-	"github.com/alxarch/go-meter/redismeter"
 	"github.com/go-redis/redis"
 )
 
@@ -29,7 +28,7 @@ func init() {
 
 func Test_ReadWrite(t *testing.T) {
 	defer rc.FlushDB()
-	db := redismeter.NewDB(rc)
+	db := meter.NewDB(rc)
 	n := event.WithLabelValues("bar", "baz").Add(1)
 	if n != 1 {
 		t.Errorf("Invalid counter %d", n)
@@ -63,7 +62,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Invalid group results %d", n)
 	}
 
-	c := meter.Controller{DB: db, Registry: reg, TimeDecoder: resol}
+	c := meter.Controller{Store: db, Registry: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()

@@ -1,11 +1,10 @@
-package redismeter
+package meter
 
 import (
 	"strconv"
 	"sync"
 	"time"
 
-	meter "github.com/alxarch/go-meter"
 	"github.com/go-redis/redis"
 )
 
@@ -28,11 +27,11 @@ func NewDB(r redis.UniversalClient) *DB {
 const LabelSeparator = '\x1f'
 const FieldTerminator = '\x1e'
 
-func (db DB) Key(r meter.Resolution, event string, t time.Time) (k string) {
+func (db DB) Key(r Resolution, event string, t time.Time) (k string) {
 	return string(db.AppendKey(nil, r, event, t))
 }
 
-func (db DB) AppendKey(data []byte, r meter.Resolution, event string, t time.Time) []byte {
+func (db DB) AppendKey(data []byte, r Resolution, event string, t time.Time) []byte {
 	if db.KeyPrefix != "" {
 		data = append(data, db.KeyPrefix...)
 		data = append(data, LabelSeparator)
@@ -76,10 +75,10 @@ func AppendField(data []byte, labels, values []string) []byte {
 // 	return db.Registry.Sync(db, tm)
 // }
 
-func (db *DB) Gather(col meter.Collector, tm time.Time) (pipelineSize int64, err error) {
+func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error) {
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
-	ch := make(chan meter.Metric)
+	ch := make(chan Metric)
 	size := make(chan int64)
 	go func() {
 		var psize int64
@@ -105,11 +104,11 @@ func (db *DB) Gather(col meter.Collector, tm time.Time) (pipelineSize int64, err
 				key := string(data)
 				keysTTL[key] = res.TTL()
 				switch t {
-				case meter.MetricTypeIncrement:
+				case MetricTypeIncrement:
 					pipeline.HIncrBy(key, field, n)
-				case meter.MetricTypeUpdateOnce:
+				case MetricTypeUpdateOnce:
 					pipeline.HSetNX(key, field, n)
-				case meter.MetricTypeUpdate:
+				case MetricTypeUpdate:
 					pipeline.HSet(key, field, n)
 				default:
 					continue
@@ -137,7 +136,7 @@ type ScanResult struct {
 	Name   string
 	Time   time.Time
 	Group  []string
-	Values meter.LabelValues
+	Values LabelValues
 	err    error
 	count  int64
 }
@@ -182,20 +181,20 @@ func AppendMatchField(data []byte, labels []string, group []string, q map[string
 	return data
 }
 
-func (db *DB) Query(queries ...meter.Query) (meter.Results, error) {
+func (db *DB) Query(queries ...Query) (Results, error) {
 	if len(queries) == 0 {
-		return meter.Results{}, nil
+		return Results{}, nil
 	}
 	scan := make(chan ScanResult, len(queries))
 	results := CollectResults(scan)
 	wg := new(sync.WaitGroup)
 	for _, q := range queries {
 		wg.Add(1)
-		go func(q meter.Query) {
+		go func(q Query) {
 			switch q.Mode {
-			case meter.QueryModeExact:
+			case QueryModeExact:
 				db.ExactQuery(scan, q)
-			case meter.QueryModeScan:
+			case QueryModeScan:
 				db.ScanQuery(scan, q)
 			}
 			wg.Done()
@@ -206,10 +205,10 @@ func (db *DB) Query(queries ...meter.Query) (meter.Results, error) {
 	if r := <-results; r != nil {
 		return r, nil
 	}
-	return meter.Results{}, nil
+	return Results{}, nil
 }
 
-func (db *DB) ExactQuery(results chan<- ScanResult, q meter.Query) error {
+func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
 	var replies []*redis.StringCmd
 	if err := q.Error(); err != nil {
 		r := ScanResult{err: err}
@@ -221,11 +220,11 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q meter.Query) error {
 	ts := res.TimeSequence(q.Start, q.End)
 	desc := q.Event.Describe()
 	labels := desc.Labels()
-	qValues := meter.QueryPermutations(q.Values)
+	qValues := QueryPermutations(q.Values)
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
 	for _, values := range qValues {
-		data = AppendField(data[:0], labels, meter.LabelValues(values).Values(labels))
+		data = AppendField(data[:0], labels, LabelValues(values).Values(labels))
 		field := string(data)
 		for _, tm := range ts {
 			data = db.AppendKey(data[:0], res, desc.Name(), tm)
@@ -256,7 +255,7 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q meter.Query) error {
 	return nil
 }
 
-func (db *DB) ScanQuery(results chan<- ScanResult, q meter.Query) (err error) {
+func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 	if e := q.Error(); e != nil {
 		results <- ScanResult{err: e}
 		return
@@ -272,7 +271,7 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q meter.Query) (err error) {
 	if len(ts) == 0 {
 		return
 	}
-	qValues := meter.QueryPermutations(q.Values)
+	qValues := QueryPermutations(q.Values)
 	if len(qValues) == 0 {
 		qValues = append(qValues, map[string]string{})
 	}
@@ -318,49 +317,6 @@ func parseField(values []string, field string) []string {
 	return values
 }
 
-// func fieldIndexOf(field []string, v string) int {
-// 	n := len(field)
-// 	n -= n % 2
-// 	for i := 0; i < n; i += 2 {
-// 		if field[i] == v {
-// 			return i
-// 		}
-// 	}
-// 	return -1
-// }
-
-// func parseGroup(pairs []string, group string) LabelValues {
-// 	pairs = parseField(pairs, group)
-// 	n := len(pairs)
-// 	n -= n % 2
-// 	values := make(map[string]string, n/2)
-// 	for i := 0; i < n; i += 2 {
-// 		if v := pairs[i+1]; v != sNilByte {
-// 			values[pairs[i]] = pairs[i+1]
-// 		}
-// 	}
-// 	return LabelValues(values)
-// }
-
-// func scanField(val []byte, field []string, group []string) ([]byte, bool) {
-// 	for i := 0; i < len(group); i++ {
-// 		if j := fieldIndexOf(field, group[i]); j < 0 || field[j+1] == sNilByte {
-// 			return val, false
-// 		} else {
-// 			if i != 0 {
-// 				val = append(val, LabelSeparator)
-// 			}
-// 			val = append(val, group[i]...)
-// 			val = append(val, LabelSeparator)
-// 			val = append(val, field[j+1]...)
-// 		}
-// 	}
-// 	val = append(val, FieldTerminator)
-// 	return val, true
-// }
-
-// const sLabelSeparator = "\x1f"
-
 func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
 	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
 	i := 0
@@ -370,7 +326,7 @@ func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (
 		if i%2 == 0 {
 			if group {
 				pairs = parseField(pairs[:0], scan.Val())
-				r.Values = meter.FieldLabels(pairs)
+				r.Values = FieldLabels(pairs)
 			}
 		} else {
 			r.count, r.err = strconv.ParseInt(scan.Val(), 10, 64)
@@ -391,13 +347,13 @@ type pair struct {
 }
 
 // ValueScan return a frequency map of event label values
-func (db *DB) Values(event meter.Descriptor, res meter.Resolution, start, end time.Time) meter.FrequencyMap {
+func (db *DB) Values(event Descriptor, res Resolution, start, end time.Time) FrequencyMap {
 	desc := event.Describe()
 	labels := desc.Labels()
 	ch := make(chan pair, len(labels))
-	result := make(chan meter.FrequencyMap)
+	result := make(chan FrequencyMap)
 	go func() {
-		results := meter.FrequencyMap{}
+		results := FrequencyMap{}
 		for i := 0; i < len(labels); i++ {
 			results[labels[i]] = make(map[string]int64)
 		}
@@ -409,7 +365,7 @@ func (db *DB) Values(event meter.Descriptor, res meter.Resolution, start, end ti
 
 	wg := new(sync.WaitGroup)
 	data := []byte{}
-	ts := meter.TimeSequence(start, end, res.Step())
+	ts := TimeSequence(start, end, res.Step())
 	for i := range ts {
 		wg.Add(1)
 		data = db.AppendKey(data[:0], res, desc.Name(), ts[i])
@@ -440,10 +396,10 @@ func (db *DB) Values(event meter.Descriptor, res meter.Resolution, start, end ti
 
 }
 
-func CollectResults(scan <-chan ScanResult) <-chan meter.Results {
-	out := make(chan meter.Results)
+func CollectResults(scan <-chan ScanResult) <-chan Results {
+	out := make(chan Results)
 	go func() {
-		var results meter.Results
+		var results Results
 		for r := range scan {
 			if len(r.Group) != 0 && len(r.Values) != 0 {
 				for key := range r.Values {
@@ -460,30 +416,21 @@ func CollectResults(scan <-chan ScanResult) <-chan meter.Results {
 	return out
 
 }
-func indexOf(values []string, seek string) int {
-	for i := 0; i < len(values); i++ {
-		if values[i] == seek {
-			return i
-		}
-	}
-	return -1
 
-}
-
-func (r ScanResult) AppendTo(results meter.Results) meter.Results {
+func (r ScanResult) AppendTo(results Results) Results {
 	values := r.Values
 	if r.Group != nil {
-		values = meter.LabelValues{}
+		values = LabelValues{}
 		for _, g := range r.Group {
 			values[g] = r.Values[g]
 		}
 	}
-	p := meter.DataPoint{Timestamp: r.Time.Unix(), Value: r.count}
+	p := DataPoint{Timestamp: r.Time.Unix(), Value: r.count}
 	if i := results.IndexOf(r.Name, values); i < 0 {
-		return append(results, meter.Result{
+		return append(results, Result{
 			Event:  r.Name,
 			Labels: values,
-			Data:   meter.DataPoints{p},
+			Data:   DataPoints{p},
 		})
 	} else if j := results[i].Data.IndexOf(r.Time); j < 0 {
 		results[i].Data = append(results[i].Data, p)
