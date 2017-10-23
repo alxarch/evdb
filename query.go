@@ -199,3 +199,20 @@ eloop:
 	return
 
 }
+
+type Queryer interface {
+	Query(queries ...Query) (Results, error)
+}
+type FrequencyMap map[string]map[string]int64
+type Valuer interface {
+	Values(event Descriptor, res Resolution, start, end time.Time) FrequencyMap
+}
+type ReadOnlyStore interface {
+	Queryer
+	Valuer
+}
+
+type Store interface {
+	Gatherer
+	ReadOnlyStore
+}

@@ -296,7 +296,7 @@ func (s *Samplers) WithLabelValues(values ...string) (ss *SafeSampler) {
 	data := make([]byte, 0, size)
 	for i, v := range values {
 		if i != 0 {
-			data = append(data, LabelSeparator)
+			data = append(data, '\x1f')
 		}
 		data = append(data, v...)
 	}

@@ -14,7 +14,7 @@ func FieldLabels(field []string) LabelValues {
 
 func (values LabelValues) Values(labels []string) []string {
 	if values == nil {
-		return nil
+		return []string{}
 	}
 	out := make([]string, len(labels))
 	for i, label := range labels {

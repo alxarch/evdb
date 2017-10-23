@@ -1,6 +1,7 @@
 package meter
 
 import (
+	"net/url"
 	"time"
 )
 
@@ -86,6 +87,9 @@ func (d *Desc) LabelValues(values []string) LabelValues {
 }
 
 func distinctNonZeroResolutions(res ...Resolution) []Resolution {
+	if res == nil {
+		return []Resolution{}
+	}
 	n := 0
 iloop:
 	for i := 0; i < len(res); i++ {
@@ -101,4 +105,17 @@ iloop:
 		n++
 	}
 	return res[:n]
+}
+
+func (e *Desc) MatchingQueries(q url.Values) url.Values {
+	if e == nil || q == nil {
+		return nil
+	}
+	m := make(map[string][]string, len(q))
+	for key, values := range q {
+		if e.HasLabel(key) {
+			m[key] = values
+		}
+	}
+	return m
 }

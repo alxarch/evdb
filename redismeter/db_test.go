@@ -1,4 +1,4 @@
-package meter_test
+package redismeter_test
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter"
+	"github.com/alxarch/go-meter/redismeter"
 	"github.com/go-redis/redis"
 )
 
@@ -28,7 +29,7 @@ func init() {
 
 func Test_ReadWrite(t *testing.T) {
 	defer rc.FlushDB()
-	db := meter.NewDB(rc)
+	db := redismeter.NewDB(rc)
 	n := event.WithLabelValues("bar", "baz").Add(1)
 	if n != 1 {
 		t.Errorf("Invalid counter %d", n)
@@ -83,7 +84,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Result not found %s", results)
 	}
 
-	values := db.ValueScan(event, resol, now, now)
+	values := db.Values(event, resol, now, now)
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}

@@ -73,7 +73,7 @@ func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err erro
 }
 
 type Controller struct {
-	DB          *DB
+	Store       ReadOnlyStore
 	Registry    *Registry
 	TimeDecoder tcodec.TimeDecoder
 }
@@ -96,10 +96,10 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/values":
 		qb.Events = qb.Events[:1]
 		q := qb.Queries(c.Registry)[0]
-		results = c.DB.ValueScan(q.Event, q.Resolution, q.Start, q.End)
+		results = c.Store.Values(q.Event, q.Resolution, q.Start, q.End)
 	default:
 		queries := qb.Queries(c.Registry)
-		results, _ = c.DB.Query(queries...)
+		results, _ = c.Store.Query(queries...)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)

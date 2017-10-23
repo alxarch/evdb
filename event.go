@@ -133,6 +133,9 @@ func indexOf(values []string, s string) int {
 }
 
 func distinct(values ...string) []string {
+	if values == nil {
+		return []string{}
+	}
 	j := 0
 	for _, value := range values {
 		if indexOf(values[:j], value) == -1 {
