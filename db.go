@@ -77,7 +77,8 @@ func AppendField(data []byte, labels, values []string) []byte {
 // 	return db.Registry.Sync(db, tm)
 // }
 
-func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error) {
+func (db *DB) Gather(col Collector, tm time.Time) (err error) {
+	var pipelineSize int64
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
 	ch := make(chan Metric)

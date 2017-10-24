@@ -22,6 +22,7 @@ type Descriptor interface {
 }
 type Collector interface {
 	Collect(chan<- Metric)
+	Len() int
 }
 type Gatherer interface {
 	Gather(col Collector, tm time.Time) error

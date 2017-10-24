@@ -37,6 +37,15 @@ type event struct {
 	desc     *Desc
 }
 
+func (e *event) Len() (n int) {
+	e.mu.RLock()
+	for _, counters := range e.counters {
+		n += len(counters)
+	}
+	e.mu.RUnlock()
+	return
+}
+
 // Reset clears all stored counters
 // WARNING: If a counter is referenced elsewere it will not be collected by Collect()
 func (c *event) Reset() {

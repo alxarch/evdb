@@ -35,12 +35,12 @@ func Test_ReadWrite(t *testing.T) {
 	}
 	event.WithLabelValues("bax").Add(1)
 	now := time.Now().In(time.UTC)
-	n, err := db.Gather(event, now)
+	err := db.Gather(event, now)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if n != 3 {
-		t.Errorf("Wrong pipeline size %d", n)
+	if n := event.Len(); n != 2 {
+		t.Errorf("Wrong collector size %d", n)
 	}
 	q := url.Values{}
 	sq := meter.QueryBuilder{
