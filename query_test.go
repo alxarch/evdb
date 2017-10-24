@@ -30,7 +30,7 @@ func Test_Query(t *testing.T) {
 	desc := meter.NewCounterDesc("test", []string{"foo", "bar"}, meter.ResolutionDaily)
 	e := meter.NewEvent(desc)
 	r.Register(e)
-	qs := b.Queries(r)
+	qs := b.Queries(meter.ModeScan, r)
 	assert.Equal(t, []meter.Query{
 		meter.Query{
 			Event:      e,

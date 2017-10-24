@@ -51,7 +51,7 @@ func Test_ReadWrite(t *testing.T) {
 		Group:      []string{"foo"},
 		Resolution: "daily",
 	}
-	qs := sq.Queries(reg)
+	qs := sq.Queries(meter.ModeScan, reg)
 	results, err := db.Query(meter.ModeScan, qs...)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)

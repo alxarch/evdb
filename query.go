@@ -27,7 +27,6 @@ func (m QueryMode) String() string {
 
 type QueryBuilder struct {
 	Events     []string
-	Mode       QueryMode
 	Start, End time.Time
 	Group      []string
 	Query      url.Values
@@ -67,11 +66,6 @@ func (q QueryBuilder) Where(label string, value ...string) QueryBuilder {
 }
 func (q QueryBuilder) GroupBy(label ...string) QueryBuilder {
 	q.Group = label
-	q.Mode = ModeScan
-	return q
-}
-func (q QueryBuilder) Exact() QueryBuilder {
-	q.Mode = ModeExact
 	return q
 }
 func (q QueryBuilder) From(event ...string) QueryBuilder {
@@ -136,7 +130,7 @@ func QueryPermutations(input url.Values) []map[string]string {
 	return results
 }
 
-func (qb QueryBuilder) Queries(r ...*Registry) (queries []Query) {
+func (qb QueryBuilder) Queries(mode QueryMode, r ...*Registry) (queries []Query) {
 	q := Query{
 		Start: qb.Start,
 		End:   qb.End,
@@ -173,7 +167,7 @@ eloop:
 			continue
 		}
 		q.Resolution = res
-		if qb.Mode == ModeScan && len(qb.Group) != 0 {
+		if mode == ModeScan && len(qb.Group) != 0 {
 			for _, g := range qb.Group {
 				if !desc.HasLabel(g) {
 					q.err = ErrInvalidGroupLabel
