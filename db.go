@@ -49,6 +49,14 @@ func (db DB) AppendKey(data []byte, r Resolution, event string, t time.Time) []b
 const NilByte byte = 0
 const sNilByte = "\x00"
 
+func Field(labels, values []string) (f string) {
+	b := getBuffer()
+	b = AppendField(b[:0], labels, values)
+	f = string(b)
+	putBuffer(b)
+	return
+}
+
 func AppendField(data []byte, labels, values []string) []byte {
 	n := len(values)
 	for i := 0; i < len(labels); i++ {
