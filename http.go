@@ -63,7 +63,7 @@ func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err erro
 	}
 	var mode QueryMode
 	if q.Get(QueryParamMode) == "exact" {
-		mode = QueryModeExact
+		mode = ModeExact
 	}
 	delete(q, QueryParamMode)
 	s.Events = eventNames
@@ -73,15 +73,13 @@ func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err erro
 }
 
 type Controller struct {
-	Store       ReadOnlyStore
+	Q           Queryer
 	Registry    *Registry
 	TimeDecoder tcodec.TimeDecoder
 }
 
 func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		code := http.StatusMethodNotAllowed
-		http.Error(w, http.StatusText(code), code)
 		return
 	}
 	q := r.URL.Query()
@@ -91,18 +89,16 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var results interface{}
-	switch r.URL.Path {
-	case "/values":
-		qb.Events = qb.Events[:1]
-		q := qb.Queries(c.Registry)[0]
-		results = c.Store.Values(q.Event, q.Resolution, q.Start, q.End)
-	default:
-		queries := qb.Queries(c.Registry)
-		results, _ = c.Store.Query(queries...)
+	var output interface{}
+	queries := qb.Queries(c.Registry)
+	results, _ := c.Q.Query(qb.Mode, queries...)
+	if qb.Mode == ModeValues {
+		output = results.FrequencyMap()
+	} else {
+		output = results
 	}
 	w.Header().Set("Content-Type", "application/json")
 	enc := json.NewEncoder(w)
-	enc.Encode(results)
+	enc.Encode(output)
 	// http.NotFound(w, r)
 }

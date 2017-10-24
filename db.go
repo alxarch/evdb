@@ -11,15 +11,13 @@ import (
 const DefaultKeyPrefix = "meter"
 
 type DB struct {
-	Redis redis.UniversalClient
-	// *Registry
+	Redis     redis.UniversalClient
 	KeyPrefix string
 }
 
 func NewDB(r redis.UniversalClient) *DB {
 	db := new(DB)
 	db.Redis = r
-	// db.Registry = defaultRegistry
 	db.KeyPrefix = DefaultKeyPrefix
 	return db
 }
@@ -28,7 +26,11 @@ const LabelSeparator = '\x1f'
 const FieldTerminator = '\x1e'
 
 func (db DB) Key(r Resolution, event string, t time.Time) (k string) {
-	return string(db.AppendKey(nil, r, event, t))
+	b := getBuffer()
+	b = db.AppendKey(b[:0], r, event, t)
+	k = string(b)
+	putBuffer(b)
+	return
 }
 
 func (db DB) AppendKey(data []byte, r Resolution, event string, t time.Time) []byte {
@@ -132,13 +134,27 @@ func (db *DB) Gather(col Collector, tm time.Time) (pipelineSize int64, err error
 	return
 }
 
+type ScanQuery struct {
+	Mode       QueryMode
+	Event      *Desc
+	Start, End time.Time
+	Group      []string
+	Resolution Resolution
+	Values     []LabelValues
+	err        error
+	count      int64
+}
 type ScanResult struct {
-	Name   string
-	Time   time.Time
+	Event  string
 	Group  []string
+	Time   time.Time
 	Values LabelValues
 	err    error
 	count  int64
+}
+
+func (q ScanQuery) Error() error {
+	return q.err
 }
 
 func AppendMatch(data []byte, s string) []byte {
@@ -153,6 +169,13 @@ func AppendMatch(data []byte, s string) []byte {
 	return data
 }
 
+func MatchField(labels []string, group []string, q map[string]string) (f string) {
+	b := getBuffer()
+	b = AppendMatchField(b[:0], labels, group, q)
+	f = string(b)
+	putBuffer(b)
+	return
+}
 func AppendMatchField(data []byte, labels []string, group []string, q map[string]string) []byte {
 	if len(group) == 0 && len(q) == 0 {
 		return append(data, '*')
@@ -181,7 +204,7 @@ func AppendMatchField(data []byte, labels []string, group []string, q map[string
 	return data
 }
 
-func (db *DB) Query(queries ...Query) (Results, error) {
+func (db *DB) Query(mode QueryMode, queries ...Query) (Results, error) {
 	if len(queries) == 0 {
 		return Results{}, nil
 	}
@@ -191,11 +214,13 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	for _, q := range queries {
 		wg.Add(1)
 		go func(q Query) {
-			switch q.Mode {
-			case QueryModeExact:
+			switch mode {
+			case ModeExact:
 				db.ExactQuery(scan, q)
-			case QueryModeScan:
+			case ModeScan:
 				db.ScanQuery(scan, q)
+			case ModeValues:
+				db.ValueScan(scan, q)
 			}
 			wg.Done()
 		}(q)
@@ -220,10 +245,9 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
 	ts := res.TimeSequence(q.Start, q.End)
 	desc := q.Event.Describe()
 	labels := desc.Labels()
-	qValues := QueryPermutations(q.Values)
 	pipeline := db.Redis.Pipeline()
 	defer pipeline.Close()
-	for _, values := range qValues {
+	for _, values := range q.Values {
 		data = AppendField(data[:0], labels, LabelValues(values).Values(labels))
 		field := string(data)
 		for _, tm := range ts {
@@ -239,12 +263,12 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
 		return err
 	}
 
-	for i, values := range qValues {
+	for i, values := range q.Values {
 		for j, tm := range ts {
 			reply := replies[i*len(ts)+j]
 			n, err := reply.Int64()
 			results <- ScanResult{
-				Name:   desc.Name(),
+				Event:  desc.Name(),
 				Time:   tm,
 				Values: values,
 				count:  n,
@@ -263,7 +287,7 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 	desc := q.Event.Describe()
 
 	result := ScanResult{
-		Name:  desc.Name(),
+		Event: desc.Name(),
 		Group: q.Group,
 	}
 	res := q.Resolution
@@ -271,12 +295,8 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 	if len(ts) == 0 {
 		return
 	}
-	qValues := QueryPermutations(q.Values)
-	if len(qValues) == 0 {
-		qValues = append(qValues, map[string]string{})
-	}
 	wg := &sync.WaitGroup{}
-	for _, values := range qValues {
+	for _, values := range q.Values {
 		result.Values = values
 		// data = AppendField(data, desc.Labels(), m.Values())
 		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
@@ -347,53 +367,50 @@ type pair struct {
 }
 
 // ValueScan return a frequency map of event label values
-func (db *DB) Values(event Descriptor, res Resolution, start, end time.Time) FrequencyMap {
-	desc := event.Describe()
+func (db *DB) ValueScan(results chan<- ScanResult, q Query) error {
+	desc := q.Event.Describe()
 	labels := desc.Labels()
-	ch := make(chan pair, len(labels))
-	result := make(chan FrequencyMap)
-	go func() {
-		results := FrequencyMap{}
-		for i := 0; i < len(labels); i++ {
-			results[labels[i]] = make(map[string]int64)
-		}
-		for p := range ch {
-			results[p.Label][p.Value] += p.Count
-		}
-		result <- results
-	}()
-
+	r := ScanResult{
+		Event: desc.Name(),
+	}
 	wg := new(sync.WaitGroup)
 	data := []byte{}
-	ts := TimeSequence(start, end, res.Step())
-	for i := range ts {
+	ts := q.Resolution.TimeSequence(q.Start, q.End)
+
+	for _, t := range ts {
 		wg.Add(1)
-		data = db.AppendKey(data[:0], res, desc.Name(), ts[i])
+		r.Time = t
+		data = db.AppendKey(data[:0], q.Resolution, desc.Name(), t)
 		key := string(data)
 		go func(key string) {
 			var n int64
 			field := make([]string, len(labels))
-			scan := db.Redis.HScan(key, 0, "*", -1).Iterator()
-			i := 0
-			for scan.Next() {
-				if i%2 == 0 {
-					field = parseField(field[:0], scan.Val())
-				} else if n, _ = strconv.ParseInt(scan.Val(), 10, 64); n != 0 {
+			reply, err := db.Redis.HGetAll(key).Result()
+			if err == redis.Nil {
+				return
+			}
+			if err != nil {
+				r.err = err
+				results <- r
+				return
+			}
+			for key, value := range reply {
+				field = parseField(field[:0], key)
+				if n, _ = strconv.ParseInt(value, 10, 64); n != 0 {
 					for j := 0; j < len(field); j += 2 {
 						if label, val := field[j], field[j+1]; val != sNilByte {
-							ch <- pair{label, val, n}
+							r.Values = LabelValues{label: val}
+							r.count = n
+							results <- r
 						}
 					}
 				}
-				i++
 			}
 			wg.Done()
 		}(key)
 	}
 	wg.Wait()
-	close(ch)
-	return <-result
-
+	return nil
 }
 
 func CollectResults(scan <-chan ScanResult) <-chan Results {
@@ -426,9 +443,9 @@ func (r ScanResult) AppendTo(results Results) Results {
 		}
 	}
 	p := DataPoint{Timestamp: r.Time.Unix(), Value: r.count}
-	if i := results.IndexOf(r.Name, values); i < 0 {
+	if i := results.IndexOf(r.Event, values); i < 0 {
 		return append(results, Result{
-			Event:  r.Name,
+			Event:  r.Event,
 			Labels: values,
 			Data:   DataPoints{p},
 		})
@@ -438,4 +455,17 @@ func (r ScanResult) AppendTo(results Results) Results {
 		results[i].Data[j].Value += r.count
 	}
 	return results
+}
+
+var bufferPool = &sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 256)
+	},
+}
+
+func getBuffer() []byte {
+	return bufferPool.Get().([]byte)
+}
+func putBuffer(b []byte) {
+	bufferPool.Put(b)
 }

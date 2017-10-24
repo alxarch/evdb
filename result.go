@@ -8,8 +8,7 @@ import (
 )
 
 type Result struct {
-	Event string
-	// Group  LabelValues
+	Event  string
 	Labels LabelValues
 	Data   DataPoints
 }
@@ -120,4 +119,23 @@ func (s Results) Find(event string, values LabelValues) *Result {
 	} else {
 		return &s[i]
 	}
+}
+
+type FrequencyMap map[string]map[string]int64
+
+func (s Results) FrequencyMap() FrequencyMap {
+	m := make(map[string]map[string]int64)
+	for i := 0; i < len(s); i++ {
+		r := s[i]
+		for j := 0; j < len(r.Data); j++ {
+			p := r.Data[j]
+			for label, value := range r.Labels {
+				if m[label] == nil {
+					m[label] = make(map[string]int64)
+				}
+				m[label][value] += p.Value
+			}
+		}
+	}
+	return m
 }

@@ -78,6 +78,10 @@ func Test_ResultsFind(t *testing.T) {
 			},
 		},
 	}
+	fmap := results.FrequencyMap()
+	assert.Equal(t, fmap, meter.FrequencyMap{
+		"foo": map[string]int64{"bar": 42},
+	})
 	r := results.Find("foo", lvs)
 	if r == nil {
 		t.Errorf("Result not found")

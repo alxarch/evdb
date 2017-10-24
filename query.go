@@ -8,16 +8,19 @@ import (
 type QueryMode uint8
 
 const (
-	QueryModeScan QueryMode = iota
-	QueryModeExact
+	ModeScan QueryMode = iota
+	ModeExact
+	ModeValues
 )
 
 func (m QueryMode) String() string {
 	switch m {
-	case QueryModeExact:
+	case ModeExact:
 		return "exact"
-	case QueryModeScan:
+	case ModeScan:
 		return "scan"
+	case ModeValues:
+		return "values"
 	}
 	return "querymodeinvalid"
 }
@@ -33,10 +36,9 @@ type QueryBuilder struct {
 
 type Query struct {
 	Event      Descriptor
-	Mode       QueryMode
 	Start, End time.Time
 	Group      []string
-	Values     url.Values
+	Values     []map[string]string
 	Resolution Resolution
 	err        error
 }
@@ -65,11 +67,11 @@ func (q QueryBuilder) Where(label string, value ...string) QueryBuilder {
 }
 func (q QueryBuilder) GroupBy(label ...string) QueryBuilder {
 	q.Group = label
-	q.Mode = QueryModeScan
+	q.Mode = ModeScan
 	return q
 }
 func (q QueryBuilder) Exact() QueryBuilder {
-	q.Mode = QueryModeExact
+	q.Mode = ModeExact
 	return q
 }
 func (q QueryBuilder) From(event ...string) QueryBuilder {
@@ -136,9 +138,7 @@ func QueryPermutations(input url.Values) []map[string]string {
 
 func (qb QueryBuilder) Queries(r ...*Registry) (queries []Query) {
 	q := Query{
-		Mode:  qb.Mode,
 		Start: qb.Start,
-		Group: qb.Group,
 		End:   qb.End,
 	}
 	regs := Registries(r)
@@ -148,14 +148,14 @@ func (qb QueryBuilder) Queries(r ...*Registry) (queries []Query) {
 eloop:
 	for i := 0; i < len(qb.Events); i++ {
 		eventName := qb.Events[i]
-		q.Event = regs.Get(eventName)
-		if q.Event == nil {
+		event := regs.Get(eventName)
+		if event == nil {
 			q.err = ErrUnregisteredEvent
 			queries = append(queries, q)
 			continue
 		}
 
-		desc := q.Event.Describe()
+		desc := event.Describe()
 		if desc == nil {
 			q.err = ErrNilDesc
 			queries = append(queries, q)
@@ -165,6 +165,7 @@ eloop:
 			queries = append(queries, q)
 			continue
 		}
+		q.Event = event
 		res, hasResolution := desc.Resolution(qb.Resolution)
 		if !hasResolution {
 			q.err = ErrInvalidResolution
@@ -172,27 +173,27 @@ eloop:
 			continue
 		}
 		q.Resolution = res
-		if len(qb.Group) != 0 {
+		if qb.Mode == ModeScan && len(qb.Group) != 0 {
 			for _, g := range qb.Group {
-				if !desc.HasLabel(g) {
-					q.err = ErrInvalidEventLabel
-					queries = append(queries, q)
-					continue eloop
-				}
-			}
-		}
-		qvs := desc.MatchingQueries(qb.Query)
-		if len(qb.Group) != 0 {
-			for _, g := range q.Group {
 				if !desc.HasLabel(g) {
 					q.err = ErrInvalidGroupLabel
 					queries = append(queries, q)
 					continue eloop
 				}
+			}
+		}
+		q.Group = qb.Group
+		qvs := desc.MatchingQueries(qb.Query)
+		if len(q.Group) != 0 {
+			for _, g := range q.Group {
 				delete(qvs, g)
 			}
 		}
-		q.Values = qvs
+		if len(qvs) == 0 {
+			q.Values = append(q.Values, LabelValues{})
+		} else {
+			q.Values = QueryPermutations(qvs)
+		}
 		queries = append(queries, q)
 	}
 
@@ -201,18 +202,5 @@ eloop:
 }
 
 type Queryer interface {
-	Query(queries ...Query) (Results, error)
-}
-type FrequencyMap map[string]map[string]int64
-type Valuer interface {
-	Values(event Descriptor, res Resolution, start, end time.Time) FrequencyMap
-}
-type ReadOnlyStore interface {
-	Queryer
-	Valuer
-}
-
-type Store interface {
-	Gatherer
-	ReadOnlyStore
+	Query(m QueryMode, queries ...Query) (Results, error)
 }

@@ -52,7 +52,7 @@ func Test_ReadWrite(t *testing.T) {
 		Resolution: "daily",
 	}
 	qs := sq.Queries(reg)
-	results, err := db.Query(qs...)
+	results, err := db.Query(meter.ModeScan, qs...)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
@@ -62,7 +62,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Invalid group results %d", n)
 	}
 
-	c := meter.Controller{Store: db, Registry: reg, TimeDecoder: resol}
+	c := meter.Controller{Q: db, Registry: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()
@@ -83,7 +83,13 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Result not found %s", results)
 	}
 
-	values := db.Values(event, resol, now, now)
+	results, _ = db.Query(meter.ModeValues, meter.Query{
+		Event:      event,
+		Start:      now,
+		End:        now,
+		Resolution: meter.ResolutionDaily,
+	})
+	values := results.FrequencyMap()
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}

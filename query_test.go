@@ -38,7 +38,10 @@ func Test_Query(t *testing.T) {
 			End:        now,
 			Group:      []string{"bar"},
 			Resolution: meter.ResolutionDaily,
-			Values:     url.Values{"foo": []string{"bar", "baz"}},
+			Values: []map[string]string{
+				map[string]string{"foo": "bar"},
+				map[string]string{"foo": "baz"},
+			},
 		},
 	}, qs)
 	perm := meter.QueryPermutations(url.Values{"foo": []string{"bar", "baz"}, "answer": []string{"42"}})
