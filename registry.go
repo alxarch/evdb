@@ -17,6 +17,15 @@ type Registry struct {
 	events map[string]Event
 	mu     sync.RWMutex
 }
+type Resolver interface {
+	Get(eventName string) Event
+}
+
+type ResolverFunc func(eventName string) Event
+
+func (rf ResolverFunc) Get(eventName string) Event {
+	return rf(eventName)
+}
 
 func NewRegistry() *Registry {
 	return &Registry{

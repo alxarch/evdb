@@ -51,8 +51,8 @@ func Test_ReadWrite(t *testing.T) {
 		Group:      []string{"foo"},
 		Resolution: "daily",
 	}
-	qs := sq.Queries(meter.ModeScan, reg)
-	results, err := db.Query(meter.ModeScan, qs...)
+	qs := sq.Queries(reg)
+	results, err := db.Query(qs...)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
@@ -62,7 +62,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Invalid group results %d", n)
 	}
 
-	c := meter.Controller{Q: db, Registry: reg, TimeDecoder: resol}
+	c := meter.Controller{Q: db, Events: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()
@@ -83,7 +83,8 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Result not found %s", results)
 	}
 
-	results, _ = db.Query(meter.ModeValues, meter.Query{
+	results, _ = db.Query(meter.Query{
+		Mode:       meter.ModeValues,
 		Event:      event,
 		Start:      now,
 		End:        now,

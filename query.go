@@ -26,6 +26,7 @@ func (m QueryMode) String() string {
 }
 
 type QueryBuilder struct {
+	Mode       QueryMode
 	Events     []string
 	Start, End time.Time
 	Group      []string
@@ -34,6 +35,7 @@ type QueryBuilder struct {
 }
 
 type Query struct {
+	Mode       QueryMode
 	Event      Descriptor
 	Start, End time.Time
 	Group      []string
@@ -48,6 +50,18 @@ func (q *Query) Error() error {
 
 func NewQueryBuilder() QueryBuilder {
 	return QueryBuilder{Query: url.Values{}}
+}
+func (q QueryBuilder) Exact() QueryBuilder {
+	q.Mode = ModeExact
+	return q
+}
+func (q QueryBuilder) Values() QueryBuilder {
+	q.Mode = ModeValues
+	return q
+}
+func (q QueryBuilder) Scan() QueryBuilder {
+	q.Mode = ModeScan
+	return q
 }
 func (q QueryBuilder) Between(start, end time.Time) QueryBuilder {
 	q.Start, q.End = start, end
@@ -130,19 +144,19 @@ func QueryPermutations(input url.Values) []map[string]string {
 	return results
 }
 
-func (qb QueryBuilder) Queries(mode QueryMode, r ...*Registry) (queries []Query) {
+func (qb QueryBuilder) Queries(events Resolver) (queries []Query) {
 	q := Query{
+		Mode:  qb.Mode,
 		Start: qb.Start,
 		End:   qb.End,
 	}
-	regs := Registries(r)
-	if len(regs) == 0 {
-		regs = append(regs, defaultRegistry)
+	if events == nil {
+		events = defaultRegistry
 	}
 eloop:
 	for i := 0; i < len(qb.Events); i++ {
 		eventName := qb.Events[i]
-		event := regs.Get(eventName)
+		event := events.Get(eventName)
 		if event == nil {
 			q.err = ErrUnregisteredEvent
 			queries = append(queries, q)
@@ -167,7 +181,7 @@ eloop:
 			continue
 		}
 		q.Resolution = res
-		if mode == ModeScan && len(qb.Group) != 0 {
+		if qb.Mode == ModeScan && len(qb.Group) != 0 {
 			for _, g := range qb.Group {
 				if !desc.HasLabel(g) {
 					q.err = ErrInvalidGroupLabel
@@ -196,5 +210,5 @@ eloop:
 }
 
 type Queryer interface {
-	Query(m QueryMode, queries ...Query) (Results, error)
+	Query(queries ...Query) (Results, error)
 }

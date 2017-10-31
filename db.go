@@ -213,10 +213,11 @@ func AppendMatchField(data []byte, labels []string, group []string, q map[string
 	return data
 }
 
-func (db *DB) Query(mode QueryMode, queries ...Query) (Results, error) {
+func (db *DB) Query(queries ...Query) (Results, error) {
 	if len(queries) == 0 {
 		return Results{}, nil
 	}
+	mode := queries[0].Mode
 	scan := make(chan ScanResult, len(queries))
 	results := CollectResults(scan)
 	wg := new(sync.WaitGroup)
