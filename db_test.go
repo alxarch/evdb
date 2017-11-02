@@ -94,5 +94,21 @@ func Test_ReadWrite(t *testing.T) {
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}
+	results, _ = db.Query(meter.Query{
+		Mode:  meter.ModeValues,
+		Event: event,
+		Start: now,
+		Values: []map[string]string{
+			map[string]string{
+				"foo": "bar",
+			},
+		},
+		End:        now,
+		Resolution: meter.ResolutionDaily,
+	})
+	values = results.FrequencyMap()
+	if values["foo"] == nil {
+		t.Errorf("Missing 'foo'")
+	}
 	// log.Println(values)
 }

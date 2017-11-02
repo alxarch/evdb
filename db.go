@@ -405,15 +405,37 @@ func (db *DB) ValueScan(results chan<- ScanResult, q Query) error {
 				return
 			}
 			for key, value := range reply {
+				if n, _ = strconv.ParseInt(value, 10, 64); n == 0 {
+					continue
+				}
 				field = parseField(field[:0], key)
-				if n, _ = strconv.ParseInt(value, 10, 64); n != 0 {
-					for j := 0; j < len(field); j += 2 {
-						if label, val := field[j], field[j+1]; val != sNilByte {
-							r.Values = LabelValues{label: val}
-							r.count = n
-							results <- r
+				if len(q.Values) == 0 {
+					for i := 0; i < len(field); i += 2 {
+						r.Values = LabelValues{field[i]: field[i+1]}
+						r.count = n
+						results <- r
+					}
+					continue
+				}
+				for j := 0; j < len(q.Values); j++ {
+					values := q.Values[j]
+					match := 0
+					for i := 0; i < len(field); i += 2 {
+						if val, ok := values[field[i]]; ok && val == field[i+1] {
+							match++
+						} else {
+							break
 						}
 					}
+					if match != len(values) {
+						continue
+					}
+					for i := 0; i < len(field); i += 2 {
+						r.Values = LabelValues{field[i]: field[i+1]}
+						r.count = n
+						results <- r
+					}
+					break
 				}
 			}
 			wg.Done()
