@@ -277,6 +277,9 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
 		for j, tm := range ts {
 			reply := replies[i*len(ts)+j]
 			n, err := reply.Int64()
+			if err == redis.Nil {
+				err = nil
+			}
 			results <- ScanResult{
 				Event:  desc.Name(),
 				Time:   tm,
@@ -365,6 +368,9 @@ func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (
 		i++
 	}
 	if err = scan.Err(); err != nil {
+		if err == redis.Nil {
+			err = nil
+		}
 		return
 	}
 	return
@@ -450,6 +456,7 @@ func CollectResults(scan <-chan ScanResult) <-chan Results {
 	go func() {
 		var results Results
 		for r := range scan {
+			// Delete values that are not in group clause
 			if len(r.Group) != 0 && len(r.Values) != 0 {
 				for key := range r.Values {
 					if indexOf(r.Group, key) < 0 {
