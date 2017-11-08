@@ -13,12 +13,6 @@ const (
 	MinlyDateFormat  string = "2006-01-02-15-04"
 )
 
-// var NoResolutionCodec = tcodec.NewTimeCodec(func(t time.Time) string {
-// 	return "*"
-// }, func(s string) (t time.Time, e error) {
-// 	return
-// })
-
 type Resolution struct {
 	name string
 	// step time.Duration
@@ -83,20 +77,15 @@ func (r Resolution) WithCodec(codec tcodec.TimeCodec) Resolution {
 }
 
 func (r Resolution) Round(t time.Time) time.Time {
-	return t.Truncate(r.step)
+	return t.Truncate(r.step).In(t.Location())
 }
 func (r Resolution) AddSteps(t time.Time, n int) time.Time {
-	return t.Truncate(r.step).Add(time.Duration(n) * r.Step())
+	return t.Truncate(r.step).In(t.Location()).Add(time.Duration(n) * r.Step())
 }
 
 func (r Resolution) TimeSequence(s, e time.Time) []time.Time {
 	return TimeSequence(s, e, r.step)
 }
-
-// func (r Resolution) ParseDateRange(s, e string) (start, end time.Time, err error) {
-// 	parser := DateRangeParser(r)
-// 	return parser(s, e, r.ttl)
-// }
 
 func (r Resolution) UnmarshalTime(s string) (t time.Time, err error) {
 	return r.codec.UnmarshalTime(s)
