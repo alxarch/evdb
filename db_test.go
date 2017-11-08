@@ -68,19 +68,18 @@ func Test_ReadWrite(t *testing.T) {
 	defer s.Close()
 	dt := now.Format(meter.DailyDateFormat)
 	res, err := s.Client().Get(s.URL + "?event=test&start=" + dt + "&end=" + dt + "&res=daily&foo=bar")
-	if res.StatusCode != http.StatusOK {
-		t.Errorf("Invalid response status %d: %s", res.StatusCode, res.Status)
-	}
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
-	}
-	data, _ := ioutil.ReadAll(res.Body)
-	res.Body.Close()
-	results = meter.Results{}
-	json.Unmarshal(data, &results)
-	r := results.Find("test", meter.LabelValues{"foo": "bar"})
-	if r == nil {
-		t.Errorf("Result not found %s", results)
+	} else if res.StatusCode != http.StatusOK {
+		t.Errorf("Invalid response status %d: %s", res.StatusCode, res.Status)
+		data, _ := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		results = meter.Results{}
+		json.Unmarshal(data, &results)
+		r := results.Find("test", meter.LabelValues{"foo": "bar"})
+		if r == nil {
+			t.Errorf("Result not found %s", results)
+		}
 	}
 
 	results, _ = db.Query(meter.Query{

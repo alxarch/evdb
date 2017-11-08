@@ -321,7 +321,7 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 			key := string(data)
 			wg.Add(1)
 			go func(r ScanResult, key string) {
-				db.Scan(key, match, r, results)
+				db.scan(key, match, r, results)
 				wg.Done()
 			}(result, key)
 		}
@@ -350,7 +350,7 @@ func parseField(values []string, field string) []string {
 	return values
 }
 
-func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
+func (db *DB) scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
 	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
 	i := 0
 	var pairs []string
@@ -369,6 +369,8 @@ func (db *DB) Scan(key, match string, r ScanResult, results chan<- ScanResult) (
 	}
 	if err = scan.Err(); err != nil {
 		if err == redis.Nil {
+			// Report an empty result
+			results <- r
 			err = nil
 		}
 		return
@@ -456,6 +458,9 @@ func CollectResults(scan <-chan ScanResult) <-chan Results {
 	go func() {
 		var results Results
 		for r := range scan {
+			if r.err != nil {
+				continue
+			}
 			// Delete values that are not in group clause
 			if len(r.Group) != 0 && len(r.Values) != 0 {
 				for key := range r.Values {
