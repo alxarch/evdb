@@ -1,7 +1,6 @@
 package meter_test
 
 import (
-	"fmt"
 	"net/url"
 	"testing"
 	"time"
@@ -30,6 +29,6 @@ func Test_ParseQuery(t *testing.T) {
 	events.Register(fooEvent)
 	qs := qb.Queries(events)
 	assert.Equal(t, 1, len(qs))
-	fmt.Printf("%+v", qs[0])
+	// fmt.Printf("%+v", qs[0])
 
 }

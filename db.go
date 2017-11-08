@@ -238,6 +238,9 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	wg.Wait()
 	close(scan)
 	if r := <-results; r != nil {
+		for i := range r {
+			r[i].Data.Sort()
+		}
 		return r, nil
 	}
 	return Results{}, nil
@@ -368,12 +371,11 @@ func (db *DB) scan(key, match string, r ScanResult, results chan<- ScanResult) (
 		i++
 	}
 	if err = scan.Err(); err != nil {
-		if err == redis.Nil {
-			// Report an empty result
-			results <- r
-			err = nil
-		}
 		return
+	}
+	if i == 0 {
+		// Report an empty result
+		results <- r
 	}
 	return
 

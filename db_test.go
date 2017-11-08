@@ -56,7 +56,7 @@ func Test_ReadWrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if len(results) != 2 {
+	if len(results) != 3 {
 		t.Errorf("Invalid results len %d", len(results))
 	} else if n := results[0].Data[0].Value; n != 1 {
 		t.Errorf("Invalid group results %d", n)
