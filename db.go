@@ -464,11 +464,14 @@ func CollectResults(scan <-chan ScanResult) <-chan Results {
 				continue
 			}
 			// Delete values that are not in group clause
-			if len(r.Group) != 0 && len(r.Values) != 0 {
+			if len(r.Group) != 0 && r.Values != nil {
 				for key := range r.Values {
 					if indexOf(r.Group, key) < 0 {
 						delete(r.Values, key)
 					}
+				}
+				if len(r.Values) == 0 {
+					continue
 				}
 			}
 

@@ -198,7 +198,7 @@ eloop:
 			}
 		}
 		if len(qvs) == 0 {
-			q.Values = append(q.Values[:0], LabelValues{})
+			q.Values = []map[string]string{LabelValues{}}
 		} else {
 			q.Values = QueryPermutations(qvs)
 		}
