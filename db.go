@@ -8,17 +8,22 @@ import (
 	"github.com/go-redis/redis"
 )
 
-const DefaultKeyPrefix = "meter"
+const (
+	DefaultKeyPrefix = "meter"
+	DefaultScanSize  = 100
+)
 
 type DB struct {
 	Redis     redis.UniversalClient
 	KeyPrefix string
+	ScanSize  int64
 }
 
 func NewDB(r redis.UniversalClient) *DB {
 	db := new(DB)
 	db.Redis = r
 	db.KeyPrefix = DefaultKeyPrefix
+	db.ScanSize = DefaultScanSize
 	return db
 }
 
@@ -354,7 +359,7 @@ func parseField(values []string, field string) []string {
 }
 
 func (db *DB) scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
-	scan := db.Redis.HScan(key, 0, match, -1).Iterator()
+	scan := db.Redis.HScan(key, 0, match, db.ScanSize).Iterator()
 	i := 0
 	var pairs []string
 	group := len(r.Group) != 0

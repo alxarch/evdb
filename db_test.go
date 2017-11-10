@@ -2,6 +2,7 @@ package meter_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -39,6 +40,9 @@ func Test_ReadWrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
+	if n := db.Redis.HLen(db.Key(meter.ResolutionDaily, "test", now)).Val(); n != 2 {
+		t.Errorf("invalid gather %d", n)
+	}
 	if n := event.Len(); n != 2 {
 		t.Errorf("Wrong collector size %d", n)
 	}
@@ -51,15 +55,17 @@ func Test_ReadWrite(t *testing.T) {
 		Group:      []string{"foo"},
 		Resolution: "daily",
 	}
+	println("Run q")
 	qs := sq.Queries(reg)
 	results, err := db.Query(qs...)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if len(results) != 3 {
+	if len(results) != 2 {
 		t.Errorf("Invalid results len %d", len(results))
-	} else if n := results[0].Data[0].Value; n != 1 {
-		t.Errorf("Invalid group results %d", n)
+	}
+	for _, r := range results {
+		println(fmt.Sprintf("result\n%+v\n", r))
 	}
 
 	c := meter.Controller{Q: db, Events: reg, TimeDecoder: resol}
