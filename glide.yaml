@@ -1,9 +1,0 @@
-package: github.com/alxarch/go-meter
-import:
-- package: github.com/go-redis/redis
-  version: ^6.7.2
-testImport:
-- package: github.com/stretchr/testify
-  version: ^1.1.4
-  subpackages:
-  - assert
