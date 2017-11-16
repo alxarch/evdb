@@ -33,6 +33,12 @@ func NewRegistry() *Registry {
 	}
 }
 
+func NewRegistryEvents(events ...Event) *Registry {
+	r := NewRegistry()
+	r.MustRegister(events...)
+	return r
+}
+
 var defaultRegistry = NewRegistry()
 
 func (c *Registry) Get(name string) (e Event) {
@@ -73,9 +79,11 @@ func (c *Registry) Register(event Event) error {
 	return nil
 }
 
-func (c *Registry) MustRegister(event Event) {
-	if err := c.Register(event); err != nil {
-		panic(err)
+func (c *Registry) MustRegister(events ...Event) {
+	for _, e := range events {
+		if err := c.Register(e); err != nil {
+			panic(err)
+		}
 	}
 }
 
