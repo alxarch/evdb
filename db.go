@@ -227,15 +227,18 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	results := CollectResults(scan)
 	wg := new(sync.WaitGroup)
 	for _, q := range queries {
+		if err := q.Error(); err != nil {
+			continue
+		}
 		wg.Add(1)
 		go func(q Query) {
 			switch mode {
 			case ModeExact:
-				db.ExactQuery(scan, q)
+				db.exactQuery(scan, q)
 			case ModeScan:
-				db.ScanQuery(scan, q)
+				db.scanQuery(scan, q)
 			case ModeValues:
-				db.ValueScan(scan, q)
+				db.valueQuery(scan, q)
 			}
 			wg.Done()
 		}(q)
@@ -251,13 +254,17 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	return Results{}, nil
 }
 
-func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
+func (db *DB) exactQuery(results chan<- ScanResult, q Query) error {
 	var replies []*redis.StringCmd
 	if err := q.Error(); err != nil {
 		r := ScanResult{err: err}
 		results <- r
 	}
 	// Field/Key buffer
+	if len(q.Values) == 0 {
+		// Exact query without values is pointless
+		return nil
+	}
 	data := []byte{}
 	res := q.Resolution
 	ts := res.TimeSequence(q.Start, q.End)
@@ -300,13 +307,11 @@ func (db *DB) ExactQuery(results chan<- ScanResult, q Query) error {
 	return nil
 }
 
-func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
-	if e := q.Error(); e != nil {
-		results <- ScanResult{err: e}
-		return
-	}
+func (db *DB) scanQuery(results chan<- ScanResult, q Query) (err error) {
 	desc := q.Event.Describe()
-
+	if e := desc.Error(); e != nil {
+		return e
+	}
 	result := ScanResult{
 		Event: desc.Name(),
 		Group: q.Group,
@@ -319,7 +324,6 @@ func (db *DB) ScanQuery(results chan<- ScanResult, q Query) (err error) {
 	wg := &sync.WaitGroup{}
 	for _, values := range q.Values {
 		result.Values = values
-		// data = AppendField(data, desc.Labels(), m.Values())
 		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
 		match := string(data)
 		// Let redis client pool size determine parallel request blocking
@@ -391,8 +395,8 @@ type pair struct {
 	Count        int64
 }
 
-// ValueScan return a frequency map of event label values
-func (db *DB) ValueScan(results chan<- ScanResult, q Query) error {
+// valueQuery return a frequency map of event label values
+func (db *DB) valueQuery(results chan<- ScanResult, q Query) error {
 	desc := q.Event.Describe()
 	labels := desc.Labels()
 	r := ScanResult{
@@ -409,7 +413,7 @@ func (db *DB) ValueScan(results chan<- ScanResult, q Query) error {
 		key := string(data)
 		go func(key string) {
 			var n int64
-			field := make([]string, len(labels))
+			field := make([]string, len(labels)*2)
 			reply, err := db.Redis.HGetAll(key).Result()
 			if err == redis.Nil {
 				return

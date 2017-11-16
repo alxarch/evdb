@@ -45,7 +45,19 @@ type Query struct {
 }
 
 func (q *Query) Error() error {
-	return q.err
+	if q.err != nil {
+		return q.err
+	}
+
+	if q.Event == nil {
+		return ErrNilEvent
+	}
+
+	if desc := q.Event.Describe(); desc == nil {
+		return ErrNilDesc
+	}
+
+	return nil
 }
 
 func NewQueryBuilder() QueryBuilder {
