@@ -145,16 +145,16 @@ func QueryPermutations(input url.Values) []map[string]string {
 }
 
 func (qb QueryBuilder) Queries(events Resolver) (queries []Query) {
-	q := Query{
-		Mode:  qb.Mode,
-		Start: qb.Start,
-		End:   qb.End,
-	}
 	if events == nil {
 		events = defaultRegistry
 	}
 eloop:
 	for i := 0; i < len(qb.Events); i++ {
+		q := Query{
+			Mode:  qb.Mode,
+			Start: qb.Start,
+			End:   qb.End,
+		}
 		eventName := qb.Events[i]
 		event := events.Get(eventName)
 		if event == nil {
