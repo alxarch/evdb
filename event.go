@@ -86,35 +86,51 @@ func (e *event) WithLabelValues(values ...string) Counter {
 	return e.findOrCreate(values)
 }
 
-func (e *event) findOrCreate(values []string) (c Counter) {
-	h := valuesHash(values)
+func (e *event) findOrCreate(values []string) Counter {
+	var (
+		h        = valuesHash(values)
+		counters []Counter
+		c        Counter
+		v        []string
+		i        int
+	)
 	e.mu.RLock()
-	counters := e.counters[h]
-	for i := 0; i < len(counters); i++ {
-		if c = counters[i]; matchValues(c.Values(), values) {
+	counters = e.counters[h]
+a:
+	for _, c = range counters {
+		if v = c.Values(); len(v) == len(values) {
+			v = v[:len(values)]
+			for i = range values {
+				if v[i] != values[i] {
+					continue a
+				}
+			}
 			e.mu.RUnlock()
-			return
+			return c
 		}
 	}
 	e.mu.RUnlock()
 	e.mu.Lock()
-	if c = e.find(h, values); c == nil {
-		c = newSafeCounter(values...)
-		e.counters[h] = append(e.counters[h], c)
-	}
-	e.mu.Unlock()
-	return
-}
-
-func (e *event) find(h uint64, values []string) Counter {
-	if counters := e.counters[h]; counters != nil {
-		for _, c := range counters {
-			if matchValues(c.Values(), values) {
+	counters = e.counters[h]
+	if counters != nil {
+	b:
+		for _, c = range counters {
+			if v = c.Values(); len(v) == len(values) {
+				v = v[:len(values)]
+				for i = range values {
+					if v[i] != values[i] {
+						continue b
+					}
+				}
+				e.mu.Unlock()
 				return c
 			}
 		}
 	}
-	return nil
+	c = newSafeCounter(values...)
+	e.counters[h] = append(e.counters[h], c)
+	e.mu.Unlock()
+	return c
 }
 
 func (e *event) Describe() *Desc {
@@ -124,16 +140,22 @@ func (e *event) Describe() *Desc {
 const separatorByte byte = 255
 
 func valuesHash(values []string) (h uint64) {
+	var (
+		i int
+		v string
+	)
 	h = hashNew()
-	for i := 0; i < len(values); i++ {
-		h = hashAdd(h, values[i])
+	for _, v = range values {
+		for i = 0; 0 <= i && i < len(v); i++ {
+			h = hashAddByte(h, v[i])
+		}
 		h = hashAddByte(h, separatorByte)
 	}
-	return h
+	return
 }
 
 func indexOf(values []string, s string) int {
-	for i := 0; i < len(values); i++ {
+	for i := 0; 0 <= i && i < len(values); i++ {
 		if values[i] == s {
 			return i
 		}
@@ -147,7 +169,7 @@ func distinct(values ...string) []string {
 	}
 	j := 0
 	for _, value := range values {
-		if indexOf(values[:j], value) == -1 {
+		if 0 <= j && j < len(values) && indexOf(values[:j], value) == -1 {
 			values[j] = value
 			j++
 		}

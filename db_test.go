@@ -84,7 +84,7 @@ func Test_ReadWrite(t *testing.T) {
 		json.Unmarshal(data, &results)
 		r := results.Find("test", meter.LabelValues{"foo": "bar"})
 		if r == nil {
-			t.Errorf("Result not found %s", results)
+			t.Errorf("Result not found %v", results)
 		}
 	}
 

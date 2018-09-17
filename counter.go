@@ -109,8 +109,15 @@ func (cs *Counters) WithLabelValues(values ...string) (c Counter) {
 		cs.counters = make(map[uint64][]Counter)
 	}
 	counters := cs.counters[h]
-	for i := 0; i < len(counters); i++ {
-		if c = counters[i]; matchValues(c.Values(), values) {
+cloop:
+	for _, c = range counters {
+		if v := c.Values(); len(v) == len(values) {
+			v = v[:len(values)]
+			for i := range values {
+				if v[i] != values[i] {
+					continue cloop
+				}
+			}
 			return
 		}
 	}
