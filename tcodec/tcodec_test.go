@@ -15,7 +15,7 @@ func Test_LayoutCodec(t *testing.T) {
 	expect := d.Format(layout)
 	c := tcodec.LayoutCodec(layout)
 	if actual := c.MarshalTime(d); actual != expect {
-		t.Error("Invalid date string %s", expect)
+		t.Errorf("Invalid date string %s", expect)
 	}
 	tm, err := c.UnmarshalTime(expect)
 	if err != nil {
@@ -96,7 +96,7 @@ func Test_ISOWeekCodec(t *testing.T) {
 
 	}
 
-	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-09a"); err != tcodec.InvalidISOWeekString {
+	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-09a"); err != tcodec.ErrInvalidTimeString {
 		t.Error("Invalid error")
 	}
 	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-99"); err != tcodec.InvalidWeekNumberError {

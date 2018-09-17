@@ -19,10 +19,6 @@ func (enc TimeEncoderFunc) MarshalTime(t time.Time) string {
 
 type TimeDecoderFunc func(string) (time.Time, error)
 
-var (
-	ErrNilDecoder = errors.New("Nil time decoder")
-)
-
 func (dec TimeDecoderFunc) UnmarshalTime(s string) (time.Time, error) {
 	return dec(s)
 }
@@ -30,16 +26,17 @@ func (dec TimeDecoderFunc) UnmarshalTime(s string) (time.Time, error) {
 type TimeDecoder interface {
 	UnmarshalTime(string) (time.Time, error)
 }
+
 type TimeCodec interface {
 	TimeEncoder
 	TimeDecoder
 }
 
 func NewTimeCodec(enc TimeEncoderFunc, dec TimeDecoderFunc) TimeCodec {
-	if nil == enc {
+	if enc == nil {
 		panic("Invalid TimeEncoder")
 	}
-	if nil == dec {
+	if dec == nil {
 		panic("Invalid TimeDecoder")
 	}
 	return &timeCodecFunc{enc, dec}
@@ -68,28 +65,32 @@ func (layout LayoutCodec) MarshalTime(t time.Time) string {
 }
 
 var isoweekRx = regexp.MustCompile("^(\\d{4})-(\\d{2})$")
-var (
-	InvalidISOWeekString   = errors.New("Invalid ISOWeek string")
-	InvalidWeekNumberError = errors.New("Invalid week number")
-)
+
+type Error string
+
+func (e Error) Error() string {
+	return string(e)
+}
+
+const ErrInvalidTimeString Error = "Invalid ISOWeek string"
 
 func UnixMillis(tm time.Time) int64 {
 	return tm.UnixNano() / int64(time.Millisecond)
 }
 
 var ISOWeekCodec = NewTimeCodec(func(t time.Time) string {
-	y, d := t.ISOWeek()
-	return fmt.Sprintf("%d-%02d", y, d)
+	y, w := t.ISOWeek()
+	return fmt.Sprintf("%d-%02d", y, w)
 
 }, func(value string) (time.Time, error) {
 	match := isoweekRx.FindStringSubmatch(value)
 	if match == nil {
-		return time.Time{}, InvalidISOWeekString
+		return time.Time{}, ErrInvalidTimeString
 	}
 	year, _ := strconv.Atoi(string(match[1]))
 	week, _ := strconv.Atoi(string(match[2]))
 	if !(0 < week && week <= 53) {
-		return time.Time{}, InvalidWeekNumberError
+		return time.Time{}, ErrInvalidTimeString
 	}
 	t := time.Date(year, 1, 0, 0, 0, 0, 0, time.UTC)
 	for t.Weekday() > time.Sunday {
