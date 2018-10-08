@@ -90,31 +90,28 @@ func AppendField(data []byte, labels, values []string) []byte {
 // 	return db.Registry.Sync(db, tm)
 // }
 
-func (db *DB) Gather(col Collector, tm time.Time) (err error) {
-	var pipelineSize int64
-	pipeline := db.Redis.Pipeline()
+func (db *DB) Gather(tm time.Time, events ...*Event) (err error) {
+	var (
+		values   []string
+		data     []byte
+		pipeline = db.Redis.Pipeline()
+		keysTTL  = make(map[string]time.Duration)
+	)
 	defer pipeline.Close()
-	ch := make(chan Metric)
-	size := make(chan int64)
-	go func() {
-		var psize int64
-		data := []byte{}
-		keysTTL := make(map[string]time.Duration)
-		for m := range ch {
-			if m == nil {
-				continue
-			}
-			n := m.Set(0)
+	for _, e := range events {
+		desc := e.Describe()
+		name := desc.Name()
+		labels := desc.Labels()
+		t := desc.Type()
+		s := e.Flush(nil)
+		for _, m := range s {
+			n := m.Count()
 			if n == 0 {
 				continue
 			}
-			values := m.Values()
-			desc := m.Describe()
-			name := desc.Name()
-			labels := desc.Labels()
+			values = m.AppendValues(values[:0])
 			data = AppendField(data[:0], labels, values)
 			field := string(data)
-			t := desc.Type()
 			for _, res := range desc.Resolutions() {
 				data = db.AppendKey(data[:0], res, name, tm)
 				key := string(data)
@@ -129,22 +126,14 @@ func (db *DB) Gather(col Collector, tm time.Time) (err error) {
 				default:
 					continue
 				}
-
-				psize++
 			}
 		}
+
 		for key, ttl := range keysTTL {
 			pipeline.Expire(key, ttl)
-			psize++
 		}
-		size <- psize
-	}()
-	col.Collect(ch)
-	close(ch)
-	pipelineSize = <-size
-	if pipelineSize != 0 {
-		_, err = pipeline.Exec()
 	}
+	_, err = pipeline.Exec()
 	return
 }
 

@@ -12,10 +12,17 @@ func FieldLabels(field []string) LabelValues {
 	return values
 }
 
+func (values LabelValues) AppendValues(vs, labels []string) []string {
+	for _, label := range labels {
+		vs = append(vs, values[label])
+	}
+	return vs
+}
 func (values LabelValues) Values(labels []string) []string {
 	if values == nil {
-		return []string{}
+		return nil
 	}
+
 	out := make([]string, len(labels))
 	for i, label := range labels {
 		out[i] = values[label]

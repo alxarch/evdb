@@ -2,7 +2,6 @@ package meter_test
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
@@ -36,7 +35,7 @@ func Test_ReadWrite(t *testing.T) {
 	}
 	event.WithLabelValues("bax").Add(1)
 	now := time.Now().In(time.UTC)
-	err := db.Gather(event, now)
+	err := db.Gather(now, event)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
@@ -55,7 +54,6 @@ func Test_ReadWrite(t *testing.T) {
 		Group:      []string{"foo"},
 		Resolution: "daily",
 	}
-	println("Run q")
 	qs := sq.Queries(reg)
 	results, err := db.Query(qs...)
 	if err != nil {
@@ -65,7 +63,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Invalid results len %d", len(results))
 	}
 	for _, r := range results {
-		println(fmt.Sprintf("result\n%+v\n", r))
+		t.Logf("result\n%+v\n", r)
 	}
 
 	c := meter.Controller{Q: db, Events: reg, TimeDecoder: resol}

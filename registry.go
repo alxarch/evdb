@@ -14,11 +14,11 @@ var (
 )
 
 type Registry struct {
-	events map[string]Event
+	events map[string]*Event
 	mu     sync.RWMutex
 }
 type Resolver interface {
-	Get(eventName string) Event
+	Get(eventName string) *Event
 }
 
 type ResolverFunc func(eventName string) Event
@@ -29,11 +29,11 @@ func (rf ResolverFunc) Get(eventName string) Event {
 
 func NewRegistry() *Registry {
 	return &Registry{
-		events: make(map[string]Event),
+		events: make(map[string]*Event),
 	}
 }
 
-func NewRegistryEvents(events ...Event) *Registry {
+func NewRegistryEvents(events ...*Event) *Registry {
 	r := NewRegistry()
 	r.MustRegister(events...)
 	return r
@@ -41,16 +41,16 @@ func NewRegistryEvents(events ...Event) *Registry {
 
 var defaultRegistry = NewRegistry()
 
-func (c *Registry) Get(name string) (e Event) {
+func (c *Registry) Get(name string) (e *Event) {
 	c.mu.RLock()
 	e = c.events[name]
 	c.mu.RUnlock()
 	return
 }
 
-func (c *Registry) Events() []Event {
+func (c *Registry) Events() []*Event {
 	c.mu.RLock()
-	events := make([]Event, 0, len(c.events))
+	events := make([]*Event, 0, len(c.events))
 	for _, event := range c.events {
 		events = append(events, event)
 	}
@@ -58,7 +58,7 @@ func (c *Registry) Events() []Event {
 	return events
 }
 
-func (c *Registry) Register(event Event) error {
+func (c *Registry) Register(event *Event) error {
 	if event == nil {
 		return ErrNilEvent
 	}
@@ -79,7 +79,7 @@ func (c *Registry) Register(event Event) error {
 	return nil
 }
 
-func (c *Registry) MustRegister(events ...Event) {
+func (c *Registry) MustRegister(events ...*Event) {
 	for _, e := range events {
 		if err := c.Register(e); err != nil {
 			panic(err)
@@ -89,7 +89,7 @@ func (c *Registry) MustRegister(events ...Event) {
 
 type Registries []*Registry
 
-func (r Registries) Get(name string) Event {
+func (r Registries) Get(name string) *Event {
 	for i := 0; i < len(r); i++ {
 		if event := r[i].Get(name); event != nil {
 			return event

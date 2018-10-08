@@ -20,9 +20,10 @@ func (d *Desc) Describe() *Desc {
 type Descriptor interface {
 	Describe() *Desc
 }
+type Snapshot []CounterLocal
 type Collector interface {
-	Collect(chan<- Metric)
-	Len() int
+	Collect(s Snapshot) Snapshot
+	Merge(s Snapshot)
 }
 type Gatherer interface {
 	Gather(col Collector, tm time.Time) error

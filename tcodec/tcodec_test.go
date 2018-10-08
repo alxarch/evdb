@@ -99,7 +99,7 @@ func Test_ISOWeekCodec(t *testing.T) {
 	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-09a"); err != tcodec.ErrInvalidTimeString {
 		t.Error("Invalid error")
 	}
-	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-99"); err != tcodec.InvalidWeekNumberError {
+	if _, err := tcodec.ISOWeekCodec.UnmarshalTime("2017-99"); err != tcodec.ErrInvalidTimeString {
 		t.Error("Invalid error")
 	}
 }

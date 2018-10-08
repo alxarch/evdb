@@ -20,9 +20,9 @@ func Test_Registry(t *testing.T) {
 	}
 	events := r.Events()
 	if len(events) != 1 {
-		t.Errorf("Invalid events %s", events)
+		t.Errorf("Invalid events %v", events)
 	} else if events[0].Describe().Name() != "foo" {
-		t.Errorf("Invalid event %s", events[0])
+		t.Errorf("Invalid event %v", events[0])
 	}
 	e = r.Get("foo")
 	if e == nil {
