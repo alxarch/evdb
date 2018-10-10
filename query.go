@@ -39,8 +39,8 @@ type Query struct {
 	Event      Descriptor
 	Start, End time.Time
 	Group      []string
-	Values     []map[string]string
 	Resolution Resolution
+	Values     []map[string]string
 	err        error
 }
 

@@ -62,8 +62,8 @@ func Test_ReadWrite(t *testing.T) {
 	if len(results) != 2 {
 		t.Errorf("Invalid results len %d", len(results))
 	}
-	for _, r := range results {
-		t.Logf("result\n%+v\n", r)
+	for i, r := range results {
+		t.Logf("result %d\n%+v\n", i, r)
 	}
 
 	c := meter.Controller{Q: db, Events: reg, TimeDecoder: resol}
@@ -101,17 +101,20 @@ func Test_ReadWrite(t *testing.T) {
 		Mode:  meter.ModeValues,
 		Event: event,
 		Start: now,
+		End:   now,
 		Values: []map[string]string{
 			map[string]string{
 				"foo": "bar",
 			},
 		},
-		End:        now,
 		Resolution: meter.ResolutionDaily,
 	})
 	values = results.FrequencyMap()
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}
-	// log.Println(values)
+	for k, v := range values {
+		t.Errorf("%s: %v", k, v)
+
+	}
 }

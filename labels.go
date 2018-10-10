@@ -11,6 +11,16 @@ func FieldLabels(field []string) LabelValues {
 	}
 	return values
 }
+func (values LabelValues) Copy() LabelValues {
+	if values == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(values))
+	for k, v := range values {
+		cp[k] = v
+	}
+	return cp
+}
 
 func (values LabelValues) AppendValues(vs, labels []string) []string {
 	for _, label := range labels {
