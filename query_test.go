@@ -1,20 +1,19 @@
-package meter_test
+package meter
 
 import (
 	"net/url"
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter"
 	"github.com/stretchr/testify/assert"
 )
 
 func Test_Query(t *testing.T) {
 
-	b := meter.QueryBuilder{}
+	b := QueryBuilder{}
 	b = b.From("test")
 	assert.Equal(t, b.Events, []string{"test"})
-	b = b.At(meter.ResolutionDaily)
+	b = b.At(ResolutionDaily)
 	assert.Equal(t, "daily", b.Resolution)
 	now := time.Now()
 	b = b.Between(now, now)
@@ -26,25 +25,25 @@ func Test_Query(t *testing.T) {
 	assert.Equal(t, url.Values{"foo": []string{"bar", "baz"}},
 		b.Query)
 
-	r := meter.NewRegistry()
-	desc := meter.NewCounterDesc("test", []string{"foo", "bar"}, meter.ResolutionDaily)
-	e := meter.NewEvent(desc)
+	r := NewRegistry()
+	desc := NewCounterDesc("test", []string{"foo", "bar"}, ResolutionDaily)
+	e := NewEvent(desc)
 	r.Register(e)
 	qs := b.Queries(r)
-	assert.Equal(t, []meter.Query{
-		meter.Query{
+	assert.Equal(t, []Query{
+		Query{
 			Event:      e,
 			Start:      now,
 			End:        now,
 			Group:      []string{"bar"},
-			Resolution: meter.ResolutionDaily,
+			Resolution: ResolutionDaily,
 			Values: []map[string]string{
 				map[string]string{"foo": "bar"},
 				map[string]string{"foo": "baz"},
 			},
 		},
 	}, qs)
-	perm := meter.QueryPermutations(url.Values{"foo": []string{"bar", "baz"}, "answer": []string{"42"}})
+	perm := QueryPermutations(url.Values{"foo": []string{"bar", "baz"}, "answer": []string{"42"}})
 	assert.Equal(t, []map[string]string{
 		map[string]string{"answer": "42", "foo": "bar"},
 		map[string]string{"answer": "42", "foo": "baz"},

@@ -1,18 +1,25 @@
-package meter_test
+package meter
 
 import (
 	"testing"
-
-	meter "github.com/alxarch/go-meter"
 )
 
+func BenchmarkEvent_Add(b *testing.B) {
+	b.ReportAllocs()
+	desc := NewCounterDesc("foo", []string{"bar", "baz"})
+	e := NewEvent(desc)
+	for i := 0; i <= b.N; i++ {
+		e.Add(1, "BAR", "BAZ")
+	}
+
+}
 func Test_Event(t *testing.T) {
-	desc := meter.NewCounterDesc("foo", []string{"bar", "baz"})
-	e := meter.NewEvent(desc)
-	e.WithLabelValues("BAR", "BAZ").Add(1)
+	desc := NewCounterDesc("foo", []string{"bar", "baz"})
+	e := NewEvent(desc)
+	e.Add(1, "BAR", "BAZ")
 	// ch := make(chan meter.Metric, 1)
 	// done := make(chan struct{})
-	var values []string
+	// var values []string
 	// go func() {
 	// 	for m := range ch {
 	// 		values = m.AppendValues(values[:0])
@@ -34,9 +41,9 @@ func Test_Event(t *testing.T) {
 	// close(ch)
 	// <-done
 
-	m := e.WithLabels(meter.LabelValues{"foo": "bar"})
-	values = m.AppendValues(values[:0])
-	if len(values) != 2 {
-		t.Errorf("Invalid values %s", values)
-	}
+	// m := e.cou("bar")
+	// values = m.AppendValues(values[:0])
+	// if len(values) != 2 {
+	// 	t.Errorf("Invalid values %s", values)
+	// }
 }

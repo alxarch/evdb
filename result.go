@@ -9,7 +9,7 @@ import (
 
 type Result struct {
 	Event  string
-	Labels LabelValues
+	Labels map[string]string
 	Data   DataPoints
 }
 
@@ -20,20 +20,16 @@ type DataPoint struct {
 type DataPoints []DataPoint
 
 func (data DataPoints) Find(tm time.Time) (int64, bool) {
-	if i := data.IndexOf(tm); i < 0 {
-		return 0, false
-	} else {
+	if i := data.IndexOf(tm); 0 <= i && i < len(data) {
 		return data[i].Value, true
 	}
+	return 0, false
 }
 
 func (data DataPoints) IndexOf(tm time.Time) int {
-	if data == nil {
-		return -1
-	}
 	ts := tm.Unix()
-	for i := 0; i < len(data); i++ {
-		if data[i].Timestamp == ts {
+	for i := range data {
+		if d := &data[i]; d.Timestamp == ts {
 			return i
 		}
 	}
@@ -102,31 +98,46 @@ func (p *DataPoint) UnmarshalJSON(data []byte) (err error) {
 
 type Results []Result
 
-func (s Results) IndexOf(event string, values LabelValues) int {
-	if s == nil {
+func (r *Result) Match(values map[string]string) bool {
+
+	if len(r.Labels) != len(values) {
+		return false
+	}
+	if r.Labels == nil && values == nil {
+		return true
+	}
+	for key, value := range values {
+		if r.Labels[key] != value {
+			return false
+		}
+	}
+	return true
+}
+func (rs Results) IndexOf(event string, values map[string]string) int {
+	if rs == nil {
 		return -1
 	}
-	for i, r := range s {
-		if r.Event == event && r.Labels.Equal(values) {
+	for i, r := range rs {
+		if r.Event == event && r.Match(values) {
 			return i
 		}
 	}
 	return -1
 }
-func (s Results) Find(event string, values LabelValues) *Result {
-	if i := s.IndexOf(event, values); i < 0 {
+func (rs Results) Find(event string, values map[string]string) *Result {
+	if i := rs.IndexOf(event, values); i < 0 {
 		return nil
 	} else {
-		return &s[i]
+		return &rs[i]
 	}
 }
 
 type FrequencyMap map[string]map[string]int64
 
-func (s Results) FrequencyMap() FrequencyMap {
-	m := make(map[string]map[string]int64)
-	for i := 0; i < len(s); i++ {
-		r := s[i]
+func (rs Results) FrequencyMap() FrequencyMap {
+	m := make(map[string]map[string]int64, len(rs))
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
 		for j := 0; j < len(r.Data); j++ {
 			p := r.Data[j]
 			for label, value := range r.Labels {

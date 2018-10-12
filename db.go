@@ -1,6 +1,7 @@
 package meter
 
 import (
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -10,28 +11,29 @@ import (
 
 const (
 	DefaultKeyPrefix = "meter"
+	DefaultSeparator = '\x1f'
 	DefaultScanSize  = 100
 )
 
 type DB struct {
-	Redis       *redis.Client
-	KeyPrefix   string
-	ScanSize    int64
-	concurrency chan struct{}
+	Redis        *redis.Client
+	KeyPrefix    string
+	KeySeparator byte
+	ScanSize     int64
+	concurrency  chan struct{} // controll concurrent scans
+	// once        sync.Once // load HADDNX script once
 }
 
 func NewDB(r *redis.Client) *DB {
 	db := new(DB)
 	db.Redis = r
 	db.KeyPrefix = DefaultKeyPrefix
+	db.KeySeparator = DefaultSeparator
 	db.ScanSize = DefaultScanSize
 	db.concurrency = make(chan struct{}, r.Options().PoolSize)
 
 	return db
 }
-
-const LabelSeparator = '\x1f'
-const FieldTerminator = '\x1e'
 
 func (db DB) Key(r Resolution, event string, t time.Time) (k string) {
 	b := getBuffer()
@@ -44,171 +46,86 @@ func (db DB) Key(r Resolution, event string, t time.Time) (k string) {
 func (db DB) AppendKey(data []byte, r Resolution, event string, t time.Time) []byte {
 	if db.KeyPrefix != "" {
 		data = append(data, db.KeyPrefix...)
-		data = append(data, LabelSeparator)
+		data = append(data, db.KeySeparator)
 	}
 	data = append(data, r.Name()...)
-	data = append(data, LabelSeparator)
+	data = append(data, db.KeySeparator)
 	data = append(data, r.MarshalTime(t)...)
-	data = append(data, LabelSeparator)
+	data = append(data, db.KeySeparator)
 	data = append(data, event...)
 	return data
 }
 
-const NilByte byte = 0
-const sNilByte = "\x00"
+// const NilByte byte = 0
+// const sNilByte = "\x00"
 
-func Field(labels, values []string) (f string) {
-	b := getBuffer()
-	b = AppendField(b[:0], labels, values)
-	f = string(b)
-	putBuffer(b)
-	return
-}
+const maxValueSize = 255
 
-func AppendField(data []byte, labels, values []string) []byte {
-	for i := 0; 0 <= i && i < len(labels); i++ {
-		label := labels[i]
-		if i != 0 {
-			data = append(data, LabelSeparator)
+func packField(data []byte, values, labels []string) []byte {
+	for _, v := range values {
+		if len(v) > maxValueSize {
+			v = v[:maxValueSize]
 		}
-		data = append(data, label...)
-		data = append(data, LabelSeparator)
-		if i < n {
-			value := values[i]
-			data = append(data, value...)
-		} else {
-			data = append(data, NilByte)
-		}
+		data = append(data, byte(len(v)))
+		data = append(data, v...)
 	}
-	data = append(data, FieldTerminator)
+	for i := len(values); i < len(labels); i++ {
+		data = append(data, 0)
+	}
 	return data
 }
 
-// func (db *DB) Sync() error {
-// 	return db.SyncAt(time.Now())
-// }
-
-// func (db *DB) SyncAt(tm time.Time) error {
-// 	return db.Registry.Sync(db, tm)
-// }
-
-func (db *DB) Gather(tm time.Time, events ...*Event) (err error) {
+func (db *DB) Gather(tm time.Time, e *Event) (err error) {
 	var (
-		values   []string
-		data     []byte
-		pipeline = db.Redis.Pipeline()
-		keysTTL  = make(map[string]time.Duration)
+		desc        = e.Describe()
+		name        = desc.Name()
+		t           = desc.Type()
+		labels      = desc.Labels()
+		data        = make([]byte, 64*len(labels))
+		pipeline    = db.Redis.Pipeline()
+		resolutions = desc.Resolutions()
+		keys        = make(map[string]Resolution, len(resolutions))
+		snapshot    = e.Flush(nil)
+		size        = 0
 	)
 	defer pipeline.Close()
-	for _, e := range events {
-		desc := e.Describe()
-		name := desc.Name()
-		labels := desc.Labels()
-		t := desc.Type()
-		s := e.Flush(nil)
-		for _, m := range s {
-			n := m.Count()
-			if n == 0 {
+	// lmap, err := db.labelMap(name, labels, s)
+	// if err != nil {
+	// 	return err
+	// }
+	for _, res := range resolutions {
+		key := db.Key(res, name, tm)
+		keys[key] = res
+	}
+	for _, m := range snapshot {
+		n := m.Count()
+		if n == 0 {
+			continue
+		}
+		data = packField(data[:0], m.values, labels)
+		field := string(data)
+		for key := range keys {
+			switch t {
+			case MetricTypeIncrement:
+				pipeline.HIncrBy(key, field, n)
+			case MetricTypeUpdateOnce:
+				pipeline.HSetNX(key, field, n)
+			case MetricTypeUpdate:
+				pipeline.HSet(key, field, n)
+			default:
 				continue
 			}
-			values = m.AppendValues(values[:0])
-			data = AppendField(data[:0], labels, values)
-			field := string(data)
-			for _, res := range desc.Resolutions() {
-				data = db.AppendKey(data[:0], res, name, tm)
-				key := string(data)
-				keysTTL[key] = res.TTL()
-				switch t {
-				case MetricTypeIncrement:
-					pipeline.HIncrBy(key, field, n)
-				case MetricTypeUpdateOnce:
-					pipeline.HSetNX(key, field, n)
-				case MetricTypeUpdate:
-					pipeline.HSet(key, field, n)
-				default:
-					continue
-				}
-			}
+			size++
 		}
-		for key, ttl := range keysTTL {
-			pipeline.Expire(key, ttl)
-		}
+	}
+	if size == 0 {
+		return
+	}
+	for key, res := range keys {
+		pipeline.Expire(key, res.TTL())
 	}
 	_, err = pipeline.Exec()
 	return
-}
-
-type ScanResult struct {
-	Event  string
-	Group  []string
-	Time   time.Time
-	Values LabelValues
-	err    error
-	count  int64
-}
-
-func AppendMatch(data []byte, s string) []byte {
-	for i := 0; i < len(s); i++ {
-		switch b := s[i]; b {
-		case '*', '[', ']', '?', '^':
-			data = append(data, '\\', b)
-		default:
-			data = append(data, b)
-		}
-	}
-	return data
-}
-
-func MatchField(labels []string, group []string, q map[string]string) (f string) {
-	b := getBuffer()
-	b = AppendMatchField(b[:0], labels, group, q)
-	f = string(b)
-	putBuffer(b)
-	return
-}
-func AppendMatchField(data []byte, labels []string, group []string, q map[string]string) []byte {
-	if len(group) == 0 && len(q) == 0 {
-		return append(data, '*')
-	}
-	for i := 0; i < len(labels); i++ {
-		if i != 0 {
-			data = append(data, LabelSeparator)
-		}
-		label := labels[i]
-		data = AppendMatch(data, label)
-		data = append(data, LabelSeparator)
-		if indexOf(group, label) >= 0 {
-			data = append(data, '[', '^', NilByte, ']', '*')
-			continue
-		}
-		if q != nil {
-			if v, ok := q[label]; ok {
-				data = AppendMatch(data, v)
-				continue
-			}
-		}
-		data = append(data, '*')
-
-	}
-	data = append(data, FieldTerminator)
-	return data
-}
-
-type resultCollector struct {
-	mu      sync.Mutex
-	results Results
-}
-
-func (c *resultCollector) Add(r ScanResult) {
-	c.mu.Lock()
-	c.results = r.AppendTo(c.results)
-	c.mu.Unlock()
-}
-func (c *resultCollector) Snapshot(r Results) Results {
-	c.mu.Lock()
-	r = append(r, c.results...)
-	c.mu.Unlock()
-	return r
 }
 
 func (db *DB) Query(queries ...Query) (Results, error) {
@@ -216,7 +133,7 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 		return Results{}, nil
 	}
 	mode := queries[0].Mode
-	results := new(resultCollector)
+	results := new(scanResults)
 	wg := new(sync.WaitGroup)
 	for _, q := range queries {
 		if err := q.Error(); err != nil {
@@ -228,7 +145,7 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 			case ModeExact:
 				db.exactQuery(results, q)
 			case ModeScan:
-				db.scanQuery2(results, q)
+				db.scanQuery(results, q)
 			case ModeValues:
 				db.valueQuery(results, q)
 			}
@@ -246,15 +163,15 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 	return Results{}, nil
 }
 
-func (db *DB) exactQuery(results *resultCollector, q Query) error {
+func (db *DB) exactQuery(results *scanResults, q Query) error {
 	var replies []*redis.StringCmd
 	if err := q.Error(); err != nil {
-		results.Add(ScanResult{err: err})
+		results.Add(scanResult{err: err})
+		return err
 	}
-	// Field/Key buffer
 	if len(q.Values) == 0 {
 		// Exact query without values is pointless
-		return nil
+		return fmt.Errorf("Invalid query")
 	}
 	data := []byte{}
 	res := q.Resolution
@@ -262,23 +179,25 @@ func (db *DB) exactQuery(results *resultCollector, q Query) error {
 	desc := q.Event.Describe()
 	labels := desc.Labels()
 	pipeline := db.Redis.Pipeline()
+	values := make([]string, len(labels))
 	defer pipeline.Close()
-	for _, values := range q.Values {
-		data = AppendField(data[:0], labels, LabelValues(values).Values(labels))
+	for _, v := range q.Values {
+		for i, label := range labels {
+			values[i] = v[label]
+		}
+		data = packField(data[:0], values, labels)
 		field := string(data)
 		for _, tm := range ts {
-			data = db.AppendKey(data[:0], res, desc.Name(), tm)
-			key := string(data)
+			key := db.Key(res, desc.Name(), tm)
 			replies = append(replies, pipeline.HGet(key, field))
 		}
 	}
 	if len(replies) == 0 {
-
 		return nil
 	}
-	db.concurrency <- struct{}{}
+	db.acquireQueue()
+	defer db.releaseQueue()
 	_, err := pipeline.Exec()
-	<-db.concurrency
 	if err != nil && err != redis.Nil {
 		return err
 	}
@@ -290,7 +209,7 @@ func (db *DB) exactQuery(results *resultCollector, q Query) error {
 			if err == redis.Nil {
 				err = nil
 			}
-			results.Add(ScanResult{
+			results.Add(scanResult{
 				Event:  desc.Name(),
 				Time:   tm,
 				Values: values,
@@ -302,271 +221,222 @@ func (db *DB) exactQuery(results *resultCollector, q Query) error {
 	return nil
 }
 
-func matchFieldToValues(field []string, values map[string]string) bool {
-	if values == nil {
+func matchField(field string, labels []string, values map[string]string) bool {
+	if len(values) == 0 {
+		// Match all
 		return true
 	}
 	n := 0
-	for i := 0; i < len(field); i += 2 {
-		key := field[i]
-		if v, ok := values[key]; ok {
-			if v == field[i+1] {
-				n++
-			} else {
-				return false
+	size := 0
+	for _, label := range labels {
+		if len(field) > 0 {
+			size = int(field[0])
+			field = field[1:]
+			if 0 <= size && size <= len(field) {
+				if v, ok := values[label]; ok {
+					if field[:size] != v {
+						return false
+					}
+					n++
+				}
+				field = field[size:]
+				continue
 			}
 		}
+		return false
 	}
 	return n == len(values)
 }
 
-func (db *DB) scan2(key string, r ScanResult, results *resultCollector, values ...map[string]string) (err error) {
-	scan := db.Redis.HScan(key, 0, "", db.ScanSize).Iterator()
-	i := 0
-	j := 0
-	var pairs []string
-	// group := len(r.Group) != 0
-	for scan.Next() {
-		if i%2 == 0 {
-			pairs = parseField(pairs[:0], scan.Val())
-		} else {
-			r.count, r.err = strconv.ParseInt(scan.Val(), 10, 64)
-			if r.err != nil {
-				results.Add(r)
-				j++
-				continue
-			}
-			for _, v := range values {
-				if len(v) == 0 {
-					r.Values = FieldLabels(pairs)
-				} else if matchFieldToValues(pairs, v) {
-					r.Values = LabelValues(v).Copy()
-				} else {
-					continue
-				}
-				results.Add(r)
-				j++
-			}
-		}
-		i++
-	}
-	if err = scan.Err(); err != nil {
-		return
-	}
-	if j == 0 {
-		// Report an empty result
-		results.Add(r)
-	}
-	return
-
+func (db *DB) acquireQueue() {
+	db.concurrency <- struct{}{}
+}
+func (db *DB) releaseQueue() {
+	<-db.concurrency
 }
 
-func (db *DB) scanQuery2(results *resultCollector, q Query) (err error) {
+func (db *DB) scanQuery(results *scanResults, q Query) (err error) {
 	desc := q.Event.Describe()
 	if e := desc.Error(); e != nil {
 		return e
 	}
-	result := ScanResult{
-		Event: desc.Name(),
-		Group: q.Group,
-	}
+	labels := desc.Labels()
 	res := q.Resolution
 	ts := res.TimeSequence(q.Start, q.End)
 	if len(ts) == 0 {
 		return
 	}
 	wg := new(sync.WaitGroup)
-	data := make([]byte, 256)
 	for _, tm := range ts {
-		result.Time = tm
-		data = db.AppendKey(data[:0], res, desc.Name(), tm)
-		key := string(data)
-		// Let redis client pool size determine parallel request blocking
 		wg.Add(1)
-		go func(r ScanResult, key string) {
-			db.scan2(key, r, results, q.Values...)
-			wg.Done()
-		}(result, key)
-	}
-	wg.Wait()
-	return nil
-
-}
-func (db *DB) scanQuery(results chan<- ScanResult, q Query) (err error) {
-	desc := q.Event.Describe()
-	if e := desc.Error(); e != nil {
-		return e
-	}
-	result := ScanResult{
-		Event: desc.Name(),
-		Group: q.Group,
-	}
-	res := q.Resolution
-	ts := res.TimeSequence(q.Start, q.End)
-	if len(ts) == 0 {
-		return
-	}
-	wg := &sync.WaitGroup{}
-	for _, values := range q.Values {
-		result.Values = values
-		data := AppendMatchField(nil, desc.Labels(), q.Group, values)
-		match := string(data)
-		// Let redis client pool size determine parallel request blocking
-		for _, tm := range ts {
-			result.Time = tm
-			data = db.AppendKey(data[:0], res, desc.Name(), tm)
-			key := string(data)
-			db.concurrency <- struct{}{}
-			wg.Add(1)
-			go func(r ScanResult, key string) {
-				db.scan(key, match, r, results)
-				<-db.concurrency
-				wg.Done()
-			}(result, key)
-		}
-	}
-	wg.Wait()
-
-	return nil
-}
-
-func parseField(values []string, field string) []string {
-	offset := 0
-	for i := 0; i < len(field); i++ {
-		switch field[i] {
-		case LabelSeparator:
-			values = append(values, field[offset:i])
-			offset = i + 1
-		case FieldTerminator:
-			values = append(values, field[offset:i])
-			offset = i + 1
-			break
-		}
-	}
-	if offset < len(field) {
-		values = append(values, field[offset:])
-	}
-	return values
-}
-
-func (db *DB) scan(key, match string, r ScanResult, results chan<- ScanResult) (err error) {
-	scan := db.Redis.HScan(key, 0, match, db.ScanSize).Iterator()
-	i := 0
-	var pairs []string
-	group := len(r.Group) != 0
-	for scan.Next() {
-		if i%2 == 0 {
-			if group {
-				pairs = parseField(pairs[:0], scan.Val())
-				r.Values = FieldLabels(pairs)
+		db.acquireQueue()
+		go func(tm time.Time) {
+			defer wg.Done()
+			defer db.releaseQueue()
+			key := db.Key(res, desc.Name(), tm)
+			scan := db.Redis.HScan(key, 0, "", db.ScanSize).Iterator()
+			var count int64
+			i := 0
+			j := 0
+			var field string
+			// group := len(r.Group) != 0
+			for scan.Next() {
+				if i%2 == 0 {
+					field = scan.Val()
+				} else {
+					count, err = strconv.ParseInt(scan.Val(), 10, 64)
+					if err != nil {
+						err = nil
+						continue
+					}
+					for _, v := range q.Values {
+						if len(v) == 0 {
+							v = fieldValues(field, labels)
+						} else if matchField(field, labels, v) {
+							v = copyValues(v)
+						} else {
+							continue
+						}
+						results.Add(scanResult{
+							Event:  desc.Name(),
+							Group:  q.Group,
+							Time:   tm,
+							Values: v,
+							count:  count,
+						})
+						j++
+					}
+				}
+				i++
 			}
-		} else {
-			r.count, r.err = strconv.ParseInt(scan.Val(), 10, 64)
-			results <- r
-		}
-		i++
+			if err = scan.Err(); err != nil {
+				return
+			}
+			if j == 0 {
+				// Report an empty result
+				results.Add(scanResult{
+					Event: desc.Name(),
+					Group: q.Group,
+					Time:  tm,
+				})
+			}
+			return
+		}(tm)
 	}
-	if err = scan.Err(); err != nil {
-		return
-	}
-	if i == 0 {
-		// Report an empty result
-		results <- r
-	}
-	return
+	wg.Wait()
+	return nil
 
 }
 
-type pair struct {
-	Label, Value string
-	Count        int64
+func copyValues(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	m := make(map[string]string, len(values))
+	for k, v := range values {
+		m[k] = v
+	}
+	return m
+}
+
+func fieldValues(field string, labels []string) map[string]string {
+	m := make(map[string]string, len(labels))
+	for _, label := range labels {
+		if len(field) > 0 {
+			size := int(field[0])
+			field = field[1:]
+			if 0 < size && size <= len(field) {
+				m[label] = field[:size]
+				field = field[size:]
+				continue
+			}
+		}
+		break
+	}
+	return m
 }
 
 // valueQuery return a frequency map of event label values
-func (db *DB) valueQuery(results *resultCollector, q Query) error {
-	desc := q.Event.Describe()
-	labels := desc.Labels()
-	r := ScanResult{
-		Event: desc.Name(),
-	}
+func (db *DB) valueQuery(results *scanResults, q Query) error {
 	wg := new(sync.WaitGroup)
-	data := []byte{}
 	ts := q.Resolution.TimeSequence(q.Start, q.End)
-
 	for _, t := range ts {
-		db.concurrency <- struct{}{}
+		db.acquireQueue()
 		wg.Add(1)
-		r.Time = t
-		data = db.AppendKey(data[:0], q.Resolution, desc.Name(), t)
-		key := string(data)
-		go func(key string) {
+		go func(t time.Time) {
+			defer wg.Done()
+			defer db.releaseQueue()
 			var n int64
-			field := make([]string, len(labels)*2)
+			desc := q.Event.Describe()
+			key := db.Key(q.Resolution, desc.Name(), t)
 			reply, err := db.Redis.HGetAll(key).Result()
-			if err == redis.Nil {
-				return
-			}
+			// if err == redis.Nil {
+			// 	return
+			// }
 			if err != nil {
-				r.err = err
-				results.Add(r)
 				return
 			}
+			labels := desc.Labels()
 			for key, value := range reply {
 				if n, _ = strconv.ParseInt(value, 10, 64); n == 0 {
 					continue
 				}
-				field = parseField(field[:0], key)
-				if len(q.Values) == 0 {
-					for i := 0; i < len(field); i += 2 {
-						r.Values = LabelValues{field[i]: field[i+1]}
-						r.count = n
-						results.Add(r)
+				match := false
+				for _, values := range q.Values {
+					match = matchField(key, labels, values)
+					if match {
+						break
 					}
-					continue
 				}
-				for j := 0; j < len(q.Values); j++ {
-					values := q.Values[j]
-					if !matchFieldToValues(field, values) {
-						continue
+				if match || len(q.Values) == 0 {
+					for k, v := range fieldValues(key, labels) {
+						results.Add(scanResult{
+							Event:  desc.Name(),
+							Group:  q.Group,
+							Time:   t,
+							Values: map[string]string{k: v},
+							count:  n,
+						})
 					}
-					for i := 0; i < len(field); i += 2 {
-						r.Values = LabelValues{field[i]: field[i+1]}
-						r.count = n
-						results.Add(r)
-					}
-					break
 				}
 			}
-
-			<-db.concurrency
-			wg.Done()
-		}(key)
+		}(t)
 	}
 	wg.Wait()
 	return nil
 }
 
-func CollectResults(scan <-chan ScanResult) <-chan Results {
-	out := make(chan Results)
-	go func() {
-		var results Results
-		for r := range scan {
-			if r.err != nil {
-				continue
-			}
-
-			results = r.AppendTo(results)
-		}
-		out <- results
-	}()
-	return out
-
+var bufferPool = &sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 256)
+	},
 }
 
-func (r ScanResult) AppendTo(results Results) Results {
+func getBuffer() []byte {
+	return bufferPool.Get().([]byte)
+}
+func putBuffer(b []byte) {
+	bufferPool.Put(b)
+}
+
+type scanResults struct {
+	mu      sync.Mutex
+	results Results
+}
+
+type scanResult struct {
+	Event  string
+	Group  []string
+	Time   time.Time
+	Values map[string]string
+	err    error
+	count  int64
+}
+
+func (r scanResult) AppendTo(results Results) Results {
 	values := r.Values
 	if r.Group != nil {
-		values = LabelValues{}
+		values = make(map[string]string, len(r.Group))
 		for _, g := range r.Group {
 			if v, ok := r.Values[g]; ok {
 				values[g] = v
@@ -591,15 +461,186 @@ func (r ScanResult) AppendTo(results Results) Results {
 	return results
 }
 
-var bufferPool = &sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 256)
-	},
+func (rs *scanResults) Add(r scanResult) {
+	rs.mu.Lock()
+	rs.results = r.AppendTo(rs.results)
+	rs.mu.Unlock()
+}
+func (rs *scanResults) Snapshot(r Results) Results {
+	rs.mu.Lock()
+	r = append(r, rs.results...)
+	rs.mu.Unlock()
+	return r
 }
 
-func getBuffer() []byte {
-	return bufferPool.Get().([]byte)
-}
-func putBuffer(b []byte) {
-	bufferPool.Put(b)
-}
+// var cmdHADDNX = redis.NewScript(`
+// 	-- HADDNX key member
+// 	local id = redis.call('HGET', KEYS[1], ARGV[1])
+// 	if id == false then
+// 		id = redis.call('INCR', KEYS[1] .. ':__nextid__')
+// 		redis.call('HSET', KEYS[1], ARGV[1], id)
+// 	end
+// 	return id
+// `)
+
+// type labelMap map[string]uint64
+
+// func (db *DB) labelMap(event string, labels []string, s Snapshot) ([]labelMap, error) {
+// 	keys := make([]string, len(labels))
+// 	m := make([]labelMap, len(labels))
+// 	for i, label := range labels {
+// 		keys[i] = fmt.Sprintf("event:%s:label:%s:index", event, label)
+// 		m[i] = labelMap{}
+// 	}
+// 	replies := make([]*redis.Cmd, 0, 64)
+// 	pipe := db.Redis.Pipeline()
+// 	defer pipe.Close()
+// 	for i := range s {
+// 		c := &s[i]
+// 		for i := range labels {
+// 			var v string
+// 			if 0 <= i && i < len(c.values) {
+// 				v = c.values[i]
+// 			}
+// 			if v == "" {
+// 				continue
+// 			}
+// 			mm := m[i]
+// 			if _, ok := mm[v]; !ok {
+// 				cmd := cmdHADDNX.Eval(pipe, []string{keys[i]}, v)
+// 				mm[v] = uint64(len(replies))
+// 				replies = append(replies, cmd)
+// 			}
+// 			m[i] = mm
+// 		}
+// 	}
+// 	_, err := pipe.Exec()
+// 	if err != nil {
+// 		if strings.HasPrefix(err.Error(), "NOSCRIPT ") {
+// 			cmdHADDNX.Load(db.Redis)
+// 			return db.labelMap(event, labels, s)
+// 		}
+// 		return nil, err
+// 	}
+// 	for _, mm := range m {
+// 		for v, index := range mm {
+// 			if index < uint64(len(replies)) {
+// 				reply, err := replies[index].Result()
+// 				if err != nil {
+// 					return nil, err
+// 				}
+// 				switch r := reply.(type) {
+// 				case string:
+// 					n, err := strconv.ParseUint(r, 10, 64)
+// 					if err != nil {
+// 						return nil, err
+// 					}
+// 					mm[v] = n
+// 				case int64:
+// 					mm[v] = uint64(r)
+// 				default:
+// 					return nil, fmt.Errorf("invalid reply")
+// 				}
+
+// 			} else {
+// 				return nil, fmt.Errorf("invalid index")
+// 			}
+// 		}
+// 	}
+// 	return m, nil
+// }
+
+// func CollectResults(scan <-chan ScanResult) <-chan Results {
+// 	out := make(chan Results)
+// 	go func() {
+// 		var results Results
+// 		for r := range scan {
+// 			if r.err != nil {
+// 				continue
+// 			}
+
+// 			results = r.AppendTo(results)
+// 		}
+// 		out <- results
+// 	}()
+// 	return out
+
+// }
+
+// func matchFieldToValues(field []string, values map[string]string) bool {
+// 	if values == nil {
+// 		return true
+// 	}
+// 	n := 0
+// 	for i := 0; i < len(field); i += 2 {
+// 		key := field[i]
+// 		if v, ok := values[key]; ok {
+// 			if v == field[i+1] {
+// 				n++
+// 			} else {
+// 				return false
+// 			}
+// 		}
+// 	}
+// 	return n == len(values)
+// }
+
+// func appendFieldValues(field string, labels, values []string) []string {
+// 	if len(field) > 0 {
+// 		size := int(field[0])
+// 		field = field[1:]
+// 		if 0 <= size && size <= len(field) {
+// 			values = append(values, field[:size])
+// 			field = field[size:]
+// 		}
+// 	}
+// 	return values
+// }
+
+// func AppendMatch(data []byte, s string) []byte {
+// 	for i := 0; i < len(s); i++ {
+// 		switch b := s[i]; b {
+// 		case '*', '[', ']', '?', '^':
+// 			data = append(data, '\\', b)
+// 		default:
+// 			data = append(data, b)
+// 		}
+// 	}
+// 	return data
+// }
+
+// func MatchField(labels []string, group []string, q map[string]string) (f string) {
+// 	b := getBuffer()
+// 	b = AppendMatchField(b[:0], labels, group, q)
+// 	f = string(b)
+// 	putBuffer(b)
+// 	return
+// }
+
+// func AppendMatchField(data []byte, labels []string, group []string, q map[string]string) []byte {
+// 	if len(group) == 0 && len(q) == 0 {
+// 		return append(data, '*')
+// 	}
+// 	for i := 0; i < len(labels); i++ {
+// 		if i != 0 {
+// 			data = append(data, LabelSeparator)
+// 		}
+// 		label := labels[i]
+// 		data = AppendMatch(data, label)
+// 		data = append(data, LabelSeparator)
+// 		if indexOf(group, label) >= 0 {
+// 			data = append(data, '[', '^', NilByte, ']', '*')
+// 			continue
+// 		}
+// 		if q != nil {
+// 			if v, ok := q[label]; ok {
+// 				data = AppendMatch(data, v)
+// 				continue
+// 			}
+// 		}
+// 		data = append(data, '*')
+
+// 	}
+// 	data = append(data, FieldTerminator)
+// 	return data
+// }

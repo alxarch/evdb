@@ -1,14 +1,8 @@
 package meter
 
 import (
-	"errors"
 	"sync"
-)
-
-var (
-	ErrInvalidEventLabel = errors.New("Invalid event label")
-	ErrInvalidGroupLabel = errors.New("Invalid group label")
-	ErrInvalidResolution = errors.New("Invalid event resolution")
+	"sync/atomic"
 )
 
 var nilDesc = &Desc{err: ErrNilDesc}
@@ -24,10 +18,9 @@ func NewEvent(desc *Desc) *Event {
 }
 
 type Event struct {
-	mu       sync.RWMutex
-	index    map[uint64][]int
-	counters []CounterAtomic
-	desc     *Desc
+	desc *Desc
+	mu   sync.RWMutex
+	Counters
 }
 
 func (e *Event) Len() (n int) {
@@ -38,148 +31,71 @@ func (e *Event) Len() (n int) {
 }
 
 // Reset clears all stored counters
-// WARNING: If a counter is referenced elsewere it will not be collected by Collect()
 func (e *Event) Reset() {
 	e.mu.Lock()
-	tmp := e.counters
-	for i := range tmp {
-		tmp[i].values = ""
-	}
-	e.counters = tmp[:0]
-	for h := range e.index {
-		delete(e.index, h)
-	}
+	e.Counters.Reset()
 	e.mu.Unlock()
 }
 
-var poolValues sync.Pool
-
-func (e *Event) WithLabels(m LabelValues) Counter {
-	x := poolValues.Get()
-	var values []string
-	if x == nil {
-		values = make([]string, len(e.desc.labels))
-		x = values
+func (e *Event) add(n int64, h uint64, values []string) int64 {
+	if e.index == nil {
+		e.index = make(map[uint64][]int, 64)
 	} else {
-		values = x.([]string)
-	}
-	values = m.AppendValues(values[:0], e.desc.labels)
-	c := e.findOrCreate(values)
-	poolValues.Put(x)
-	return c
-}
-
-func (e *Event) WithLabelValues(values ...string) Counter {
-	return e.findOrCreate(values)
-}
-
-func (e *Event) findOrCreate(values []string) *CounterAtomic {
-	var (
-		h   = hashNew()
-		ids []int
-		id  int
-		c   *CounterAtomic
-	)
-	for i, v := range values {
-		if i > 0 {
-			h = hashAddByte(h, LabelSeparator)
-		}
-		for j := 0; 0 <= j && j < len(v); j++ {
-			h = hashAddByte(h, v[j])
+		for _, i := range e.index[h] {
+			if 0 <= i && i < len(e.counters) {
+				c := &e.counters[i]
+				if c.Match(values) {
+					e.mu.Unlock()
+					return atomic.AddInt64(&c.n, n)
+				}
+			}
 		}
 	}
+	i := len(e.counters)
+	e.counters = append(e.counters, Counter{
+		n:      n,
+		values: values,
+	})
+	e.index[h] = append(e.index[h], i)
+	return n
+}
+
+func (e *Event) Add(n int64, values ...string) int64 {
+	h := valuesHash(values)
 	e.mu.RLock()
-	ids = e.index[h]
-	for _, id = range ids {
-		if 0 <= id && id < len(e.counters) {
-			c = &e.counters[id]
+	for _, i := range e.index[h] {
+		if 0 <= i && i < len(e.counters) {
+			c := &e.counters[i]
 			if c.Match(values) {
 				e.mu.RUnlock()
-				return c
+				return atomic.AddInt64(&c.n, n)
+
 			}
 		}
 	}
 	e.mu.RUnlock()
 	e.mu.Lock()
-	if e.index == nil {
-		e.index = make(map[uint64][]int)
-	}
-	ids = e.index[h]
-	for _, id = range ids {
-		if 0 <= id && id < len(e.counters) {
-			c = &e.counters[id]
-			if c.Match(values) {
-				e.mu.Unlock()
-				return c
-			}
-		}
-	}
-	id = len(e.counters)
-	e.counters = append(e.counters, CounterAtomic{values: joinValues(values)})
-	e.index[h] = append(e.index[h], id)
-	c = &e.counters[id]
+	// Copy avoids allocation for variadic values.
+	n = e.add(n, h, vcopy(values))
 	e.mu.Unlock()
-	return c
+	return n
 }
 
 func (e *Event) Describe() *Desc {
-	return e.desc
+	if e != nil {
+		return e.desc
+	}
+	return nil
 }
 
-const separatorByte byte = 255
-
-func valuesHash(values []string) (h uint64) {
-	var (
-		i int
-		v string
-	)
-	h = hashNew()
-	for _, v = range values {
-		for i = 0; 0 <= i && i < len(v); i++ {
-			h = hashAddByte(h, v[i])
-		}
-		h = hashAddByte(h, separatorByte)
-	}
-	return
-}
-
-func indexOf(values []string, s string) int {
-	for i := 0; 0 <= i && i < len(values); i++ {
-		if values[i] == s {
-			return i
-		}
-	}
-	return -1
-}
-
-func distinct(values ...string) []string {
-	if values == nil {
-		return []string{}
-	}
-	j := 0
-	for _, value := range values {
-		if 0 <= j && j < len(values) && indexOf(values[:j], value) == -1 {
-			values[j] = value
-			j++
-		}
-	}
-	return values[:j]
-}
-
-var poolSnapshot sync.Pool
+type Snapshot []Counter
 
 func (e *Event) Flush(s Snapshot) Snapshot {
-	n := e.Len()
-	if cap(s)-len(s) < n {
-		tmp := make([]CounterLocal, len(s), len(s)+n)
-		copy(tmp, s)
-		s = tmp
-	}
 	e.mu.RLock()
 	for i := range e.counters {
 		c := &e.counters[i]
-		s = append(s, CounterLocal{
-			n:      c.Set(0),
+		s = append(s, Counter{
+			n:      atomic.SwapInt64(&c.n, 0),
 			values: c.values,
 		})
 	}
@@ -188,18 +104,53 @@ func (e *Event) Flush(s Snapshot) Snapshot {
 }
 
 func (e *Event) Merge(s Snapshot) {
-	x := poolValues.Get()
-	var values []string
-	if x == nil {
-		values = make([]string, len(e.desc.labels))
-		x = values
-	} else {
-		values = x.([]string)
-	}
 	for i := range s {
 		c := &s[i]
-		values = appendRawValues(values[:0], c.values)
-		e.findOrCreate(values).Add(c.n)
+		e.Add(c.n, c.values...)
 	}
-	poolValues.Put(x)
 }
+
+// func (e *Event) with(tag string) (c *CounterAtomic) {
+// 	h := rawValuesHash(tag)
+// 	e.mu.RLock()
+// 	for _, c = range e.counters[h] {
+// 		if c.values == tag {
+// 			e.mu.RUnlock()
+// 			return
+// 		}
+// 	}
+// 	e.mu.RUnlock()
+// 	e.mu.Lock()
+// 	if e.counters == nil {
+// 		e.counters = make(map[uint64][]*CounterAtomic, 64)
+// 	} else {
+// 		for _, cc := range e.counters[h] {
+// 			if cc.values == tag {
+// 				e.mu.Unlock()
+// 				return c
+// 			}
+// 		}
+// 	}
+// 	c = new(CounterAtomic)
+// 	c.values = tag
+// 	e.counters[h] = append(e.counters[h], c)
+// 	e.mu.Unlock()
+// 	return c
+// }
+
+// func (e *Event) WithLabels(m map[string]string) Counter {
+// 	if e == nil {
+// 		return nil
+// 	}
+// 	desc := e.Describe()
+// 	labels := desc.Labels()
+// 	values := make([]string, len(labels))
+// 	for i, label := range labels {
+// 		values[i] = m[label]
+// 	}
+// 	return e.findOrCreate(values)
+// }
+
+// func (e *Event) WithLabelValues(values ...string) Counter {
+// 	return e.findOrCreate(values)
+// }

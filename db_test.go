@@ -1,4 +1,4 @@
-package meter_test
+package meter
 
 import (
 	"encoding/json"
@@ -9,14 +9,13 @@ import (
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter"
 	"github.com/go-redis/redis"
 )
 
-var reg = meter.NewRegistry()
-var resol = meter.ResolutionDaily.WithTTL(meter.Daily)
-var desc = meter.NewDesc(meter.MetricTypeIncrement, "test", []string{"foo", "bar"}, resol)
-var event = meter.NewEvent(desc)
+var reg = NewRegistry()
+var resol = ResolutionDaily.WithTTL(Daily)
+var desc = NewDesc(MetricTypeIncrement, "test", []string{"foo", "bar"}, resol)
+var event = NewEvent(desc)
 var rc = redis.NewClient(&redis.Options{
 	Addr: ":6379",
 	DB:   3,
@@ -28,25 +27,29 @@ func init() {
 
 func Test_ReadWrite(t *testing.T) {
 	defer rc.FlushDB()
-	db := meter.NewDB(rc)
-	n := event.WithLabelValues("bar", "baz").Add(1)
+	db := NewDB(rc)
+	n := event.Add(1, "bar", "baz")
 	if n != 1 {
 		t.Errorf("Invalid counter %d", n)
 	}
-	event.WithLabelValues("bax").Add(1)
+	n = event.Add(1, "bar", "baz")
+	if n != 2 {
+		t.Errorf("Invalid counter %d", n)
+	}
+	event.Add(1, "bax")
 	now := time.Now().In(time.UTC)
 	err := db.Gather(now, event)
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if n := db.Redis.HLen(db.Key(meter.ResolutionDaily, "test", now)).Val(); n != 2 {
+	if n := db.Redis.HLen(db.Key(ResolutionDaily, "test", now)).Val(); n != 2 {
 		t.Errorf("invalid gather %d", n)
 	}
 	if n := event.Len(); n != 2 {
 		t.Errorf("Wrong collector size %d", n)
 	}
 	q := url.Values{}
-	sq := meter.QueryBuilder{
+	sq := QueryBuilder{
 		Events:     []string{"test"},
 		Start:      now.Add(-72 * 3 * time.Hour),
 		End:        now,
@@ -66,11 +69,11 @@ func Test_ReadWrite(t *testing.T) {
 		t.Logf("result %d\n%+v\n", i, r)
 	}
 
-	c := meter.Controller{Q: db, Events: reg, TimeDecoder: resol}
+	c := Controller{Q: db, Events: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()
-	dt := now.Format(meter.DailyDateFormat)
+	dt := now.Format(DailyDateFormat)
 	res, err := s.Client().Get(s.URL + "?event=test&start=" + dt + "&end=" + dt + "&res=daily&foo=bar")
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
@@ -78,27 +81,27 @@ func Test_ReadWrite(t *testing.T) {
 		t.Errorf("Invalid response status %d: %s", res.StatusCode, res.Status)
 		data, _ := ioutil.ReadAll(res.Body)
 		res.Body.Close()
-		results = meter.Results{}
+		results = Results{}
 		json.Unmarshal(data, &results)
-		r := results.Find("test", meter.LabelValues{"foo": "bar"})
+		r := results.Find("test", map[string]string{"foo": "bar"})
 		if r == nil {
 			t.Errorf("Result not found %v", results)
 		}
 	}
 
-	results, _ = db.Query(meter.Query{
-		Mode:       meter.ModeValues,
+	results, _ = db.Query(Query{
+		Mode:       ModeValues,
 		Event:      event,
 		Start:      now,
 		End:        now,
-		Resolution: meter.ResolutionDaily,
+		Resolution: ResolutionDaily,
 	})
 	values := results.FrequencyMap()
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}
-	results, _ = db.Query(meter.Query{
-		Mode:  meter.ModeValues,
+	results, _ = db.Query(Query{
+		Mode:  ModeValues,
 		Event: event,
 		Start: now,
 		End:   now,
@@ -107,14 +110,14 @@ func Test_ReadWrite(t *testing.T) {
 				"foo": "bar",
 			},
 		},
-		Resolution: meter.ResolutionDaily,
+		Resolution: ResolutionDaily,
 	})
 	values = results.FrequencyMap()
 	if values["foo"] == nil {
 		t.Errorf("Missing 'foo'")
 	}
-	for k, v := range values {
-		t.Errorf("%s: %v", k, v)
+	// for k, v := range values {
+	// 	t.Errorf("%s: %v", k, v)
 
-	}
+	// }
 }

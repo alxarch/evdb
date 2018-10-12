@@ -1,27 +1,24 @@
-package meter_test
+package meter
 
 import (
 	"testing"
-
-	meter "github.com/alxarch/go-meter"
 )
 
-func Test_SplitValues(t *testing.T) {
-	if values := meter.SplitValues(""); len(values) != 0 {
-		t.Errorf("Invalid empty string split: %s", values)
+func BenchmarkLocalCounters_Add(b *testing.B) {
+	e := Counters{}
+	b.ReportAllocs()
+	for i := 0; i <= b.N; i++ {
+		e.Add(1, "BAR", "BAZ")
 	}
-	if values := meter.SplitValues("foo\x1fbar"); len(values) != 2 {
-		t.Errorf("Invalid empty string split: %s", values)
-	}
+
 }
+
 func Test_Counters(t *testing.T) {
-	cs := meter.LocalCounters{}
-	cs.WithLabelValues("foo", "bar").Add(1)
-	if n := cs.WithLabelValues("foo", "bar").Count(); n != 1 {
-		t.Errorf("Invalid counter value %d", n)
+	cs := Counters{}
+	cs.Add(1, "foo", "bar")
+	c := cs.counters[0]
+	if c.n != 1 {
+		t.Errorf("Invalid counter value %d", c.n)
 	}
-	cs.Reset()
-	if n := cs.WithLabelValues("foo", "bar").Count(); n != 0 {
-		t.Errorf("Invalid counter value %d", n)
-	}
+	// cs.Reset()
 }

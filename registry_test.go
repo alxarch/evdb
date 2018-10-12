@@ -1,15 +1,13 @@
-package meter_test
+package meter
 
 import (
 	"testing"
-
-	meter "github.com/alxarch/go-meter"
 )
 
 func Test_Registry(t *testing.T) {
-	r := meter.NewRegistry()
-	desc := meter.NewCounterDesc("foo", []string{})
-	e := meter.NewEvent(desc)
+	r := NewRegistry()
+	desc := NewCounterDesc("foo", []string{})
+	e := NewEvent(desc)
 	err := r.Register(e)
 	if err != nil {
 		t.Errorf("Non nil error %s", err)

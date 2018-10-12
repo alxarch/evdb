@@ -11,12 +11,16 @@ var (
 	ErrNilEvent          = errors.New("Event is nil")
 	ErrNilDesc           = errors.New("Desc is nil")
 	ErrUnregisteredEvent = errors.New("Unregistered event")
+	ErrInvalidEventLabel = errors.New("Invalid event label")
+	ErrInvalidGroupLabel = errors.New("Invalid group label")
+	ErrInvalidResolution = errors.New("Invalid event resolution")
 )
 
 type Registry struct {
 	events map[string]*Event
 	mu     sync.RWMutex
 }
+
 type Resolver interface {
 	Get(eventName string) *Event
 }

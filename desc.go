@@ -2,7 +2,6 @@ package meter
 
 import (
 	"net/url"
-	"time"
 )
 
 type Desc struct {
@@ -13,20 +12,21 @@ type Desc struct {
 	t           MetricType
 }
 
+type MetricType uint8
+
+const (
+	_                    MetricType = iota
+	MetricTypeIncrement             // Increment value on store
+	MetricTypeUpdateOnce            // Update value once on store
+	MetricTypeUpdate                // Update value on store
+)
+
 func (d *Desc) Describe() *Desc {
 	return d
 }
 
 type Descriptor interface {
 	Describe() *Desc
-}
-type Snapshot []CounterLocal
-type Collector interface {
-	Collect(s Snapshot) Snapshot
-	Merge(s Snapshot)
-}
-type Gatherer interface {
-	Gather(col Collector, tm time.Time) error
 }
 
 func NewCounterDesc(name string, labels []string, res ...Resolution) *Desc {
@@ -71,22 +71,22 @@ func (d *Desc) Resolution(name string) (r Resolution, ok bool) {
 	return
 }
 
-func (d *Desc) LabelIndex(label string) int {
-	return indexOf(d.labels, label)
-}
+// func (d *Desc) LabelIndex(label string) int {
+// 	return indexOf(d.labels, label)
+// }
 func (d *Desc) HasLabel(label string) bool {
 	return indexOf(d.labels, label) != -1
 }
 
-func (d *Desc) LabelValues(values []string) LabelValues {
-	lvs := LabelValues{}
-	for i := 0; i < len(d.labels) && i < len(values); i++ {
-		if v := values[i]; v != "" {
-			lvs[d.labels[i]] = values[i]
-		}
-	}
-	return lvs
-}
+// func (d *Desc) LabelValues(values []string) LabelValues {
+// 	lvs := LabelValues{}
+// 	for i := 0; i < len(d.labels) && i < len(values); i++ {
+// 		if v := values[i]; v != "" {
+// 			lvs[d.labels[i]] = values[i]
+// 		}
+// 	}
+// 	return lvs
+// }
 
 func distinctNonZeroResolutions(res ...Resolution) []Resolution {
 	if res == nil {
@@ -109,15 +109,55 @@ iloop:
 	return res[:n]
 }
 
-func (e *Desc) MatchingQueries(q url.Values) url.Values {
-	if e == nil || q == nil {
+func (d *Desc) MatchingQueries(q url.Values) url.Values {
+	if d == nil || q == nil {
 		return nil
 	}
 	m := make(map[string][]string, len(q))
 	for key, values := range q {
-		if e.HasLabel(key) {
+		if d.HasLabel(key) {
 			m[key] = values
 		}
 	}
 	return m
 }
+
+func indexOf(values []string, s string) int {
+	for i := 0; 0 <= i && i < len(values); i++ {
+		if values[i] == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func distinct(values ...string) []string {
+	if values == nil {
+		return []string{}
+	}
+	j := 0
+	for _, value := range values {
+		if 0 <= j && j < len(values) && indexOf(values[:j], value) == -1 {
+			values[j] = value
+			j++
+		}
+	}
+	return values[:j]
+}
+
+// func (d *Desc) joinValues(values []string) string {
+// 	s := strings.Builder{}
+// 	for _, v := range values {
+// 		if len(v) > maxValueSize {
+// 			v = v[:maxValueSize]
+// 		}
+// 		s.WriteByte(byte(len(v)))
+// 		s.WriteString(v)
+// 	}
+// 	if d != nil {
+// 		for i := len(values); i < len(d.labels); i++ {
+// 			s.WriteByte(0)
+// 		}
+// 	}
+// 	return s.String()
+// }
