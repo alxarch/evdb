@@ -1,27 +1,35 @@
 package meter
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 )
-
-var nilDesc = &Desc{err: ErrNilDesc}
-
-func NewEvent(desc *Desc) *Event {
-	if desc == nil {
-		desc = nilDesc
-	}
-
-	return &Event{
-		desc: desc,
-	}
-}
 
 type Event struct {
 	desc     *Desc
 	mu       sync.RWMutex
 	counters []Counter
 	index    map[uint64][]int
+}
+
+var nilDesc = &Desc{err: ErrNilDesc}
+
+const (
+	defaultEventSize = 64
+)
+
+func NewEvent(desc *Desc) *Event {
+	if desc == nil {
+		desc = nilDesc
+	}
+	e := Event{
+		desc:     desc,
+		counters: make([]Counter, 0, defaultEventSize),
+		index:    make(map[uint64][]int, defaultEventSize),
+	}
+
+	return &e
 }
 
 func (e *Event) Len() (n int) {
@@ -42,14 +50,8 @@ func (e *Event) add(n int64, h uint64, values []string) int64 {
 	if e.index == nil {
 		e.index = make(map[uint64][]int, 64)
 	} else {
-		for _, i := range e.index[h] {
-			if 0 <= i && i < len(e.counters) {
-				c := &e.counters[i]
-				if c.Match(values) {
-					e.mu.Unlock()
-					return atomic.AddInt64(&c.n, n)
-				}
-			}
+		if c := e.find(h, values); c != nil {
+			return atomic.AddInt64(&c.n, n)
 		}
 	}
 	i := len(e.counters)
@@ -61,20 +63,41 @@ func (e *Event) add(n int64, h uint64, values []string) int64 {
 	return n
 }
 
-func (e *Event) Add(n int64, values ...string) int64 {
-	h := valuesHash(values)
-	e.mu.RLock()
+func (e *Event) find(h uint64, values []string) *Counter {
 	for _, i := range e.index[h] {
 		if 0 <= i && i < len(e.counters) {
 			c := &e.counters[i]
 			if c.Match(values) {
-				e.mu.RUnlock()
-				return atomic.AddInt64(&c.n, n)
-
+				return c
 			}
 		}
 	}
+	return nil
+}
+
+func (e *Event) AddVolatile(n int64, values ...string) int64 {
+	h := vhash(values)
+	e.mu.RLock()
+	c := e.find(h, values)
 	e.mu.RUnlock()
+	if c != nil {
+		return atomic.AddInt64(&c.n, n)
+	}
+	e.mu.Lock()
+	// Copy avoids allocation for variadic values.
+	n = e.add(n, h, vdeepcopy(values))
+	e.mu.Unlock()
+	return n
+}
+
+func (e *Event) Add(n int64, values ...string) int64 {
+	h := vhash(values)
+	e.mu.RLock()
+	c := e.find(h, values)
+	e.mu.RUnlock()
+	if c != nil {
+		return atomic.AddInt64(&c.n, n)
+	}
 	e.mu.Lock()
 	// Copy avoids allocation for variadic values.
 	n = e.add(n, h, vcopy(values))
@@ -141,13 +164,9 @@ func (e *Event) pack() {
 	e.counters = counters
 }
 
-func valuesHash(values []string) (h uint64) {
+func vhash(values []string) (h uint64) {
 	h = hashNew()
 	for _, v := range values {
-		// if len(v) > maxValueSize {
-		// 	v = v[:maxValueSize]
-		// }
-		// hashAddByte(h, byte(len(v)))
 		for i := 0; 0 <= i && i < len(v); i++ {
 			h = hashAddByte(h, v[i])
 		}
@@ -156,6 +175,23 @@ func valuesHash(values []string) (h uint64) {
 	return
 }
 
+func vdeepcopy(values []string) []string {
+	s := strings.Builder{}
+	n := 0
+	for _, v := range values {
+		n += len(v)
+	}
+	s.Grow(n)
+	cp := make([]string, len(values))
+	for i, v := range values {
+		n = s.Len()
+		s.WriteString(v)
+		v = s.String()
+		cp[i] = v[n:]
+	}
+	return cp
+
+}
 func vcopy(values []string) []string {
 	cp := make([]string, len(values))
 	for i, v := range values {
