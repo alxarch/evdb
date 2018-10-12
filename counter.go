@@ -81,7 +81,10 @@ func (cc *Counters) Len() int {
 
 func (cc *Counters) Flush(s Snapshot) Snapshot {
 	s = append(s, cc.counters...)
-	cc.Reset()
+	for i := range cc.counters {
+		c := &cc.counters[i]
+		c.n = 0
+	}
 	return s
 }
 
@@ -92,24 +95,30 @@ func (cc *Counters) Merge(s Snapshot) {
 	}
 }
 
-func (cc *Counters) Reset() {
+func (cc *Counters) Pack() {
+	if len(cc.counters) == 0 {
+		return
+	}
+	counters := make([]Counter, len(cc.counters))
 	for h, idx := range cc.index {
-		ok := false
+		var packed []int
 		for _, i := range idx {
-			if 0 <= i && i < len(cc.counters) {
-				if c := &cc.counters[i]; c.n != 0 {
-					ok = true
-					break
-				}
+			c := cc.get(i)
+			if c.n != 0 {
+				packed = append(packed, len(counters))
+				counters = append(counters, Counter{
+					n:      c.n,
+					values: c.values,
+				})
 			}
 		}
-		if ok {
-			cc.index[h] = idx[:0]
-		} else {
+		if len(packed) == 0 {
 			delete(cc.index, h)
+		} else {
+			cc.index[h] = packed
 		}
 	}
-	cc.counters = cc.counters[:0]
+	cc.counters = counters
 }
 
 func valuesHash(values []string) (h uint64) {

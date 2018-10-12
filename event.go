@@ -30,10 +30,10 @@ func (e *Event) Len() (n int) {
 	return
 }
 
-// Reset clears all stored counters
-func (e *Event) Reset() {
+// Pack packs the event index dropping zero counters
+func (e *Event) Pack() {
 	e.mu.Lock()
-	e.Counters.Reset()
+	e.Counters.Pack()
 	e.mu.Unlock()
 }
 
