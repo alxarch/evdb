@@ -18,9 +18,10 @@ func NewEvent(desc *Desc) *Event {
 }
 
 type Event struct {
-	desc *Desc
-	mu   sync.RWMutex
-	Counters
+	desc     *Desc
+	mu       sync.RWMutex
+	counters []Counter
+	index    map[uint64][]int
 }
 
 func (e *Event) Len() (n int) {
@@ -33,7 +34,7 @@ func (e *Event) Len() (n int) {
 // Pack packs the event index dropping zero counters
 func (e *Event) Pack() {
 	e.mu.Lock()
-	e.Counters.Pack()
+	e.pack()
 	e.mu.Unlock()
 }
 
@@ -88,8 +89,6 @@ func (e *Event) Describe() *Desc {
 	return nil
 }
 
-type Snapshot []Counter
-
 func (e *Event) Flush(s Snapshot) Snapshot {
 	e.mu.RLock()
 	for i := range e.counters {
@@ -108,6 +107,61 @@ func (e *Event) Merge(s Snapshot) {
 		c := &s[i]
 		e.Add(c.n, c.values...)
 	}
+}
+
+func (e *Event) get(i int) *Counter {
+	if 0 <= i && i < len(e.counters) {
+		return &e.counters[i]
+	}
+	return nil
+}
+func (e *Event) pack() {
+	if len(e.counters) == 0 {
+		return
+	}
+	counters := make([]Counter, len(e.counters))
+	for h, idx := range e.index {
+		var packed []int
+		for _, i := range idx {
+			c := e.get(i)
+			if c.n != 0 {
+				packed = append(packed, len(counters))
+				counters = append(counters, Counter{
+					n:      c.n,
+					values: c.values,
+				})
+			}
+		}
+		if len(packed) == 0 {
+			delete(e.index, h)
+		} else {
+			e.index[h] = packed
+		}
+	}
+	e.counters = counters
+}
+
+func valuesHash(values []string) (h uint64) {
+	h = hashNew()
+	for _, v := range values {
+		// if len(v) > maxValueSize {
+		// 	v = v[:maxValueSize]
+		// }
+		// hashAddByte(h, byte(len(v)))
+		for i := 0; 0 <= i && i < len(v); i++ {
+			h = hashAddByte(h, v[i])
+		}
+
+	}
+	return
+}
+
+func vcopy(values []string) []string {
+	cp := make([]string, len(values))
+	for i, v := range values {
+		cp[i] = v
+	}
+	return cp
 }
 
 // func (e *Event) with(tag string) (c *CounterAtomic) {

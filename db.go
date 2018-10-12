@@ -9,12 +9,6 @@ import (
 	"github.com/go-redis/redis"
 )
 
-const (
-	DefaultKeyPrefix = "meter"
-	DefaultSeparator = '\x1f'
-	DefaultScanSize  = 100
-)
-
 type DB struct {
 	Redis        *redis.Client
 	KeyPrefix    string
@@ -23,6 +17,13 @@ type DB struct {
 	concurrency  chan struct{} // controll concurrent scans
 	// once        sync.Once // load HADDNX script once
 }
+
+// DB defaults
+const (
+	DefaultKeyPrefix = "meter"
+	DefaultSeparator = '\x1f'
+	DefaultScanSize  = 100
+)
 
 func NewDB(r *redis.Client) *DB {
 	db := new(DB)
@@ -102,7 +103,7 @@ func (db *DB) Gather(tm time.Time, e *Event) (err error) {
 		if n == 0 {
 			continue
 		}
-		data = packField(data[:0], m.values, labels)
+		data = packField(data[:0], m.Values(), labels)
 		field := string(data)
 		for key := range keys {
 			switch t {
