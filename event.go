@@ -138,13 +138,14 @@ func (e *Event) get(i int) *Counter {
 	}
 	return nil
 }
+
 func (e *Event) pack() {
 	if len(e.counters) == 0 {
 		return
 	}
-	counters := make([]Counter, len(e.counters))
+	counters := make([]Counter, 0, len(e.counters))
 	for h, idx := range e.index {
-		var packed []int
+		packed := idx[:0]
 		for _, i := range idx {
 			c := e.get(i)
 			if c.n != 0 {
