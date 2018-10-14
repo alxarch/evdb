@@ -76,6 +76,24 @@ func packField(data []byte, values, labels []string) []byte {
 	return data
 }
 
+func (db *DB) Batch(tm time.Time, events ...*Event) (err []error) {
+	wg := sync.WaitGroup{}
+	errCh := make(chan error, len(events))
+	for _, e := range events {
+		wg.Add(1)
+		go func(e *Event) {
+			errCh <- db.Gather(tm, e)
+			wg.Done()
+		}(e)
+	}
+	wg.Wait()
+	close(errCh)
+	for e := range errCh {
+		err = append(err, e)
+	}
+	return
+}
+
 func (db *DB) Gather(tm time.Time, e *Event) (err error) {
 	var (
 		desc        = e.Describe()
