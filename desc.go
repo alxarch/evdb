@@ -21,6 +21,19 @@ const (
 	MetricTypeUpdate                // Update value on store
 )
 
+func (t MetricType) RedisCmd() string {
+	switch t {
+	case MetricTypeIncrement:
+		return "HINCRBY"
+	case MetricTypeUpdateOnce:
+		return "HSETNX"
+	case MetricTypeUpdate:
+		return "HSET"
+	default:
+		return ""
+	}
+}
+
 func (d *Desc) Describe() *Desc {
 	return d
 }

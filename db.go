@@ -1,20 +1,20 @@
 package meter
 
 import (
+	"errors"
 	"fmt"
-	"strconv"
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis"
+	"github.com/gomodule/redigo/redis"
 )
 
 type DB struct {
-	Redis        *redis.Client
+	Redis        *redis.Pool
 	KeyPrefix    string
 	KeySeparator byte
 	ScanSize     int64
-	concurrency  chan struct{} // controll concurrent scans
+	// concurrency  chan struct{} // controll concurrent scans
 	// once        sync.Once // load HADDNX script once
 }
 
@@ -25,13 +25,13 @@ const (
 	DefaultScanSize  = 100
 )
 
-func NewDB(r *redis.Client) *DB {
+func NewDB(r *redis.Pool) *DB {
 	db := new(DB)
 	db.Redis = r
 	db.KeyPrefix = DefaultKeyPrefix
 	db.KeySeparator = DefaultSeparator
 	db.ScanSize = DefaultScanSize
-	db.concurrency = make(chan struct{}, r.Options().PoolSize)
+	// db.concurrency = make(chan struct{}, r.MaxActive)
 
 	return db
 }
@@ -111,16 +111,12 @@ func (db *DB) gather(tm time.Time, desc *Desc, snapshot Snapshot) (err error) {
 		t           = desc.Type()
 		labels      = desc.Labels()
 		data        = make([]byte, 64*len(labels))
-		pipeline    = db.Redis.Pipeline()
+		pipeline    = db.Redis.Get()
 		resolutions = desc.Resolutions()
 		keys        = make(map[string]Resolution, len(resolutions))
 		size        = 0
 	)
 	defer pipeline.Close()
-	// lmap, err := db.labelMap(name, labels, s)
-	// if err != nil {
-	// 	return err
-	// }
 	for _, res := range resolutions {
 		key := db.Key(res, name, tm)
 		keys[key] = res
@@ -133,16 +129,7 @@ func (db *DB) gather(tm time.Time, desc *Desc, snapshot Snapshot) (err error) {
 		data = packField(data[:0], m.Values(), labels)
 		field := string(data)
 		for key := range keys {
-			switch t {
-			case MetricTypeIncrement:
-				pipeline.HIncrBy(key, field, n)
-			case MetricTypeUpdateOnce:
-				pipeline.HSetNX(key, field, n)
-			case MetricTypeUpdate:
-				pipeline.HSet(key, field, n)
-			default:
-				continue
-			}
+			pipeline.Send(t.RedisCmd(), key, field, n)
 			size++
 		}
 	}
@@ -150,9 +137,9 @@ func (db *DB) gather(tm time.Time, desc *Desc, snapshot Snapshot) (err error) {
 		return
 	}
 	for key, res := range keys {
-		pipeline.Expire(key, res.TTL())
+		pipeline.Send("PEXPIRE", key, res.TTL()/time.Millisecond)
 	}
-	_, err = pipeline.Exec()
+	_, err = pipeline.Do("")
 	return
 }
 
@@ -192,7 +179,7 @@ func (db *DB) Query(queries ...Query) (Results, error) {
 }
 
 func (db *DB) exactQuery(results *scanResults, q Query) error {
-	var replies []*redis.StringCmd
+	var replies []interface{}
 	if err := q.Error(); err != nil {
 		results.Add(scanResult{err: err})
 		return err
@@ -206,9 +193,9 @@ func (db *DB) exactQuery(results *scanResults, q Query) error {
 	ts := res.TimeSequence(q.Start, q.End)
 	desc := q.Event.Describe()
 	labels := desc.Labels()
-	pipeline := db.Redis.Pipeline()
-	values := make([]string, len(labels))
+	pipeline := db.Redis.Get()
 	defer pipeline.Close()
+	values := make([]string, len(labels))
 	for _, v := range q.Values {
 		for i, label := range labels {
 			values[i] = v[label]
@@ -217,26 +204,20 @@ func (db *DB) exactQuery(results *scanResults, q Query) error {
 		field := string(data)
 		for _, tm := range ts {
 			key := db.Key(res, desc.Name(), tm)
-			replies = append(replies, pipeline.HGet(key, field))
+			replies = append(replies, pipeline.Send("HGET", key, field))
 		}
 	}
 	if len(replies) == 0 {
 		return nil
 	}
-	db.acquireQueue()
-	defer db.releaseQueue()
-	_, err := pipeline.Exec()
-	if err != nil && err != redis.Nil {
+	err := pipeline.Flush()
+	if err != nil {
 		return err
 	}
 
-	for i, values := range q.Values {
-		for j, tm := range ts {
-			reply := replies[i*len(ts)+j]
-			n, err := reply.Int64()
-			if err == redis.Nil {
-				err = nil
-			}
+	for _, values := range q.Values {
+		for _, tm := range ts {
+			n, err := redis.Int64(pipeline.Receive())
 			results.Add(scanResult{
 				Event:  desc.Name(),
 				Time:   tm,
@@ -276,11 +257,49 @@ func matchField(field string, labels []string, values map[string]string) bool {
 	return n == len(values)
 }
 
-func (db *DB) acquireQueue() {
-	db.concurrency <- struct{}{}
+// func (db *DB) acquireQueue() {
+// 	db.concurrency <- struct{}{}
+// }
+// func (db *DB) releaseQueue() {
+// 	<-db.concurrency
+// }
+
+type scanIterator struct {
+	cursor int64
+	page   map[string]int64
 }
-func (db *DB) releaseQueue() {
-	<-db.concurrency
+
+func (it *scanIterator) Scan(conn redis.Conn, key string, size int64) (bool, error) {
+	reply, err := conn.Do("HSCAN", key, it.cursor, "COUNT", size)
+	if err != nil {
+		return false, err
+	}
+	err = it.RedisScan(reply)
+	if err != nil {
+		return false, err
+	}
+	return it.cursor != 0, nil
+
+}
+
+func (it *scanIterator) RedisScan(src interface{}) error {
+	scanReply, err := redis.Values(src, nil)
+	if err != nil {
+		return err
+	}
+	if len(scanReply) != 2 {
+		return errors.New("Invalid scan reply")
+	}
+	it.cursor, err = redis.Int64(scanReply[0], nil)
+	if err != nil {
+		return err
+	}
+	page, err := redis.Int64Map(scanReply[1], nil)
+	if err != nil {
+		return err
+	}
+	it.page = page
+	return nil
 }
 
 func (db *DB) scanQuery(results *scanResults, q Query) (err error) {
@@ -297,26 +316,20 @@ func (db *DB) scanQuery(results *scanResults, q Query) (err error) {
 	wg := new(sync.WaitGroup)
 	for _, tm := range ts {
 		wg.Add(1)
-		db.acquireQueue()
 		go func(tm time.Time) {
 			defer wg.Done()
-			defer db.releaseQueue()
 			key := db.Key(res, desc.Name(), tm)
-			scan := db.Redis.HScan(key, 0, "", db.ScanSize).Iterator()
-			var count int64
-			i := 0
-			j := 0
-			var field string
-			// group := len(r.Group) != 0
-			for scan.Next() {
-				if i%2 == 0 {
-					field = scan.Val()
-				} else {
-					count, err = strconv.ParseInt(scan.Val(), 10, 64)
-					if err != nil {
-						err = nil
-						continue
-					}
+			it := scanIterator{}
+			hasMore := true
+			numResults := 0
+			for hasMore {
+				conn := db.Redis.Get()
+				hasMore, err = it.Scan(conn, key, db.ScanSize)
+				conn.Close()
+				if err != nil {
+					return
+				}
+				for field, count := range it.page {
 					for _, v := range q.Values {
 						if len(v) == 0 {
 							v = fieldValues(field, labels)
@@ -332,15 +345,11 @@ func (db *DB) scanQuery(results *scanResults, q Query) (err error) {
 							Values: v,
 							count:  count,
 						})
-						j++
+						numResults++
 					}
 				}
-				i++
 			}
-			if err = scan.Err(); err != nil {
-				return
-			}
-			if j == 0 {
+			if numResults == 0 {
 				// Report an empty result
 				results.Add(scanResult{
 					Event: desc.Name(),
@@ -389,35 +398,34 @@ func (db *DB) valueQuery(results *scanResults, q Query) error {
 	wg := new(sync.WaitGroup)
 	ts := q.Resolution.TimeSequence(q.Start, q.End)
 	for _, t := range ts {
-		db.acquireQueue()
+		// db.acquireQueue()
 		wg.Add(1)
 		go func(t time.Time) {
 			defer wg.Done()
-			defer db.releaseQueue()
+			// defer db.releaseQueue()
 			var n int64
 			desc := q.Event.Describe()
 			key := db.Key(q.Resolution, desc.Name(), t)
-			reply, err := db.Redis.HGetAll(key).Result()
-			// if err == redis.Nil {
-			// 	return
-			// }
+			conn := db.Redis.Get()
+			defer conn.Close()
+			reply, err := redis.Int64Map(conn.Do("HGETALL", key))
 			if err != nil {
 				return
 			}
 			labels := desc.Labels()
-			for key, value := range reply {
-				if n, _ = strconv.ParseInt(value, 10, 64); n == 0 {
+			for field, count := range reply {
+				if count == 0 {
 					continue
 				}
 				match := false
 				for _, values := range q.Values {
-					match = matchField(key, labels, values)
+					match = matchField(field, labels, values)
 					if match {
 						break
 					}
 				}
 				if match || len(q.Values) == 0 {
-					for k, v := range fieldValues(key, labels) {
+					for k, v := range fieldValues(field, labels) {
 						results.Add(scanResult{
 							Event:  desc.Name(),
 							Group:  q.Group,

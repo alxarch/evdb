@@ -9,24 +9,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis"
+	"github.com/gomodule/redigo/redis"
 )
 
 var reg = NewRegistry()
 var resol = ResolutionDaily.WithTTL(Daily)
 var desc = NewDesc(MetricTypeIncrement, "test", []string{"foo", "bar"}, resol)
 var event = NewEvent(desc)
-var rc = redis.NewClient(&redis.Options{
-	Addr: ":6379",
-	DB:   3,
-})
+var rc = &redis.Pool{
+	Dial: func() (redis.Conn, error) {
+		return redis.DialURL("redis://127.0.0.1/9")
+	},
+}
 
 func init() {
 	reg.Register(event)
 }
 
 func Test_ReadWrite(t *testing.T) {
-	defer rc.FlushDB()
+	conn := rc.Get()
+	defer func() {
+		conn.Do("FLUSHDB")
+		conn.Close()
+	}()
 	db := NewDB(rc)
 	n := event.Add(1, "bar", "baz")
 	if n != 1 {
@@ -42,7 +47,7 @@ func Test_ReadWrite(t *testing.T) {
 	if err != nil {
 		t.Errorf("Unexpected error %s", err)
 	}
-	if n := db.Redis.HLen(db.Key(ResolutionDaily, "test", now)).Val(); n != 2 {
+	if n, _ := redis.Int64(conn.Do("HLEN", db.Key(ResolutionDaily, "test", now))); n != 2 {
 		t.Errorf("invalid gather %d", n)
 	}
 	if n := event.Len(); n != 2 {
