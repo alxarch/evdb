@@ -1,10 +1,13 @@
 package meter
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
+	"sync"
 	"time"
 
 	"github.com/alxarch/go-meter/tcodec"
@@ -75,38 +78,192 @@ func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err erro
 
 }
 
+type Logger interface {
+	Printf(format string, args ...interface{})
+}
+
 type Controller struct {
-	Q           Queryer
-	Events      Resolver
-	TimeDecoder tcodec.TimeDecoder
+	DB *DB
+	*Registry
+	Logger        Logger
+	TimeDecoder   tcodec.TimeDecoder
+	FlushInterval time.Duration
+	once          sync.Once
+	closeCh       chan struct{}
+	wg            sync.WaitGroup
+}
+
+func (c *Controller) Close() {
+	if c.closeCh == nil {
+		return
+	}
+	close(c.closeCh)
+	c.wg.Wait()
+}
+
+func (c *Controller) Flush(t time.Time) {
+	events := c.Registry.Events()
+	errCh := make(chan error, len(events))
+	c.wg.Add(1)
+	defer c.wg.Done()
+	for _, e := range events {
+		c.wg.Add(1)
+		go func(e *Event) {
+			errCh <- c.DB.Gather(t, e)
+			c.wg.Done()
+		}(e)
+	}
+	c.wg.Wait()
+	close(errCh)
+	if c.Logger != nil {
+		for _, e := range events {
+			err, ok := <-errCh
+			if !ok {
+				break
+			}
+			if err != nil {
+				c.Logger.Printf("Failed to sync event %s: %s", e.Describe().Name(), err)
+			}
+		}
+	}
+
+}
+func (c *Controller) init() {
+	if c.FlushInterval > 0 {
+		c.closeCh = make(chan struct{})
+		go c.runFlush(c.FlushInterval)
+	}
+}
+
+func (c *Controller) runFlush(interval time.Duration) {
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case t := <-tick.C:
+			go c.Flush(t)
+		case <-c.closeCh:
+			return
+		}
+	}
 }
 
 func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		return
-	}
-	q := r.URL.Query()
-	qb, err := ParseQuery(q, c.TimeDecoder)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
+	switch r.Method {
+	case http.MethodGet:
+		q := r.URL.Query()
+		qb, err := ParseQuery(q, c.TimeDecoder)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-	var output interface{}
-	events := c.Events
-	if events == nil {
-		events = defaultRegistry
-	}
-	queries := qb.Queries(events)
-	results, _ := c.Q.Query(queries...)
-	switch qb.Mode {
-	case ModeValues:
-		output = results.FrequencyMap()
+		var output interface{}
+		events := c.Registry
+		if events == nil {
+			events = defaultRegistry
+		}
+		queries := qb.Queries(events)
+		results, _ := c.DB.Query(queries...)
+		switch qb.Mode {
+		case ModeValues:
+			output = results.FrequencyMap()
+		default:
+			output = results
+		}
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.Encode(output)
+	case http.MethodPost:
+		defer r.Body.Close()
+		check, eventName := path.Split(r.URL.Path)
+		if check != "/" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		event := c.Registry.Get(eventName)
+		if event == nil {
+			http.NotFound(w, r)
+			return
+		}
+		buf := bytes.NewBuffer(getBuffer())
+		defer func() {
+			buf.Reset()
+			putBuffer(buf.Bytes())
+		}()
+		_, err := buf.ReadFrom(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		snapshot := getSnapshot()
+		defer putSnapshot(snapshot)
+		if err = json.Unmarshal(buf.Bytes(), snapshot); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if c.FlushInterval > 0 {
+			c.once.Do(c.init)
+			event.Merge(snapshot)
+		} else {
+			if err := c.DB.gather(time.Now(), event.Describe(), snapshot); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
+		w.WriteHeader(http.StatusOK)
 	default:
-		output = results
+		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	enc := json.NewEncoder(w)
-	enc.Encode(output)
-	// http.NotFound(w, r)
+}
+
+type Client struct {
+	URL string
+	*http.Client
+}
+
+var snapshotPool sync.Pool
+
+func getSnapshot() Snapshot {
+	if x := snapshotPool.Get(); x != nil {
+		return x.(Snapshot)
+	}
+	return make([]Counter, 0, 64)
+}
+func putSnapshot(s Snapshot) {
+	if s == nil {
+		return
+	}
+	snapshotPool.Put(s[:0])
+}
+
+func (c *Client) Sync(e *Event) error {
+	desc := e.Describe()
+	url := path.Join(c.URL, desc.Name())
+	s := getSnapshot()
+	defer putSnapshot(s)
+	s = e.Flush(s)
+	if len(s) == 0 {
+		return nil
+	}
+	buf := getBuffer()
+	defer putBuffer(buf)
+	buf = s.AppendJSON(buf)
+	client := c.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	res, err := client.Post(url, "application/json", bytes.NewReader(buf))
+	if err != nil {
+		e.Merge(s)
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		e.Merge(s)
+		return fmt.Errorf("Failed to sync event %s to %s: %d %s", desc.Name(), url, res.StatusCode, res.Status)
+	}
+	return nil
 }

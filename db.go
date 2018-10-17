@@ -94,9 +94,19 @@ func (db *DB) Batch(tm time.Time, events ...*Event) (err []error) {
 	return
 }
 
-func (db *DB) Gather(tm time.Time, e *Event) (err error) {
+func (db *DB) Gather(tm time.Time, e *Event) error {
+	snapshot := e.Flush(getSnapshot())
+	defer putSnapshot(snapshot)
+	err := db.gather(tm, e.Describe(), snapshot)
+	if err != nil {
+		e.Merge(snapshot)
+		return err
+	}
+	return nil
+}
+
+func (db *DB) gather(tm time.Time, desc *Desc, snapshot Snapshot) (err error) {
 	var (
-		desc        = e.Describe()
 		name        = desc.Name()
 		t           = desc.Type()
 		labels      = desc.Labels()
@@ -104,7 +114,6 @@ func (db *DB) Gather(tm time.Time, e *Event) (err error) {
 		pipeline    = db.Redis.Pipeline()
 		resolutions = desc.Resolutions()
 		keys        = make(map[string]Resolution, len(resolutions))
-		snapshot    = e.Flush(nil)
 		size        = 0
 	)
 	defer pipeline.Close()

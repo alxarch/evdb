@@ -3,11 +3,30 @@ package meter
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
 )
+
+// AssertEqual checks if values are equal
+func AssertEqual(t *testing.T, a interface{}, b interface{}) {
+	t.Helper()
+	if !reflect.DeepEqual(a, b) {
+		t.Errorf("a != b %v %v", a, b)
+	}
+}
+func Assert(t *testing.T, ok bool, msg string, args ...interface{}) {
+	t.Helper()
+	if !ok {
+		t.Errorf(msg, args...)
+	}
+}
+
+func AssertNil(t *testing.T, a interface{}) {
+	if a != nil {
+		t.Errorf("a != nil %v", a)
+	}
+}
 
 var ts = TimeSequence(time.Now().Add(-Daily), time.Now(), Hourly)
 
@@ -17,13 +36,13 @@ var end = time.Date(2017, time.January, 16, 0, 0, 0, 0, time.UTC)
 func Test_TimeSequence(t *testing.T) {
 
 	ts := TimeSequence(start, end, Daily)
-	assert.Equal(t, len(ts), 16)
-	assert.Equal(t, ts[0], start)
-	assert.Equal(t, ts[15], end)
-	assert.Equal(t, []time.Time{}, TimeSequence(start, end, 0))
+	AssertEqual(t, len(ts), 16)
+	AssertEqual(t, ts[0], start)
+	AssertEqual(t, ts[15], end)
+	AssertEqual(t, []time.Time{}, TimeSequence(start, end, 0))
 	ts = TimeSequence(start, start, Daily)
-	assert.Equal(t, len(ts), 1)
-	assert.Equal(t, start, ts[0])
+	AssertEqual(t, len(ts), 1)
+	AssertEqual(t, start, ts[0])
 }
 
 var results Results
@@ -50,17 +69,17 @@ func Test_DataPoints(t *testing.T) {
 	}
 	ps.Sort()
 	n, ok := ps.Find(ts[4])
-	assert.Equal(t, n, data[4])
-	assert.True(t, ok)
+	AssertEqual(t, n, data[4])
+	AssertEqual(t, ok, true)
 	n, ok = ps.Find(time.Now())
-	assert.Equal(t, int64(0), n)
-	assert.False(t, ok)
+	AssertEqual(t, int64(0), n)
+	AssertEqual(t, ok, false)
 	actualJSON, err := json.Marshal(ps)
-	assert.NoError(t, err)
+	AssertNil(t, err)
 	actual := DataPoints{}
 	err = json.Unmarshal(actualJSON, &actual)
-	assert.NoError(t, err)
-	assert.Equal(t, ps, actual)
+	AssertNil(t, err)
+	AssertEqual(t, ps, actual)
 
 }
 func Test_ResultsFind(t *testing.T) {
@@ -78,7 +97,7 @@ func Test_ResultsFind(t *testing.T) {
 		},
 	}
 	fmap := results.FrequencyMap()
-	assert.Equal(t, fmap, FrequencyMap{
+	AssertEqual(t, fmap, FrequencyMap{
 		"foo": map[string]int64{"bar": 42},
 	})
 	r := results.Find("foo", lvs)

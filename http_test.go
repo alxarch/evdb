@@ -1,34 +1,40 @@
-package meter_test
+package meter
 
 import (
 	"net/url"
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter"
 	"github.com/alxarch/go-meter/tcodec"
-	"github.com/stretchr/testify/assert"
 )
 
 func Test_ParseQuery(t *testing.T) {
+
 	q := url.Values{}
 	q.Set("event", "foo")
 	q.Set("res", "daily")
-	qb, err := meter.ParseQuery(q, tcodec.LayoutCodec(meter.DailyDateFormat))
-	assert.Error(t, err)
+	qb, err := ParseQuery(q, tcodec.LayoutCodec(DailyDateFormat))
+	Assert(t, err != nil, "Err is not nil")
 	q.Set("event", "foo")
 	q.Set("res", "daily")
 	q.Set("start", "2017-10-30")
 	q.Set("end", "2017-11-05")
-	qb, err = meter.ParseQuery(q, tcodec.LayoutCodec(meter.DailyDateFormat))
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"foo"}, qb.Events)
-	events := meter.NewRegistry()
-	fooDesc := meter.NewCounterDesc("foo", []string{"bar", "baz"}, meter.ResolutionDaily.WithTTL(time.Hour))
-	fooEvent := meter.NewEvent(fooDesc)
+	qb, err = ParseQuery(q, tcodec.LayoutCodec(DailyDateFormat))
+	AssertNil(t, err)
+	AssertEqual(t, qb.Events, []string{"foo"})
+	events := NewRegistry()
+	daily := ResolutionDaily.WithTTL(time.Hour)
+	fooDesc := NewCounterDesc("foo", []string{"bar", "baz"}, daily)
+	fooEvent := NewEvent(fooDesc)
 	events.Register(fooEvent)
 	qs := qb.Queries(events)
-	assert.Equal(t, 1, len(qs))
-	// fmt.Printf("%+v", qs[0])
+	AssertEqual(t, qs[0], Query{
+		Mode:       ModeScan,
+		Resolution: daily,
+		Values:     []map[string]string{{}},
+		Start:      time.Date(2017, 10, 30, 0, 0, 0, 0, time.UTC),
+		End:        time.Date(2017, 11, 05, 0, 0, 0, 0, time.UTC),
+		Event:      fooEvent,
+	})
 
 }

@@ -69,7 +69,7 @@ func Test_ReadWrite(t *testing.T) {
 		t.Logf("result %d\n%+v\n", i, r)
 	}
 
-	c := Controller{Q: db, Events: reg, TimeDecoder: resol}
+	c := Controller{DB: db, Registry: reg, TimeDecoder: resol}
 	s := httptest.NewServer(&c)
 	// s.Start()
 	defer s.Close()
