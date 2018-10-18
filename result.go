@@ -124,6 +124,7 @@ func (rs Results) IndexOf(event string, values map[string]string) int {
 	}
 	return -1
 }
+
 func (rs Results) Find(event string, values map[string]string) *Result {
 	if i := rs.IndexOf(event, values); i < 0 {
 		return nil

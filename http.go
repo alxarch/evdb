@@ -2,8 +2,10 @@ package meter
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"path"
@@ -186,28 +188,25 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
-		buf := bytes.NewBuffer(getBuffer())
-		defer func() {
-			buf.Reset()
-			putBuffer(buf.Bytes())
-		}()
-		_, err := buf.ReadFrom(r.Body)
+		s := getSync()
+		defer putSync(s)
+		s.buf.Reset()
+		_, err := s.buf.ReadFrom(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		snapshot := getSnapshot()
-		defer putSnapshot(snapshot)
-		if err = json.Unmarshal(buf.Bytes(), snapshot); err != nil {
+		s.snapshot = s.snapshot[:0]
+		if err = json.Unmarshal(s.buf.Bytes(), &s.snapshot); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		if c.FlushInterval > 0 {
 			c.once.Do(c.init)
-			event.Merge(snapshot)
+			event.Merge(s.snapshot)
 		} else {
-			if err := c.DB.gather(time.Now(), event.Describe(), snapshot); err != nil {
+			if err := c.DB.gather(time.Now(), event.Describe(), s.snapshot); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
@@ -217,11 +216,6 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
-}
-
-type Client struct {
-	URL string
-	*http.Client
 }
 
 var snapshotPool sync.Pool
@@ -239,30 +233,97 @@ func putSnapshot(s Snapshot) {
 	snapshotPool.Put(s[:0])
 }
 
+var syncPool sync.Pool
+
+type syncBuffer struct {
+	buf      bytes.Buffer
+	snapshot Snapshot
+}
+
+func getSync() *syncBuffer {
+	if x := syncPool.Get(); x != nil {
+		return x.(*syncBuffer)
+	}
+	return new(syncBuffer)
+}
+func putSync(s *syncBuffer) {
+	if s == nil {
+		return
+	}
+	syncPool.Put(s)
+}
+
+type Client struct {
+	URL string
+	*http.Client
+}
+
+func (c *Client) Batch(logger *log.Logger, events ...*Event) {
+	wg := new(sync.WaitGroup)
+	for _, e := range events {
+		wg.Add(1)
+		go func(e *Event) {
+			defer wg.Done()
+			if err := c.Sync(e); err != nil {
+				if logger != nil {
+					logger.Printf("Failed to sync event %s: %s\n", e.Describe().Name(), err)
+				}
+			}
+		}(e)
+	}
+	wg.Wait()
+}
+
+func (c *Client) Run(ctx context.Context, interval time.Duration, logger *log.Logger, events ...*Event) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	tick := time.NewTicker(interval)
+	pack := time.NewTicker(time.Hour)
+	defer c.Batch(logger, events...)
+	for {
+		select {
+		case <-ctx.Done():
+			pack.Stop()
+			tick.Stop()
+			return
+		case <-tick.C:
+			c.Batch(logger, events...)
+		case <-pack.C:
+			for _, event := range events {
+				event.Pack()
+			}
+		}
+	}
+}
+
 func (c *Client) Sync(e *Event) error {
 	desc := e.Describe()
 	url := path.Join(c.URL, desc.Name())
-	s := getSnapshot()
-	defer putSnapshot(s)
-	s = e.Flush(s)
-	if len(s) == 0 {
+
+	s := getSync()
+	defer putSync(s)
+	s.snapshot = e.Flush(s.snapshot[:0])
+	if len(s.snapshot) == 0 {
 		return nil
 	}
-	buf := getBuffer()
-	defer putBuffer(buf)
-	buf = s.AppendJSON(buf)
+	s.buf.Reset()
+	enc := json.NewEncoder(&s.buf)
+	if err := enc.Encode(s.snapshot); err != nil {
+		return err
+	}
 	client := c.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
-	res, err := client.Post(url, "application/json", bytes.NewReader(buf))
+	res, err := client.Post(url, "application/json", &s.buf)
 	if err != nil {
-		e.Merge(s)
+		e.Merge(s.snapshot)
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		e.Merge(s)
+		e.Merge(s.snapshot)
 		return fmt.Errorf("Failed to sync event %s to %s: %d %s", desc.Name(), url, res.StatusCode, res.Status)
 	}
 	return nil

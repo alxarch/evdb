@@ -32,11 +32,11 @@ func TestCounter_UnmarshalJSON(t *testing.T) {
 			if err := c.UnmarshalJSON(tt.args.data); (err != nil) != tt.wantErr {
 				t.Errorf("Counter.UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if c.n != tt.fields.n {
-				t.Errorf("Counter.UnmarshalJSON() n = %d, want %d", c.n, tt.fields.n)
+			if c.Count != tt.fields.n {
+				t.Errorf("Counter.UnmarshalJSON() n = %d, want %d", c.Count, tt.fields.n)
 			}
 			if !c.Match(tt.fields.values) {
-				t.Errorf("Counter.UnmarshalJSON() v = %v, want %v", c.values, tt.fields.values)
+				t.Errorf("Counter.UnmarshalJSON() v = %v, want %v", c.Values, tt.fields.values)
 			}
 		})
 	}

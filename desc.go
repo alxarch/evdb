@@ -157,20 +157,3 @@ func distinct(values ...string) []string {
 	}
 	return values[:j]
 }
-
-// func (d *Desc) joinValues(values []string) string {
-// 	s := strings.Builder{}
-// 	for _, v := range values {
-// 		if len(v) > maxValueSize {
-// 			v = v[:maxValueSize]
-// 		}
-// 		s.WriteByte(byte(len(v)))
-// 		s.WriteString(v)
-// 	}
-// 	if d != nil {
-// 		for i := len(values); i < len(d.labels); i++ {
-// 			s.WriteByte(0)
-// 		}
-// 	}
-// 	return s.String()
-// }

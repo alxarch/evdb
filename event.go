@@ -51,13 +51,13 @@ func (e *Event) add(n int64, h uint64, values []string) int64 {
 		e.index = make(map[uint64][]int, 64)
 	} else {
 		if c := e.find(h, values); c != nil {
-			return atomic.AddInt64(&c.n, n)
+			return atomic.AddInt64(&c.Count, n)
 		}
 	}
 	i := len(e.counters)
 	e.counters = append(e.counters, Counter{
-		n:      n,
-		values: values,
+		Count:  n,
+		Values: values,
 	})
 	e.index[h] = append(e.index[h], i)
 	return n
@@ -81,7 +81,7 @@ func (e *Event) AddVolatile(n int64, values ...string) int64 {
 	c := e.find(h, values)
 	e.mu.RUnlock()
 	if c != nil {
-		return atomic.AddInt64(&c.n, n)
+		return atomic.AddInt64(&c.Count, n)
 	}
 	e.mu.Lock()
 	// Copy avoids allocation for variadic values.
@@ -96,7 +96,7 @@ func (e *Event) Add(n int64, values ...string) int64 {
 	c := e.find(h, values)
 	e.mu.RUnlock()
 	if c != nil {
-		return atomic.AddInt64(&c.n, n)
+		return atomic.AddInt64(&c.Count, n)
 	}
 	e.mu.Lock()
 	// Copy avoids allocation for variadic values.
@@ -117,8 +117,8 @@ func (e *Event) Flush(s Snapshot) Snapshot {
 	for i := range e.counters {
 		c := &e.counters[i]
 		s = append(s, Counter{
-			n:      atomic.SwapInt64(&c.n, 0),
-			values: c.values,
+			Count:  atomic.SwapInt64(&c.Count, 0),
+			Values: c.Values,
 		})
 	}
 	e.mu.RUnlock()
@@ -128,7 +128,7 @@ func (e *Event) Flush(s Snapshot) Snapshot {
 func (e *Event) Merge(s Snapshot) {
 	for i := range s {
 		c := &s[i]
-		e.Add(c.n, c.values...)
+		e.Add(c.Count, c.Values...)
 	}
 }
 
@@ -148,11 +148,11 @@ func (e *Event) pack() {
 		packed := idx[:0]
 		for _, i := range idx {
 			c := e.get(i)
-			if c.n != 0 {
+			if c.Count != 0 {
 				packed = append(packed, len(counters))
 				counters = append(counters, Counter{
-					n:      c.n,
-					values: c.values,
+					Count:  c.Count,
+					Values: c.Values,
 				})
 			}
 		}
