@@ -80,14 +80,10 @@ func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err erro
 
 }
 
-type Logger interface {
-	Printf(format string, args ...interface{})
-}
-
 type Controller struct {
 	DB *DB
 	*Registry
-	Logger        Logger
+	Logger        *log.Logger
 	TimeDecoder   tcodec.TimeDecoder
 	FlushInterval time.Duration
 	once          sync.Once
@@ -124,7 +120,7 @@ func (c *Controller) Flush(t time.Time) {
 				break
 			}
 			if err != nil {
-				c.Logger.Printf("Failed to sync event %s: %s", e.Describe().Name(), err)
+				c.Logger.Printf("Failed to sync event %s: %s\n", e.Describe().Name(), err)
 			}
 		}
 	}
