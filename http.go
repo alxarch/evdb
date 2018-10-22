@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -295,7 +296,7 @@ func (c *Client) Run(ctx context.Context, interval time.Duration, logger *log.Lo
 
 func (c *Client) Sync(e *Event) error {
 	desc := e.Describe()
-	url := path.Join(c.URL, desc.Name())
+	url := strings.Trim(c.URL, "/") + "/" + desc.Name()
 
 	s := getSync()
 	defer putSync(s)
