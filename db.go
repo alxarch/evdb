@@ -372,8 +372,8 @@ func fieldValues(field string, labels []string) map[string]string {
 			if 0 < size && size <= len(field) {
 				m[label] = field[:size]
 				field = field[size:]
-				continue
 			}
+			continue
 		}
 		break
 	}
