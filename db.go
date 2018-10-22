@@ -18,9 +18,9 @@ type DB struct {
 
 // DB defaults
 const (
-	DefaultKeyPrefix = "meter"
-	DefaultSeparator = '\x1f'
-	DefaultScanSize  = 100
+	DefaultKeyPrefix = "meter" // Prefix all keys
+	DefaultSeparator = '^'     // Key separator
+	DefaultScanSize  = 100     // Scan size for queries
 )
 
 func NewDB(r *redis.Pool) *DB {
