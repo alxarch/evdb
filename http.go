@@ -190,12 +190,14 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.buf.Reset()
 		_, err := s.buf.ReadFrom(r.Body)
 		if err != nil {
+			c.Logger.Printf("Failed to read body: %s\n", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		s.snapshot = s.snapshot[:0]
 		if err = json.Unmarshal(s.buf.Bytes(), &s.snapshot); err != nil {
+			c.Logger.Printf("Failed to parse body: %s\n", err)
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -204,6 +206,7 @@ func (c *Controller) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			event.Merge(s.snapshot)
 		} else {
 			if err := c.DB.gather(time.Now(), event.Describe(), s.snapshot); err != nil {
+				c.Logger.Printf("Failed to store snapshot %s: %s\n", eventName, err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
