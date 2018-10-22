@@ -300,6 +300,9 @@ func (c *Client) Sync(e *Event) error {
 	s := getSync()
 	defer putSync(s)
 	s.snapshot = e.Flush(s.snapshot[:0])
+	if desc.Type() == MetricTypeIncrement {
+		s.snapshot = s.snapshot.FilterZero()
+	}
 	if len(s.snapshot) == 0 {
 		return nil
 	}

@@ -7,6 +7,18 @@ type Counter struct {
 
 type Snapshot []Counter
 
+func (s Snapshot) FilterZero() Snapshot {
+	j := 0
+	for i := range s {
+		c := &s[i]
+		if c.Count == 0 {
+			continue
+		}
+		s[j] = *c
+		j++
+	}
+	return s[:j]
+}
 func (c *Counter) Match(values []string) bool {
 	if len(c.Values) == len(values) {
 		values = values[:len(c.Values)]
