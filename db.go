@@ -131,7 +131,7 @@ func (db *DB) gather(tm time.Time, desc *Desc, snapshot Snapshot) (err error) {
 		return
 	}
 	for key, res := range keys {
-		pipeline.Send("PEXPIRE", key, res.TTL()/time.Millisecond)
+		pipeline.Send("PEXPIRE", key, int64(res.TTL()/time.Millisecond))
 	}
 	_, err = pipeline.Do("")
 	return
