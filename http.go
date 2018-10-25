@@ -96,6 +96,7 @@ func (c *Controller) Close() {
 	if c.closeCh == nil {
 		return
 	}
+	c.wg.Add(1)
 	close(c.closeCh)
 	c.wg.Wait()
 }
@@ -105,14 +106,15 @@ func (c *Controller) Flush(t time.Time) {
 	errCh := make(chan error, len(events))
 	c.wg.Add(1)
 	defer c.wg.Done()
+	wg := sync.WaitGroup{}
 	for _, e := range events {
-		c.wg.Add(1)
+		wg.Add(1)
 		go func(e *Event) {
+			defer wg.Done()
 			errCh <- c.DB.Gather(t, e)
-			c.wg.Done()
 		}(e)
 	}
-	c.wg.Wait()
+	wg.Wait()
 	close(errCh)
 	if c.Logger != nil {
 		for _, e := range events {
@@ -142,6 +144,8 @@ func (c *Controller) runFlush(interval time.Duration) {
 		case t := <-tick.C:
 			go c.Flush(t)
 		case <-c.closeCh:
+			defer c.wg.Done()
+			c.Flush(time.Now())
 			return
 		}
 	}
