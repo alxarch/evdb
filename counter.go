@@ -19,6 +19,7 @@ func (s Snapshot) FilterZero() Snapshot {
 	}
 	return s[:j]
 }
+
 func (c *Counter) Match(values []string) bool {
 	if len(c.Values) == len(values) {
 		values = values[:len(c.Values)]
