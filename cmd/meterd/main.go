@@ -35,12 +35,13 @@ func main() {
 		log.Fatal("Failed to open db", err)
 	}
 	defer db.Close()
-	mdb := meter.DB{
-		TTL:     *ttl,
-		MinStep: *minStep,
-		DB:      db,
+	events := []*meter.EventDB{}
+	for _, event := range flag.Args() {
+		events = append(events, meter.NewEventDB(event, db, 0))
 	}
-	if err := http.ListenAndServe(*addr, meter.Handler(&mdb)); err != nil && err != http.ErrServerClosed {
+	http.Handle("/debug/", http.StripPrefix("/debug", meter.DebugHandler(db)))
+	http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events...)))
+	if err := http.ListenAndServe(*addr, nil); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

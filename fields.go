@@ -3,8 +3,8 @@ package meter
 import (
 	"bytes"
 	"encoding/json"
+	"net/url"
 	"strings"
-	"sync"
 )
 
 type Field struct {
@@ -13,12 +13,43 @@ type Field struct {
 }
 type Fields []Field
 
-func FieldsFromString(s string) (fields Fields) {
+func (fields Fields) Values() (values url.Values) {
+	values = make(map[string][]string, len(fields))
+	for i := range fields {
+		f := &fields[i]
+		values[f.Label] = append(values[f.Label], f.Value)
+	}
+	return
+}
+
+func (fields Fields) AppendValues(values url.Values) Fields {
+	for label := range values {
+		for _, value := range values[label] {
+			fields = append(fields, Field{Label: label, Value: value})
+		}
+	}
+	return fields
+}
+
+func (fields Fields) Grow(size int) Fields {
+	if size > 0 {
+		size += len(fields)
+		if 0 <= size && size < cap(fields) {
+			return fields[:size]
+		}
+		tmp := make([]Field, size)
+		copy(tmp, fields)
+		return tmp
+	}
+	return fields
+}
+
+func (fields Fields) AppendRawString(s string) Fields {
 	if len(s) > 0 {
-		fields = make([]Field, s[0])
+		i := len(fields)
+		fields = fields.Grow(int(s[0]))
 		s = string(s[1:])
 		var f *Field
-		i := 0
 		for len(s) > 0 {
 			n := int(s[0])
 			s = s[1:]
@@ -37,8 +68,14 @@ func FieldsFromString(s string) (fields Fields) {
 			}
 		}
 		return fields[:i]
+
 	}
-	return
+	return fields
+
+}
+
+func FieldsFromString(s string) (fields Fields) {
+	return fields.AppendRawString(s)
 }
 
 func (fields Fields) AppendTo(dst []byte) []byte {
@@ -62,6 +99,48 @@ func (fields Fields) IndexOf(key string) int {
 	}
 	return -1
 }
+func (fields Fields) SkipLabel(label string) Fields {
+	for i := range fields {
+		f := &fields[i]
+		if f.Label != label {
+			return fields[i:]
+		}
+	}
+	return nil
+}
+
+// MatchSorted matches 2 sets of sorted fields.
+func (fields Fields) MatchSorted(match Fields) bool {
+next:
+	for i := range fields {
+		f := &fields[i]
+		for j := range match {
+			m := &match[j]
+			if m.Label != f.Label {
+				if j == 0 {
+					// The match fields do not contain f.Label at all
+					continue next
+				}
+				return false
+			}
+			if m.Value == f.Value {
+				match = match[j:]
+				// Skip label
+				for j = range match {
+					m = &match[j]
+					if m.Label != f.Label {
+						match = match[j:]
+						continue next
+					}
+				}
+				match = nil
+				continue next
+			}
+		}
+		return false
+	}
+	return len(match) == 0
+}
 
 func (fields Fields) Equal(other Fields) bool {
 	if len(fields) == len(other) {
@@ -79,20 +158,20 @@ func (fields Fields) Equal(other Fields) bool {
 	return false
 }
 
-func (fields Fields) Filter(labels ...string) Fields {
+func (fields Fields) Filter(dst Fields, labels ...string) Fields {
 	if len(labels) == 0 {
-		return fields
+		return append(dst, fields...)
 	}
-	n := 0
 	for i := range fields {
 		f := &fields[i]
-		if indexOf(labels, f.Label) == -1 {
-			continue
+		for _, label := range labels {
+			if label == f.Label {
+				dst = append(dst, *f)
+				break
+			}
 		}
-		fields[n] = *f
-		n++
 	}
-	return fields[:n]
+	return dst
 }
 
 func (fields Fields) Len() int {
@@ -124,36 +203,29 @@ func (fields Fields) AppendLabels(labels []string) []string {
 	return labels
 }
 
-func ZipFields(dst []byte, labels, values []string) []byte {
-	b := byte(len(labels))
-	dst = append(dst, b)
-	for i, label := range labels {
-		b = byte(len(label))
-		dst = append(dst, b)
-		dst = append(dst, label...)
-		if 0 <= i && i < len(values) {
-			label = values[i]
-			b = byte(len(label))
-			dst = append(dst, b)
-			dst = append(dst, label...)
+func (fields Fields) Seek(label string) Fields {
+	for i := range fields {
+		f := &fields[i]
+		if f.Label < label {
+			continue
+		}
+		return fields[i:]
+	}
+	return nil
+}
+
+func (fields Fields) MatchValues(values url.Values) bool {
+	n := 0
+	for i := range fields {
+		f := &fields[i]
+		if want, ok := values[f.Label]; ok {
+			if len(want) > 0 && indexOf(want, f.Value) == -1 {
+				return false
+			}
+			n++
 		}
 	}
-	return dst
-}
-
-var rawMatcherPool sync.Pool
-
-func getRawMatcher() *rawFieldMatcher {
-	if x := rawMatcherPool.Get(); x != nil {
-		return x.(*rawFieldMatcher)
-	}
-	return new(rawFieldMatcher)
-}
-func putRawMatcher(m *rawFieldMatcher) {
-	if m != nil {
-		m.n = -1
-		rawMatcherPool.Put(m)
-	}
+	return n == len(values)
 }
 
 type rawFieldMatcher struct {
@@ -228,49 +300,6 @@ func (raw *rawFieldMatcher) MatchRawFields(fields []byte) bool {
 	return false
 }
 
-type RawFields []byte
-
-func (raw RawFields) IndexOf(k, v []byte) int {
-	if len(raw) > 0 {
-		n := int(raw[0])
-		raw = raw[1:]
-		var p []byte
-		for i := 0; i < n; i++ {
-			p, raw = raw.read()
-			if p == nil {
-				return -1
-			}
-			if bytes.Equal(k, p) {
-				p, raw = raw.read()
-				if bytes.Equal(v, p) {
-					return i
-				}
-			} else {
-				_, raw = raw.read()
-			}
-		}
-	}
-	return -1
-}
-
-func (raw RawFields) read() ([]byte, RawFields) {
-	if len(raw) > 0 {
-		n := int(raw[0])
-		raw = raw[1:]
-		if 0 <= n && n < len(raw) {
-			return []byte(raw[:n]), raw[n:]
-		}
-	}
-	return nil, raw
-}
-
-func (raw RawFields) Len() int {
-	if len(raw) > 0 {
-		return int(raw[0])
-	}
-	return -1
-}
-
 func (fields Fields) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields.Map())
 }
@@ -285,6 +314,19 @@ func (fields Fields) Map() map[string]string {
 		m[f.Label] = f.Value
 	}
 	return m
+}
+
+func SubValues(separator byte, values ...string) (q url.Values) {
+	q = make(map[string][]string, len(values))
+	for _, kv := range values {
+		if pos := strings.IndexByte(kv, separator); 0 <= pos && pos < len(kv) {
+			if k, v := kv[:pos], kv[pos+1:]; k != "" && v != "" {
+				q[k] = append(q[k], v)
+			}
+		}
+	}
+	return
+
 }
 
 func SplitAppendFields(fields Fields, separator byte, values ...string) Fields {

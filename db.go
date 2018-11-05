@@ -3,16 +3,33 @@ package meter
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"io"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger"
 )
 
-type DB struct {
-	TTL     time.Duration
-	MinStep time.Duration
+func NewEventDB(event string, db *badger.DB, ttl time.Duration) *EventDB {
+	return &EventDB{
+		Event:  event,
+		DB:     db,
+		TTL:    ttl,
+		ids:    make(map[string]uint64),
+		fields: make(map[uint64]Fields),
+	}
+}
+
+type EventDB struct {
 	*badger.DB
+	Event  string
+	TTL    time.Duration
+	mu     sync.RWMutex
+	ids    map[string]uint64
+	fields map[uint64]Fields
+	once   OnceNoError
 }
 
 const (
@@ -21,98 +38,104 @@ const (
 	keyPrefixValue = "v:"
 )
 
-func (db *DB) prefixSize(event string) int {
-	return keyPrefixSize + len(event)
+func (db *EventDB) prefixSize() int {
+	return keyPrefixSize + len(db.Event)
 }
 
-func (db *DB) appendEventKey(dst []byte, event string, t time.Time) []byte {
+func (db *EventDB) appendEventKey(dst []byte, t time.Time) []byte {
 	dst = append(dst, keyPrefixEvent...)
-	dst = append(dst, event...)
+	dst = append(dst, db.Event...)
 	buf := [8]byte{}
-	binary.BigEndian.PutUint64(buf[:], uint64(t.UnixNano()))
+	binary.BigEndian.PutUint64(buf[:], uint64(t.Unix()))
 	dst = append(dst, buf[:]...)
 	return dst
 }
 
-func (db *DB) appendValueKey(dst []byte, event string, id uint64) []byte {
+func (db *EventDB) appendValueKey(dst []byte, id uint64) []byte {
 	dst = append(dst, keyPrefixValue...)
-	dst = append(dst, event...)
+	dst = append(dst, db.Event...)
 	buf := [8]byte{}
 	binary.BigEndian.PutUint64(buf[:], id)
 	dst = append(dst, buf[:]...)
 	return dst
 }
 
-func (db *DB) NormalizeStep(step time.Duration) time.Duration {
-	minStep := db.MinStep
-	if minStep < time.Second {
-		minStep = time.Second
+func (db *EventDB) NormalizeStep(step time.Duration) time.Duration {
+	if step < time.Second {
+		return time.Second
 	}
-	if step < minStep {
-		return minStep
-	}
-	return step - step%minStep
+	return step - step%time.Second
 }
 
 type EventScanner interface {
 	ScanEvent(event string, id uint64, fields Fields, ts, n int64)
 }
 
-func (db *DB) scanValues(event string, matcher RawFieldMatcher) (index map[uint64]Fields, err error) {
-	if matcher == nil {
-		matcher = identityFieldMatcher{}
-	}
-	seek := db.appendValueKey(nil, event, 0)
-	prefixSize := db.prefixSize(event)
+func (db *EventDB) sync() error {
+	seek := db.appendValueKey(nil, 0)
+	prefixSize := db.prefixSize()
 	prefix := seek[:prefixSize]
-	index = make(map[uint64]Fields)
-	err = db.View(func(txn *badger.Txn) (err error) {
+	return db.View(func(txn *badger.Txn) (err error) {
 		var (
 			key  []byte
 			item *badger.Item
 			id   uint64
-			iter = txn.NewIterator(badger.IteratorOptions{
-				PrefetchValues: false,
-			})
+			iter = txn.NewIterator(badger.DefaultIteratorOptions)
 		)
 		defer iter.Close()
 		for iter.Seek(seek); iter.ValidForPrefix(prefix); iter.Next() {
 			item = iter.Item()
 			key = item.Key()
-			if len(key) > prefixSize {
+			if len(key) == prefixSize+8 {
 				id = binary.BigEndian.Uint64(key[prefixSize:])
 				key, err = item.Value()
 				if err != nil {
 					return
 				}
-				if matcher.MatchRawFields(key) {
-					index[id] = FieldsFromString(string(key))
-				}
+				db.set(key, id)
+				// db.fields[id] = FieldsFromString(string(key))
+				// db.ids[string(key)] = id
 			}
 		}
 		return
 	})
-	if err != nil {
-		return nil, err
-	}
-	return index, nil
+
 }
 
-func (db *DB) scanEvents(
-	event string,
-	start, end time.Time,
-	step time.Duration,
-	index map[uint64]Fields,
-	scan EventScanner,
-) error {
+func (db *EventDB) Sync() (err error) {
+	return db.once.Do(db.sync)
+}
+
+func (db *EventDB) scanFields(match Fields) (index map[uint64]Fields, err error) {
+	if err = db.Sync(); err != nil {
+		return
+	}
+	index = make(map[uint64]Fields)
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for id, fields := range db.fields {
+		if fields.MatchSorted(match) {
+			index[id] = fields
+		}
+	}
+	return
+}
+
+func (db *EventDB) Scan(start, end time.Time, match Fields, scan EventScanner) error {
+	index, err := db.scanFields(match)
+	if err != nil {
+		return err
+	}
+	return db.scan(start, end, index, scan)
+}
+
+func (db *EventDB) scan(start, end time.Time, index map[uint64]Fields, scan EventScanner) error {
 	if scan == nil {
 		return nil
 	}
-	step = db.NormalizeStep(step)
-	end = end.Truncate(step)
-	minTS := start.Truncate(step).UnixNano()
-	seek := db.appendEventKey(nil, event, end)
-	prefixSize := uint(db.prefixSize(event))
+	minTS := start.Unix()
+	seek := db.appendEventKey(nil, end)
+	prefixSize := uint(db.prefixSize())
 	prefix := seek[:prefixSize]
 
 	return db.View(func(txn *badger.Txn) (err error) {
@@ -134,7 +157,6 @@ func (db *DB) scanEvents(
 			if prefixSize < uint(len(key)) {
 				if key = key[prefixSize:]; len(key) == 8 {
 					ts = int64(binary.BigEndian.Uint64(key))
-					ts -= ts % int64(step)
 					if ts < minTS {
 						return nil
 					}
@@ -150,7 +172,7 @@ func (db *DB) scanEvents(
 				key = key[16:]
 				fields = index[id]
 				if fields != nil {
-					scan.ScanEvent(event, id, fields, ts, n)
+					scan.ScanEvent(db.Event, id, fields, ts, n)
 				}
 			}
 		}
@@ -158,11 +180,11 @@ func (db *DB) scanEvents(
 	})
 }
 
-func (db *DB) rawFieldsID(event string, data []byte) (id uint64, err error) {
+func (db *EventDB) rawFieldsID(data []byte) (id uint64, err error) {
 	h := hashFNVa32(data)
 	id = uint64(h) << 32
-	seek := db.appendValueKey(nil, event, id)
-	prefixSize := db.prefixSize(event)
+	seek := db.appendValueKey(nil, id)
+	prefixSize := db.prefixSize()
 	prefix := seek[:prefixSize+4]
 	update := func(txn *badger.Txn) (err error) {
 		var (
@@ -189,7 +211,7 @@ func (db *DB) rawFieldsID(event string, data []byte) (id uint64, err error) {
 			}
 		}
 		id |= uint64(n)
-		key = db.appendValueKey(nil, event, id)
+		key = db.appendValueKey(nil, id)
 		return txn.Set(key, data)
 	}
 
@@ -210,13 +232,122 @@ var (
 	}
 )
 
-func (db *DB) Store(tm time.Time, event string, labels []string, counters Snapshot) (err error) {
+type iLabel struct {
+	Label string
+	Index int
+}
+
+type labelIndex []iLabel
+
+func (index labelIndex) Len() int {
+	return len(index)
+}
+
+func (index labelIndex) Less(i, j int) bool {
+	return index[i].Label < index[j].Label
+}
+
+func (index labelIndex) Swap(i, j int) {
+	index[i], index[j] = index[j], index[i]
+}
+
+func newLabeLIndex(labels ...string) labelIndex {
+	index := labelIndex(make([]iLabel, len(labels)))
+	for i, label := range labels {
+		index[i] = iLabel{
+			Label: label,
+			Index: i,
+		}
+	}
+	sort.Stable(index)
+	return index
+}
+func (index labelIndex) AppendFields(dst []byte, values []string) []byte {
+	dst = append(dst, byte(len(index)))
+	for i := range index {
+		idx := &index[i]
+		dst = append(dst, byte(len(idx.Label)))
+		dst = append(dst, idx.Label...)
+		if 0 <= idx.Index && idx.Index < len(values) {
+			v := values[idx.Index]
+			dst = append(dst, byte(len(v)))
+			dst = append(dst, v...)
+		} else {
+			dst = append(dst, 0)
+		}
+	}
+	return dst
+}
+
+func (db *EventDB) store(key, value []byte) (err error) {
+	txn := db.NewTransaction(true)
+	item, err := txn.Get(key)
+	switch err {
+	case badger.ErrKeyNotFound:
+	case nil:
+		var v []byte
+		// ValueCopy appends to b[:0] so it's no good
+		v, err = item.Value()
+		if err != nil {
+			txn.Discard()
+			return
+		}
+		value = append(value, v...)
+	default:
+		txn.Discard()
+		return
+	}
+	if db.TTL > 0 {
+		err = txn.SetWithTTL(key, value, db.TTL)
+	} else {
+		err = txn.Set(key, value)
+	}
+	if err != nil {
+		txn.Discard()
+		return
+	}
+	return txn.Commit(nil)
+}
+func (e *EventDB) getID(data []byte) (id uint64, ok bool) {
+	e.mu.RLock()
+	id, ok = e.ids[string(data)]
+	e.mu.RUnlock()
+	return
+}
+func (e *EventDB) getFields(id uint64) (fields Fields, ok bool) {
+	e.mu.RLock()
+	fields, ok = e.fields[id]
+	e.mu.RUnlock()
+	return
+}
+
+func (e *EventDB) set(data []byte, id uint64) {
+	e.mu.Lock()
+	if _, ok := e.fields[id]; ok {
+		e.mu.Unlock()
+		return
+	}
+	s := string(data)
+	if e.ids == nil {
+		e.ids = make(map[string]uint64)
+	}
+	e.ids[s] = id
+	if e.fields == nil {
+		e.fields = make(map[uint64]Fields)
+	}
+	e.fields[id] = FieldsFromString(s)
+	e.mu.Unlock()
+}
+
+func (db *EventDB) Store(tm time.Time, labels []string, counters Snapshot) (err error) {
 	var (
-		value   = bufferPool.Get().([]byte)
-		buf     = bufferPool.Get().([]byte)
-		scratch [16]byte
+		index   = newLabeLIndex(labels...)
 		id      uint64
 		c       *Counter
+		scratch [16]byte
+		value   = bufferPool.Get().([]byte)
+		buf     = bufferPool.Get().([]byte)
+		ok      bool
 	)
 	defer func() {
 		bufferPool.Put(value)
@@ -224,45 +355,47 @@ func (db *DB) Store(tm time.Time, event string, labels []string, counters Snapsh
 	}()
 	for i := range counters {
 		c = &counters[i]
-		buf = ZipFields(buf[:0], labels, c.Values)
-		id, err = db.rawFieldsID(event, buf)
-		if err != nil {
-			return err
+		buf = index.AppendFields(buf[:0], c.Values)
+		id, ok = db.getID(buf)
+		if !ok {
+			id, err = db.rawFieldsID(buf)
+			if err != nil {
+				return err
+			}
+			db.set(buf, id)
 		}
 		binary.BigEndian.PutUint64(scratch[:], id)
 		binary.BigEndian.PutUint64(scratch[8:], uint64(c.Count))
 		value = append(value, scratch[:]...)
 	}
-	buf = db.appendEventKey(buf[:0], event, tm)
+	buf = db.appendEventKey(buf[:0], tm)
 
 retry:
-	err = db.Update(func(txn *badger.Txn) (err error) {
-		item, err := txn.Get(buf)
-		if err == badger.ErrKeyNotFound {
-			return txn.Set(buf, value)
-		}
-		v, err := item.Value()
-		if err != nil {
-			return
-		}
-		value = append(value, v...)
-		if db.TTL > 0 {
-			return txn.SetWithTTL(buf, value, db.TTL)
-		}
-		return txn.Set(buf, value)
-	})
-	if err == badger.ErrConflict {
+	if err = db.store(buf, value); err == badger.ErrConflict {
 		goto retry
 	}
 	return
 }
 
-type RawFieldMatcher interface {
-	MatchRawFields(raw []byte) bool
-}
-
-type identityFieldMatcher struct{}
-
-func (identityFieldMatcher) MatchRawFields(_ []byte) bool {
-	return true
+func DumpKeys(db *badger.DB, w io.Writer) error {
+	return db.View(func(txn *badger.Txn) error {
+		iter := txn.NewIterator(badger.IteratorOptions{
+			PrefetchValues: false,
+		})
+		defer iter.Close()
+		for iter.Seek(nil); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			key := item.Key()
+			id := binary.BigEndian.Uint64(key[len(key)-8:])
+			switch key[0] {
+			case 'v':
+				v, _ := item.Value()
+				fields := FieldsFromString(string(v))
+				fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
+			case 'e':
+				fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
+			}
+		}
+		return nil
+	})
 }

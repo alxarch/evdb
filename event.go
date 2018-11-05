@@ -7,24 +7,21 @@ import (
 )
 
 type Event struct {
-	desc     *Desc
+	Name     string   `json:"name"`
+	Labels   []string `json:"labels"`
 	mu       sync.RWMutex
 	counters []Counter
 	index    map[uint64][]int
 }
 
-var nilDesc = &Desc{err: ErrNilDesc}
-
 const (
 	defaultEventSize = 64
 )
 
-func NewEvent(desc *Desc) *Event {
-	if desc == nil {
-		desc = nilDesc
-	}
+func NewEvent(name string, labels ...string) *Event {
 	e := Event{
-		desc:     desc,
+		Name:     name,
+		Labels:   labels,
 		counters: make([]Counter, 0, defaultEventSize),
 		index:    make(map[uint64][]int, defaultEventSize),
 	}
@@ -103,13 +100,6 @@ func (e *Event) Add(n int64, values ...string) int64 {
 	n = e.add(n, h, vcopy(values))
 	e.mu.Unlock()
 	return n
-}
-
-func (e *Event) Describe() *Desc {
-	if e != nil {
-		return e.desc
-	}
-	return nil
 }
 
 func (e *Event) Flush(s Snapshot) Snapshot {

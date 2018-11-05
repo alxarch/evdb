@@ -6,15 +6,13 @@ import (
 
 func BenchmarkEvent_Add(b *testing.B) {
 	b.ReportAllocs()
-	desc := NewCounterDesc("foo", []string{"bar", "baz"})
-	e := NewEvent(desc)
+	e := NewEvent("foo", "bar", "baz")
 	for i := 0; i <= b.N; i++ {
 		e.Add(1, "BAR", "BAZ")
 	}
 }
 func Test_Event(t *testing.T) {
-	desc := NewCounterDesc("foo", []string{"bar", "baz"})
-	e := NewEvent(desc)
+	e := NewEvent("foo", "bar", "baz")
 	e.Add(1, "BAR", "BAZ")
 
 	s := e.Flush(nil)

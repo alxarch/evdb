@@ -3,7 +3,6 @@ package meter
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -79,39 +78,11 @@ import (
 
 // }
 
-func DumpKeysHandler(db *DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		db.View(func(txn *badger.Txn) error {
-			iter := txn.NewIterator(badger.IteratorOptions{
-				PrefetchValues: false,
-			})
-			defer iter.Close()
-			for iter.Seek(nil); iter.Valid(); iter.Next() {
-				item := iter.Item()
-				key := item.Key()
-				id := binary.BigEndian.Uint64(key[len(key)-8:])
-				switch key[0] {
-				case 'v':
-					v, _ := item.Value()
-					fields := FieldsFromString(string(v))
-					fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
-				case 'e':
-					fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
-
-				}
-			}
-			return nil
-		})
-	}
-
-}
-func Handler(db *DB) http.Handler {
+func Handler(events ...*EventDB) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/scan", ScanHandler(db))
-	mux.HandleFunc("/summary", SummaryHandler(db))
-	mux.HandleFunc("/", StoreHandler(db))
-	mux.HandleFunc("/keys", DumpKeysHandler(db))
+	mux.HandleFunc("/", StoreHandler(events...))
+	mux.HandleFunc("/scan", ScanHandler(events...))
+	mux.HandleFunc("/summary", SummaryHandler(events...))
 	return mux
 }
 
@@ -132,7 +103,16 @@ func (r *StoreRequest) Reset() {
 	}
 }
 
-func StoreHandler(db *DB) http.HandlerFunc {
+func byName(events ...*EventDB) map[string]*EventDB {
+	m := make(map[string]*EventDB, len(events))
+	for _, event := range events {
+		m[event.Event] = event
+	}
+	return m
+}
+
+func StoreHandler(events ...*EventDB) http.HandlerFunc {
+	m := byName(events...)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -154,7 +134,12 @@ func StoreHandler(db *DB) http.HandlerFunc {
 			s.Time = time.Now()
 
 		}
-		if err := db.Store(s.Time, s.Event, s.Labels, s.Counters); err != nil {
+		db := m[s.Event]
+		if db == nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := db.Store(s.Time, s.Labels, s.Counters); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -162,52 +147,55 @@ func StoreHandler(db *DB) http.HandlerFunc {
 	}
 }
 
-func SummaryHandler(db *DB) http.HandlerFunc {
+func SummaryHandler(events ...*EventDB) http.HandlerFunc {
+
+	m := byName(events...)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		q := new(SummaryScan)
+		q := Query{}
 		q.SetValues(r.URL.Query())
-		index, err := db.scanValues(q.Event, q.Matcher())
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+		db := m[q.Event]
+		if db == nil {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		err = db.scanEvents(q.Event, q.Start, q.End, 0, index, q)
+		scan := NewSummaryScan(&q)
+		err := db.Scan(q.Start, q.End, q.Match, scan)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		enc := json.NewEncoder(w)
 		w.Header().Set("Content-Type", "application/json")
-		if err := enc.Encode(q); err != nil {
-			log.Println(err)
-		}
+		enc.Encode(scan)
 	}
 }
-func ScanHandler(db *DB) http.HandlerFunc {
+func ScanHandler(events ...*EventDB) http.HandlerFunc {
+	m := byName(events...)
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		q := new(TimeSeriesScan)
+		q := Query{}
 		q.SetValues(r.URL.Query())
-		index, err := db.scanValues(q.Event, q.Matcher())
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
+		db := m[q.Event]
+		if db == nil {
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		err = db.scanEvents(q.Event, q.Start, q.End, q.Step, index, q)
+		scan := NewTimeSeriesScan(&q)
+		err := db.Scan(q.Start, q.End, q.Match, scan)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		enc := json.NewEncoder(w)
 		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(q)
+		enc.Encode(scan)
 	}
 }
 
@@ -224,7 +212,7 @@ func (c *HTTPClient) Batch(logger *log.Logger, events ...*Event) {
 			defer wg.Done()
 			if err := c.Sync(e); err != nil {
 				if logger != nil {
-					logger.Printf("Failed to sync event %s: %s\n", e.Describe().Name(), err)
+					logger.Printf("Failed to sync event %s: %s\n", e.Name, err)
 				}
 			}
 		}(e)
@@ -278,20 +266,19 @@ func getStoreBuffer() *storeBuffer {
 }
 
 func (c *HTTPClient) Sync(e *Event) error {
-	desc := e.Describe()
 
 	s := getStoreBuffer()
 	defer putStoreBuffer(s)
 	s.Counters = e.Flush(s.Counters)
-	if desc.Type() == MetricTypeIncrement {
-		s.Counters = s.Counters.FilterZero()
-	}
+	// if desc.Type() == MetricTypeIncrement {
+	s.Counters = s.Counters.FilterZero()
+	// }
 	if len(s.Counters) == 0 {
 		return nil
 	}
 	s.Time = time.Now()
-	s.Event = desc.Name()
-	s.Labels = append(s.Labels[:0], desc.Labels()...)
+	s.Event = e.Name
+	s.Labels = append(s.Labels[:0], e.Labels...)
 	enc := json.NewEncoder(&s.Buffer)
 	if err := enc.Encode(&s.StoreRequest); err != nil {
 		return err
@@ -308,7 +295,21 @@ func (c *HTTPClient) Sync(e *Event) error {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		e.Merge(s.Counters)
-		return fmt.Errorf("Failed to sync event %s to %s: %d %s", desc.Name(), c.URL, res.StatusCode, res.Status)
+		return fmt.Errorf("Failed to sync event %s to %s: %d %s", e.Name, c.URL, res.StatusCode, res.Status)
 	}
 	return nil
+}
+
+func DumpKeysHandler(db *badger.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		DumpKeys(db, w)
+	}
+
+}
+func DebugHandler(db *badger.DB) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/keys", DumpKeysHandler(db))
+	return mux
+
 }

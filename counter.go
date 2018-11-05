@@ -2,7 +2,8 @@ package meter
 
 type Counter struct {
 	Count  int64    `json:"n"`
-	Values []string `json:"v"`
+	Values []string `json:"v,omitempty"`
+	ID     uint64   `json:"id,omitempty"`
 }
 
 type Snapshot []Counter
