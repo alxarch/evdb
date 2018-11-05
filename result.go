@@ -95,8 +95,19 @@ type TimeSeries struct {
 	Data   DataPoints `json:"data"`
 }
 
+type EventScan struct {
+	*Query
+	Event   string
+	Results []TimeSeries
+}
 type SummaryScan struct {
 	*Query
+	Event   string
+	Results []Summary
+}
+type EventSummary struct {
+	*Query
+	Event   string    `json:"event"`
 	Results []Summary `json:"results"`
 }
 
@@ -105,9 +116,10 @@ type Summary struct {
 	Values map[string]int64 `json:"values"`
 }
 
-func NewSummaryScan(q *Query) *SummaryScan {
+func NewSummaryScan(event string, q *Query) *SummaryScan {
 	scan := SummaryScan{
 		Query:   q,
+		Event:   event,
 		Results: make([]Summary, len(q.Group)),
 	}
 	for i, label := range q.Group {
@@ -132,7 +144,6 @@ func (scan *SummaryScan) ScanEvent(_ string, id uint64, fields Fields, _, n int6
 }
 
 type Query struct {
-	Event      string        `json:"event"`
 	Match      Fields        `json:"match,omitempty"`
 	Group      []string      `json:"group,omitempty"`
 	Start      time.Time     `json:"start"`
@@ -143,15 +154,22 @@ type Query struct {
 
 type TimeSeriesScan struct {
 	*Query
+	Event   string       `json:"event"`
 	Results []TimeSeries `json:"results"`
 	index   map[uint64]int
 	labels  []string
 	step    int64
+	err     error
 }
 
-func NewTimeSeriesScan(q *Query) *TimeSeriesScan {
+func (scan TimeSeriesScan) Err() error {
+	return scan.err
+}
+
+func NewTimeSeriesScan(event string, q *Query) *TimeSeriesScan {
 	scan := TimeSeriesScan{
 		Query: q,
+		Event: event,
 		index: make(map[uint64]int),
 	}
 	if len(q.Group) > 0 {
@@ -232,7 +250,6 @@ func (scan *TimeSeriesScan) indexOf(id uint64, fields Fields) int {
 }
 
 func (q *Query) SetValues(values url.Values) {
-	q.Event = values.Get("event")
 	q.Step, _ = time.ParseDuration(values.Get("step"))
 	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
 	q.Start = time.Unix(start, 0)

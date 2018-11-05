@@ -78,11 +78,11 @@ import (
 
 // }
 
-func Handler(events ...*EventDB) http.Handler {
+func Handler(events MultiEventDB) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", StoreHandler(events...))
-	mux.HandleFunc("/scan", ScanHandler(events...))
-	mux.HandleFunc("/summary", SummaryHandler(events...))
+	mux.HandleFunc("/", StoreHandler(events))
+	mux.HandleFunc("/scan", ScanHandler(events))
+	mux.HandleFunc("/summary", SummaryHandler(events))
 	return mux
 }
 
@@ -111,8 +111,7 @@ func byName(events ...*EventDB) map[string]*EventDB {
 	return m
 }
 
-func StoreHandler(events ...*EventDB) http.HandlerFunc {
-	m := byName(events...)
+func StoreHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -134,7 +133,7 @@ func StoreHandler(events ...*EventDB) http.HandlerFunc {
 			s.Time = time.Now()
 
 		}
-		db := m[s.Event]
+		db, _ := db.Get(s.StoreRequest.Event)
 		if db == nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -147,55 +146,44 @@ func StoreHandler(events ...*EventDB) http.HandlerFunc {
 	}
 }
 
-func SummaryHandler(events ...*EventDB) http.HandlerFunc {
-
-	m := byName(events...)
+func SummaryHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		values := r.URL.Query()
+		event := values.Get("event")
 		q := Query{}
-		q.SetValues(r.URL.Query())
-		db := m[q.Event]
-		if db == nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		scan := NewSummaryScan(&q)
-		err := db.Scan(q.Start, q.End, q.Match, scan)
+		q.SetValues(values)
+		results, err := db.Summary(event, &q)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		enc := json.NewEncoder(w)
 		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(scan)
+		enc.Encode(results)
 	}
 }
-func ScanHandler(events ...*EventDB) http.HandlerFunc {
-	m := byName(events...)
+
+func ScanHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 		q := Query{}
-		q.SetValues(r.URL.Query())
-		db := m[q.Event]
-		if db == nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		scan := NewTimeSeriesScan(&q)
-		err := db.Scan(q.Start, q.End, q.Match, scan)
+		values := r.URL.Query()
+		q.SetValues(values)
+		results, err := db.Scan(&q, values["event"]...)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		enc := json.NewEncoder(w)
 		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(scan)
+		enc.Encode(results)
 	}
 }
 

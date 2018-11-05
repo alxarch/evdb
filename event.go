@@ -10,7 +10,7 @@ type Event struct {
 	Name     string   `json:"name"`
 	Labels   []string `json:"labels"`
 	mu       sync.RWMutex
-	counters []Counter
+	counters Snapshot
 	index    map[uint64][]int
 }
 
@@ -103,13 +103,21 @@ func (e *Event) Add(n int64, values ...string) int64 {
 }
 
 func (e *Event) Flush(s Snapshot) Snapshot {
+	s = s[:cap(s)]
 	e.mu.RLock()
-	for i := range e.counters {
-		c := &e.counters[i]
-		s = append(s, Counter{
-			Count:  atomic.SwapInt64(&c.Count, 0),
-			Values: c.Values,
-		})
+	src := e.counters
+	if len(s) < len(src) {
+		s = make([]Counter, len(src))
+	}
+	if len(s) >= len(src) {
+		s = s[:len(src)]
+		for i := range src {
+			c := &src[i]
+			s[i] = Counter{
+				Count:  atomic.SwapInt64(&c.Count, 0),
+				Values: c.Values,
+			}
+		}
 	}
 	e.mu.RUnlock()
 	return s
@@ -174,19 +182,28 @@ func vdeepcopy(values []string) []string {
 	}
 	s.Grow(n)
 	cp := make([]string, len(values))
-	for i, v := range values {
-		n = s.Len()
-		s.WriteString(v)
-		v = s.String()
-		cp[i] = v[n:]
+	if len(cp) == len(values) {
+		cp = cp[:len(values)]
+		for i, v := range values {
+			n = s.Len()
+			s.WriteString(v)
+			if v = s.String(); len(v) > n {
+				cp[i] = v[n:]
+			}
+		}
+		return cp
 	}
-	return cp
+	return nil
 
 }
 func vcopy(values []string) []string {
 	cp := make([]string, len(values))
-	for i, v := range values {
-		cp[i] = v
+	if len(cp) == len(values) {
+		cp = cp[:len(values)]
+		for i, v := range values {
+			cp[i] = v
+		}
+		return cp
 	}
-	return cp
+	return nil
 }

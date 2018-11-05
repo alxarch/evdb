@@ -1,9 +1,10 @@
 package meter
 
+import "sync"
+
 type Counter struct {
 	Count  int64    `json:"n"`
 	Values []string `json:"v,omitempty"`
-	ID     uint64   `json:"id,omitempty"`
 }
 
 type Snapshot []Counter
@@ -19,6 +20,27 @@ func (s Snapshot) FilterZero() Snapshot {
 		j++
 	}
 	return s[:j]
+}
+
+func (s Snapshot) Reset() Snapshot {
+	for i := range s {
+		s[i] = Counter{}
+	}
+	return s[:0]
+}
+
+var snapshotPool sync.Pool
+
+func getSnapshot() Snapshot {
+	if x := snapshotPool.Get(); x != nil {
+		return x.(Snapshot)
+	}
+	const minSnapshotSize = 64
+	return make([]Counter, 0, minSnapshotSize)
+}
+
+func putSnapshot(s Snapshot) {
+	snapshotPool.Put(s.Reset())
 }
 
 func (c *Counter) Match(values []string) bool {

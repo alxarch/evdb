@@ -10,26 +10,25 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger"
+	"golang.org/x/sync/errgroup"
 )
-
-func NewEventDB(event string, db *badger.DB, ttl time.Duration) *EventDB {
-	return &EventDB{
-		Event:  event,
-		DB:     db,
-		TTL:    ttl,
-		ids:    make(map[string]uint64),
-		fields: make(map[uint64]Fields),
-	}
-}
 
 type EventDB struct {
 	*badger.DB
 	Event  string
-	TTL    time.Duration
 	mu     sync.RWMutex
 	ids    map[string]uint64
 	fields map[uint64]Fields
 	once   OnceNoError
+}
+
+func NewEventDB(event string, db *badger.DB) *EventDB {
+	return &EventDB{
+		Event:  event,
+		DB:     db,
+		ids:    make(map[string]uint64),
+		fields: make(map[uint64]Fields),
+	}
 }
 
 const (
@@ -60,7 +59,7 @@ func (db *EventDB) appendValueKey(dst []byte, id uint64) []byte {
 	return dst
 }
 
-func (db *EventDB) NormalizeStep(step time.Duration) time.Duration {
+func NormalizeStep(step time.Duration) time.Duration {
 	if step < time.Second {
 		return time.Second
 	}
@@ -69,6 +68,11 @@ func (db *EventDB) NormalizeStep(step time.Duration) time.Duration {
 
 type EventScanner interface {
 	ScanEvent(event string, id uint64, fields Fields, ts, n int64)
+}
+
+// Sync syncs the field cache once
+func (db *EventDB) Sync() (err error) {
+	return db.once.Do(db.sync)
 }
 
 func (db *EventDB) sync() error {
@@ -93,8 +97,6 @@ func (db *EventDB) sync() error {
 					return
 				}
 				db.set(key, id)
-				// db.fields[id] = FieldsFromString(string(key))
-				// db.ids[string(key)] = id
 			}
 		}
 		return
@@ -102,8 +104,12 @@ func (db *EventDB) sync() error {
 
 }
 
-func (db *EventDB) Sync() (err error) {
-	return db.once.Do(db.sync)
+func (db *EventDB) Scan(start, end time.Time, match Fields, scan EventScanner) error {
+	index, err := db.scanFields(match)
+	if err != nil {
+		return err
+	}
+	return db.scan(start, end, index, scan)
 }
 
 func (db *EventDB) scanFields(match Fields) (index map[uint64]Fields, err error) {
@@ -119,14 +125,6 @@ func (db *EventDB) scanFields(match Fields) (index map[uint64]Fields, err error)
 		}
 	}
 	return
-}
-
-func (db *EventDB) Scan(start, end time.Time, match Fields, scan EventScanner) error {
-	index, err := db.scanFields(match)
-	if err != nil {
-		return err
-	}
-	return db.scan(start, end, index, scan)
 }
 
 func (db *EventDB) scan(start, end time.Time, index map[uint64]Fields, scan EventScanner) error {
@@ -297,26 +295,17 @@ func (db *EventDB) store(key, value []byte) (err error) {
 		txn.Discard()
 		return
 	}
-	if db.TTL > 0 {
-		err = txn.SetWithTTL(key, value, db.TTL)
-	} else {
-		err = txn.Set(key, value)
-	}
+	err = txn.Set(key, value)
 	if err != nil {
 		txn.Discard()
 		return
 	}
 	return txn.Commit(nil)
 }
+
 func (e *EventDB) getID(data []byte) (id uint64, ok bool) {
 	e.mu.RLock()
 	id, ok = e.ids[string(data)]
-	e.mu.RUnlock()
-	return
-}
-func (e *EventDB) getFields(id uint64) (fields Fields, ok bool) {
-	e.mu.RLock()
-	fields, ok = e.fields[id]
 	e.mu.RUnlock()
 	return
 }
@@ -337,6 +326,18 @@ func (e *EventDB) set(data []byte, id uint64) {
 	}
 	e.fields[id] = FieldsFromString(s)
 	e.mu.Unlock()
+}
+
+func (db *EventDB) StoreEvent(tm time.Time, event *Event) (err error) {
+	s := event.Flush(nil)
+	if tm.IsZero() {
+		tm = time.Now()
+	}
+	err = db.Store(tm, event.Labels, s)
+	if err != nil {
+		event.Merge(s)
+	}
+	return
 }
 
 func (db *EventDB) Store(tm time.Time, labels []string, counters Snapshot) (err error) {
@@ -375,6 +376,69 @@ retry:
 		goto retry
 	}
 	return
+}
+
+type MultiEventDB map[string]*EventDB
+
+func NewMultiEventDB(db *badger.DB, events ...string) MultiEventDB {
+	mdb := make(map[string]*EventDB, len(events))
+	for _, event := range events {
+		mdb[event] = NewEventDB(event, db)
+	}
+	return mdb
+}
+
+func (db MultiEventDB) Get(event string) (*EventDB, error) {
+	if e := db[event]; e != nil {
+		return e, nil
+	}
+	return nil, fmt.Errorf("Unknown event %q", event)
+}
+
+func (db MultiEventDB) Summary(event string, q *Query) ([]Summary, error) {
+	e := db[event]
+	if e == nil {
+		return nil, fmt.Errorf("Unknown event %q", event)
+	}
+	scan := NewSummaryScan(event, q)
+	if err := e.Scan(q.Start, q.End, q.Match, scan); err != nil {
+		return nil, err
+	}
+	return scan.Results, nil
+}
+
+func (db MultiEventDB) Scan(q *Query, events ...string) ([]*TimeSeries, error) {
+	g := errgroup.Group{}
+	scans := make([]*TimeSeriesScan, len(events))
+	for i, event := range events {
+		i, event := i, event
+		g.Go(func() error {
+			event, err := db.Get(event)
+			if err != nil {
+				return err
+			}
+			scan := NewTimeSeriesScan(event.Event, q)
+			if err := event.Scan(q.Start, q.End, q.Match, scan); err != nil {
+				return err
+			}
+			scans[i] = scan
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	size := 0
+	for i := range scans {
+		size += len(scans[i].Results)
+	}
+	results := make([]*TimeSeries, 0, size)
+	for _, scan := range scans {
+		for j := range scan.Results {
+			results = append(results, &scan.Results[j])
+		}
+	}
+	return results, nil
 }
 
 func DumpKeys(db *badger.DB, w io.Writer) error {

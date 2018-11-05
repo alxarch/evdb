@@ -1,7 +1,6 @@
 package meter
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/url"
 	"strings"
@@ -67,7 +66,9 @@ func (fields Fields) AppendRawString(s string) Fields {
 				s = s[n:]
 			}
 		}
-		return fields[:i]
+		if 0 <= i && i <= len(fields) {
+			return fields[:i]
+		}
 
 	}
 	return fields
@@ -226,78 +227,6 @@ func (fields Fields) MatchValues(values url.Values) bool {
 		}
 	}
 	return n == len(values)
-}
-
-type rawFieldMatcher struct {
-	buffer []byte
-	kvs    [][]byte
-	n      int
-}
-
-func (raw *rawFieldMatcher) indexOf(kv []byte) int {
-	for i, match := range raw.kvs {
-		if bytes.Equal(kv, match) {
-			return i
-		}
-	}
-	return -1
-}
-
-func (raw *rawFieldMatcher) Reset(fields Fields) {
-	b := raw.buffer[:0]
-	kvs := raw.kvs[:0]
-	n := 0
-	for i := range fields {
-		f := &fields[i]
-		if fields[:i].IndexOf(f.Label) == -1 {
-			n++
-		}
-		offset := len(b)
-		b = append(b, byte(len(f.Label)))
-		b = append(b, f.Label...)
-		b = append(b, byte(len(f.Value)))
-		b = append(b, f.Value...)
-		kvs = append(kvs, b[offset:])
-	}
-	if len(kvs) < len(raw.kvs) {
-		tmp := raw.kvs[len(kvs):]
-		for i := range tmp {
-			tmp[i] = nil
-		}
-	}
-	raw.kvs = kvs
-	raw.buffer = b
-	raw.n = n
-}
-
-func (raw *rawFieldMatcher) MatchRawFields(fields []byte) bool {
-	if raw.n == 0 {
-		return true
-	}
-	if len(fields) > 0 {
-		numFields := fields[0]
-		fields = fields[1:]
-		total := 0
-		for ; len(fields) > 0 && numFields > 0; numFields-- {
-			n := uint(fields[0])
-			tail := fields[1:]
-			if n <= uint(len(tail)) {
-				n += uint(tail[n]) + 2
-				if n <= uint(len(fields)) {
-					tail = fields[:n]
-					fields = fields[n:]
-					for _, kv := range raw.kvs {
-						if bytes.Equal(kv, tail) {
-							total++
-							break
-						}
-					}
-				}
-			}
-		}
-		return total == raw.n
-	}
-	return false
 }
 
 func (fields Fields) MarshalJSON() ([]byte, error) {
