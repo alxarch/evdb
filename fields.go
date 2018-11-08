@@ -2,9 +2,7 @@ package meter
 
 import (
 	"encoding/json"
-	"net/url"
 	"sort"
-	"strings"
 )
 
 type Field struct {
@@ -21,15 +19,6 @@ func (fields Fields) Get(label string) string {
 		}
 	}
 	return ""
-}
-
-func (fields Fields) Values() (values url.Values) {
-	values = make(map[string][]string, len(fields))
-	for i := range fields {
-		f := &fields[i]
-		values[f.Label] = append(values[f.Label], f.Value)
-	}
-	return
 }
 
 func (fields Fields) Grow(size int) Fields {
@@ -79,37 +68,6 @@ func (fields Fields) AppendRawString(s string) Fields {
 
 func FieldsFromString(s string) (fields Fields) {
 	return fields.AppendRawString(s)
-}
-
-func (fields Fields) AppendTo(dst []byte) []byte {
-	dst = append(dst, byte(len(fields)))
-	for i := range fields {
-		f := &fields[i]
-		dst = append(dst, byte(len(f.Label)))
-		dst = append(dst, f.Label...)
-		dst = append(dst, byte(len(f.Value)))
-		dst = append(dst, f.Value...)
-	}
-	return dst
-}
-
-func (fields Fields) IndexOf(key string) int {
-	for i := range fields {
-		f := &fields[i]
-		if f.Label == key {
-			return i
-		}
-	}
-	return -1
-}
-func (fields Fields) SkipLabel(label string) Fields {
-	for i := range fields {
-		f := &fields[i]
-		if f.Label != label {
-			return fields[i:]
-		}
-	}
-	return nil
 }
 
 // MatchSorted matches 2 sets of sorted fields.
@@ -173,35 +131,6 @@ func (fields Fields) Less(i, j int) bool {
 	return fields[i].Label < fields[j].Label
 }
 
-func (fields Fields) AppendLabelsDistinct(labels []string) []string {
-	for i := range fields {
-		f := &fields[i]
-		if fields[:i].IndexOf(f.Label) == -1 {
-			labels = append(labels, f.Label)
-		}
-	}
-	return labels
-}
-
-func (fields Fields) AppendLabels(labels []string) []string {
-	for i := range fields {
-		f := &fields[i]
-		labels = append(labels, f.Label)
-	}
-	return labels
-}
-
-func (fields Fields) Seek(label string) Fields {
-	for i := range fields {
-		f := &fields[i]
-		if f.Label < label {
-			continue
-		}
-		return fields[i:]
-	}
-	return nil
-}
-
 func (fields Fields) Map() map[string]string {
 	if fields == nil {
 		return nil
@@ -217,32 +146,6 @@ func (fields Fields) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields.Map())
 }
 
-func SplitAppendFields(fields Fields, separator byte, values ...string) Fields {
-	for _, kv := range values {
-		if pos := strings.IndexByte(kv, separator); 0 <= pos && pos < len(kv) {
-			if k, v := kv[:pos], kv[pos+1:]; k != "" && v != "" {
-				fields = append(fields, Field{
-					Label: k,
-					Value: v,
-				})
-			}
-		}
-	}
-	return fields
-
-}
-
-func (fields Fields) appendDistinctLabels(dst []string) []string {
-	for i := range fields {
-		f := &fields[i]
-		if indexOf(dst, f.Label) == -1 {
-			dst = append(dst, f.Label)
-		}
-	}
-	return dst
-
-}
-
 func (fields Fields) Copy() Fields {
 	if fields == nil {
 		return nil
@@ -256,46 +159,3 @@ func (fields Fields) Sorted() Fields {
 	sort.Stable(fields)
 	return fields
 }
-
-// func SubValues(separator byte, values ...string) (q url.Values) {
-// 	q = make(map[string][]string, len(values))
-// 	for _, kv := range values {
-// 		if pos := strings.IndexByte(kv, separator); 0 <= pos && pos < len(kv) {
-// 			if k, v := kv[:pos], kv[pos+1:]; k != "" && v != "" {
-// 				q[k] = append(q[k], v)
-// 			}
-// 		}
-// 	}
-// 	return
-
-// }
-
-// func (fields Fields) MatchValues(values url.Values) bool {
-// 	n := 0
-// 	for i := range fields {
-// 		f := &fields[i]
-// 		if want, ok := values[f.Label]; ok {
-// 			if len(want) > 0 && indexOf(want, f.Value) == -1 {
-// 				return false
-// 			}
-// 			n++
-// 		}
-// 	}
-// 	return n == len(values)
-// }
-
-// func (fields Fields) Filter(dst Fields, labels ...string) Fields {
-// 	if len(labels) == 0 {
-// 		return append(dst, fields...)
-// 	}
-// 	for i := range fields {
-// 		f := &fields[i]
-// 		for _, label := range labels {
-// 			if label == f.Label {
-// 				dst = append(dst, *f)
-// 				break
-// 			}
-// 		}
-// 	}
-// 	return dst
-// }

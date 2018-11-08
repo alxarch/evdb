@@ -118,32 +118,32 @@ func (db *EventDB) Sync() (err error) {
 	return db.once.Do(db.sync)
 }
 
-func (db *EventDB) sync() error {
-	seek := db.appendValueKey(nil, 0)
-	prefixSize := db.prefixSize()
-	prefix := seek[:prefixSize]
-	return db.View(func(txn *badger.Txn) (err error) {
-		var (
-			key  []byte
-			item *badger.Item
-			id   uint64
-			iter = txn.NewIterator(badger.DefaultIteratorOptions)
-		)
-		defer iter.Close()
-		for iter.Seek(seek); iter.ValidForPrefix(prefix); iter.Next() {
-			item = iter.Item()
-			key = item.Key()
-			if len(key) == prefixSize+8 {
-				id = binary.BigEndian.Uint64(key[prefixSize:])
-				key, err = item.Value()
-				if err != nil {
-					return
-				}
-				db.set(key, id)
+func (db *EventDB) sync() (err error) {
+	var (
+		seek       = db.appendValueKey(nil, 0)
+		prefixSize = db.prefixSize()
+		prefix     = seek[:prefixSize]
+		key        []byte
+		item       *badger.Item
+		id         uint64
+	)
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+	iter := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer iter.Close()
+	for iter.Seek(seek); iter.ValidForPrefix(prefix); iter.Next() {
+		item = iter.Item()
+		key = item.Key()
+		if len(key) == prefixSize+8 {
+			id = binary.BigEndian.Uint64(key[prefixSize:])
+			key, err = item.Value()
+			if err != nil {
+				return
 			}
+			db.set(key, id)
 		}
-		return
-	})
+	}
+	return
 
 }
 
@@ -305,27 +305,6 @@ func (e *EventDB) loadFields(id uint64) (fields Fields, err error) {
 	e.mu.Unlock()
 	return
 
-}
-func (e *EventDB) AppendFields(fields Fields, id uint64) (Fields, error) {
-	f := e.getFields(id)
-	if f != nil {
-		return append(fields, f...), nil
-	}
-	buf := bufferPool.Get().([]byte)
-	defer bufferPool.Put(buf)
-	buf = e.appendValueKey(buf[:0], id)
-	err := e.View(func(txn *badger.Txn) (err error) {
-		item, err := txn.Get(buf)
-		if err == nil {
-			buf, err = item.ValueCopy(buf)
-		}
-		return
-	})
-	if err == nil {
-		e.set(buf, id)
-		fields = fields.AppendRawString(string(buf))
-	}
-	return fields, err
 }
 
 func (e *EventDB) getID(data []byte) (id uint64, ok bool) {
@@ -502,29 +481,6 @@ func (db MultiEventDB) Summary(q *Query, events ...string) (MultiScanResults, er
 	return db.Query(q, events...)
 }
 
-func DumpKeys(db *badger.DB, w io.Writer) error {
-	return db.View(func(txn *badger.Txn) error {
-		iter := txn.NewIterator(badger.IteratorOptions{
-			PrefetchValues: false,
-		})
-		defer iter.Close()
-		for iter.Seek(nil); iter.Valid(); iter.Next() {
-			item := iter.Item()
-			key := item.Key()
-			id := binary.BigEndian.Uint64(key[len(key)-8:])
-			switch key[0] {
-			case 'v':
-				v, _ := item.Value()
-				fields := FieldsFromString(string(v))
-				fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
-			case 'e':
-				fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
-			}
-		}
-		return nil
-	})
-}
-
 type Query struct {
 	Match      Fields        `json:"match,omitempty"`
 	Group      []string      `json:"group,omitempty"`
@@ -565,8 +521,34 @@ func (q *Query) SetValues(values url.Values) {
 	group, ok := values["group"]
 	if ok && len(group) == 0 {
 		group = make([]string, 0, len(q.Match))
-		group = q.Match.appendDistinctLabels(group)
+		for i := range q.Match {
+			m := &q.Match[i]
+			group = appendDistinct(group, m.Label)
+		}
 	}
 	q.Group = group
 	q.EmptyValue = values.Get("empty")
+}
+
+func DumpKeys(db *badger.DB, w io.Writer) error {
+	return db.View(func(txn *badger.Txn) error {
+		iter := txn.NewIterator(badger.IteratorOptions{
+			PrefetchValues: false,
+		})
+		defer iter.Close()
+		for iter.Seek(nil); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			key := item.Key()
+			id := binary.BigEndian.Uint64(key[len(key)-8:])
+			switch key[0] {
+			case 'v':
+				v, _ := item.Value()
+				fields := FieldsFromString(string(v))
+				fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
+			case 'e':
+				fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
+			}
+		}
+		return nil
+	})
 }
