@@ -29,14 +29,26 @@ func (once *OnceNoError) Do(fn func() error) (err error) {
 	return
 }
 
-// func appendDistinct(dst, values []string) []string {
-// 	for i, v := range values {
-// 		if indexOf(values[:i], v) == -1 {
-// 			dst = append(dst, v)
-// 		}
-// 	}
-// 	return dst
-// }
+func stringsEqual(a, b []string) bool {
+	if len(a) == len(b) {
+		b = b[:len(a)]
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+func appendDistinct(dst []string, src ...string) []string {
+	for i, s := range src {
+		if indexOf(dst, s[:i]) == -1 {
+			dst = append(dst, s)
+		}
+	}
+	return dst
+}
 
 func indexOf(values []string, s string) int {
 	for i := 0; 0 <= i && i < len(values); i++ {
@@ -45,6 +57,16 @@ func indexOf(values []string, s string) int {
 		}
 	}
 	return -1
+}
+
+func stepTS(ts, step int64) int64 {
+	if step > 0 {
+		return ts - ts%step
+	}
+	if step == 0 {
+		return ts
+	}
+	return 0
 }
 
 // Inline and byte-free variant of hash/fnv's fnv64a.

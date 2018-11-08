@@ -5,7 +5,10 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,7 +18,7 @@ import (
 
 type EventDB struct {
 	*badger.DB
-	Event  string
+	event  string
 	mu     sync.RWMutex
 	ids    map[string]uint64
 	fields map[uint64]Fields
@@ -24,7 +27,7 @@ type EventDB struct {
 
 func NewEventDB(event string, db *badger.DB) *EventDB {
 	return &EventDB{
-		Event:  event,
+		event:  event,
 		DB:     db,
 		ids:    make(map[string]uint64),
 		fields: make(map[uint64]Fields),
@@ -37,13 +40,53 @@ const (
 	keyPrefixValue = "v:"
 )
 
+func (db *EventDB) Event() string {
+	return db.event
+}
+
+func (db *EventDB) EventKey(t time.Time) []byte {
+	return db.appendEventKey(nil, t)
+}
+
+func (db *EventDB) Query(q *Query) ([]*ScanResult, error) {
+	var s scanResults
+	if len(q.Group) > 0 {
+		s = newGroupEventScan(q)
+	} else {
+		s = newEventScan(q)
+	}
+	err := db.scan(q.Start, q.End, q.Step, s)
+	if err != nil {
+		return nil, err
+	}
+	return s.Results(), nil
+
+}
+func (db *EventDB) Labels() ([]string, error) {
+	err := db.Sync()
+	if err != nil {
+		return nil, err
+	}
+	var labels []string
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, fields := range db.fields {
+		for i := range fields {
+			f := &fields[i]
+			labels = appendDistinct(labels, f.Label)
+		}
+	}
+	sort.Strings(labels)
+	return labels, nil
+}
+
 func (db *EventDB) prefixSize() int {
-	return keyPrefixSize + len(db.Event)
+	return keyPrefixSize + len(db.event)
 }
 
 func (db *EventDB) appendEventKey(dst []byte, t time.Time) []byte {
 	dst = append(dst, keyPrefixEvent...)
-	dst = append(dst, db.Event...)
+	dst = append(dst, db.event...)
 	buf := [8]byte{}
 	binary.BigEndian.PutUint64(buf[:], uint64(t.Unix()))
 	dst = append(dst, buf[:]...)
@@ -52,7 +95,7 @@ func (db *EventDB) appendEventKey(dst []byte, t time.Time) []byte {
 
 func (db *EventDB) appendValueKey(dst []byte, id uint64) []byte {
 	dst = append(dst, keyPrefixValue...)
-	dst = append(dst, db.Event...)
+	dst = append(dst, db.event...)
 	buf := [8]byte{}
 	binary.BigEndian.PutUint64(buf[:], id)
 	dst = append(dst, buf[:]...)
@@ -60,14 +103,14 @@ func (db *EventDB) appendValueKey(dst []byte, id uint64) []byte {
 }
 
 func NormalizeStep(step time.Duration) time.Duration {
-	if step < time.Second {
+	switch {
+	case step <= 0:
+		return step
+	case step < time.Second:
 		return time.Second
+	default:
+		return step - step%time.Second
 	}
-	return step - step%time.Second
-}
-
-type EventScanner interface {
-	ScanEvent(event string, id uint64, fields Fields, ts, n int64)
 }
 
 // Sync syncs the field cache once
@@ -104,81 +147,7 @@ func (db *EventDB) sync() error {
 
 }
 
-func (db *EventDB) Scan(start, end time.Time, match Fields, scan EventScanner) error {
-	index, err := db.scanFields(match)
-	if err != nil {
-		return err
-	}
-	return db.scan(start, end, index, scan)
-}
-
-func (db *EventDB) scanFields(match Fields) (index map[uint64]Fields, err error) {
-	if err = db.Sync(); err != nil {
-		return
-	}
-	index = make(map[uint64]Fields)
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	for id, fields := range db.fields {
-		if fields.MatchSorted(match) {
-			index[id] = fields
-		}
-	}
-	return
-}
-
-func (db *EventDB) scan(start, end time.Time, index map[uint64]Fields, scan EventScanner) error {
-	if scan == nil {
-		return nil
-	}
-	minTS := start.Unix()
-	seek := db.appendEventKey(nil, end)
-	prefixSize := uint(db.prefixSize())
-	prefix := seek[:prefixSize]
-
-	return db.View(func(txn *badger.Txn) (err error) {
-		var (
-			ts     int64
-			id     uint64
-			n      int64
-			key    []byte
-			fields Fields
-			item   *badger.Item
-			iter   = txn.NewIterator(badger.IteratorOptions{
-				Reverse: true,
-			})
-		)
-		defer iter.Close()
-		for iter.Seek(seek); iter.ValidForPrefix(prefix); iter.Next() {
-			item = iter.Item()
-			key = item.Key()
-			if prefixSize < uint(len(key)) {
-				if key = key[prefixSize:]; len(key) == 8 {
-					ts = int64(binary.BigEndian.Uint64(key))
-					if ts < minTS {
-						return nil
-					}
-				}
-			}
-			key, err = item.Value()
-			if err != nil {
-				return
-			}
-			for len(key) >= 16 {
-				id = binary.BigEndian.Uint64(key)
-				n = int64(binary.BigEndian.Uint64(key[8:]))
-				key = key[16:]
-				fields = index[id]
-				if fields != nil {
-					scan.ScanEvent(db.Event, id, fields, ts, n)
-				}
-			}
-		}
-		return
-	})
-}
-
-func (db *EventDB) rawFieldsID(data []byte) (id uint64, err error) {
+func (db *EventDB) loadID(data []byte) (id uint64, err error) {
 	h := hashFNVa32(data)
 	id = uint64(h) << 32
 	seek := db.appendValueKey(nil, id)
@@ -303,6 +272,62 @@ func (db *EventDB) store(key, value []byte) (err error) {
 	return txn.Commit(nil)
 }
 
+func (e *EventDB) getFields(id uint64) (fields Fields) {
+	e.mu.RLock()
+	fields = e.fields[id]
+	e.mu.RUnlock()
+	return
+}
+
+func (e *EventDB) loadFields(id uint64) (fields Fields, err error) {
+	fields = e.getFields(id)
+	if fields != nil {
+		return fields, nil
+	}
+	buf := bufferPool.Get().([]byte)
+	buf = e.appendValueKey(buf[:0], id)
+	txn := e.NewTransaction(false)
+	defer txn.Discard()
+	item, err := txn.Get(buf)
+	bufferPool.Put(buf)
+	if err != nil {
+		return
+	}
+	v, err := item.Value()
+	if err != nil {
+		return
+	}
+	raw := string(v)
+	fields = FieldsFromString(raw)
+	e.mu.Lock()
+	e.fields[id] = fields
+	e.ids[raw] = id
+	e.mu.Unlock()
+	return
+
+}
+func (e *EventDB) AppendFields(fields Fields, id uint64) (Fields, error) {
+	f := e.getFields(id)
+	if f != nil {
+		return append(fields, f...), nil
+	}
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf)
+	buf = e.appendValueKey(buf[:0], id)
+	err := e.View(func(txn *badger.Txn) (err error) {
+		item, err := txn.Get(buf)
+		if err == nil {
+			buf, err = item.ValueCopy(buf)
+		}
+		return
+	})
+	if err == nil {
+		e.set(buf, id)
+		fields = fields.AppendRawString(string(buf))
+	}
+	return fields, err
+}
+
 func (e *EventDB) getID(data []byte) (id uint64, ok bool) {
 	e.mu.RLock()
 	id, ok = e.ids[string(data)]
@@ -310,9 +335,10 @@ func (e *EventDB) getID(data []byte) (id uint64, ok bool) {
 	return
 }
 
-func (e *EventDB) set(data []byte, id uint64) {
+func (e *EventDB) set(data []byte, id uint64) (fields Fields) {
 	e.mu.Lock()
-	if _, ok := e.fields[id]; ok {
+	fields, ok := e.fields[id]
+	if ok {
 		e.mu.Unlock()
 		return
 	}
@@ -324,8 +350,10 @@ func (e *EventDB) set(data []byte, id uint64) {
 	if e.fields == nil {
 		e.fields = make(map[uint64]Fields)
 	}
-	e.fields[id] = FieldsFromString(s)
+	fields = FieldsFromString(s)
+	e.fields[id] = fields
 	e.mu.Unlock()
+	return
 }
 
 func (db *EventDB) StoreEvent(tm time.Time, event *Event) (err error) {
@@ -359,7 +387,7 @@ func (db *EventDB) Store(tm time.Time, labels []string, counters Snapshot) (err 
 		buf = index.AppendFields(buf[:0], c.Values)
 		id, ok = db.getID(buf)
 		if !ok {
-			id, err = db.rawFieldsID(buf)
+			id, err = db.loadID(buf)
 			if err != nil {
 				return err
 			}
@@ -395,50 +423,83 @@ func (db MultiEventDB) Get(event string) (*EventDB, error) {
 	return nil, fmt.Errorf("Unknown event %q", event)
 }
 
-func (db MultiEventDB) Summary(event string, q *Query) ([]Summary, error) {
-	e := db[event]
-	if e == nil {
-		return nil, fmt.Errorf("Unknown event %q", event)
-	}
-	scan := NewSummaryScan(event, q)
-	if err := e.Scan(q.Start, q.End, q.Match, scan); err != nil {
-		return nil, err
-	}
-	return scan.Results, nil
-}
-
-func (db MultiEventDB) Scan(q *Query, events ...string) ([]*TimeSeries, error) {
-	g := errgroup.Group{}
-	scans := make([]*TimeSeriesScan, len(events))
-	for i, event := range events {
-		i, event := i, event
+func (db *MultiEventDB) Labels(events ...string) (map[string][]string, error) {
+	g := new(errgroup.Group)
+	mu := sync.Mutex{}
+	results := make(map[string][]string, len(events))
+	for _, event := range events {
+		event := event
 		g.Go(func() error {
-			event, err := db.Get(event)
+			db, err := db.Get(event)
 			if err != nil {
 				return err
 			}
-			scan := NewTimeSeriesScan(event.Event, q)
-			if err := event.Scan(q.Start, q.End, q.Match, scan); err != nil {
+			labels, err := db.Labels()
+			if err != nil {
 				return err
 			}
-			scans[i] = scan
+			mu.Lock()
+			results[event] = labels
+			mu.Unlock()
 			return nil
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	size := 0
-	for i := range scans {
-		size += len(scans[i].Results)
-	}
-	results := make([]*TimeSeries, 0, size)
-	for _, scan := range scans {
-		for j := range scan.Results {
-			results = append(results, &scan.Results[j])
-		}
-	}
 	return results, nil
+}
+
+func (db *MultiEventDB) Query(q *Query, events ...string) (MultiScanResults, error) {
+	g := new(errgroup.Group)
+	mu := sync.Mutex{}
+	m := make(map[string][]*ScanResult, len(events))
+	for _, event := range events {
+		event := event
+		g.Go(func() error {
+			db, err := db.Get(event)
+			if err != nil {
+				return err
+			}
+			results, err := db.Query(q)
+			if err != nil {
+				for _, r := range results {
+					r.Close()
+				}
+				return err
+			}
+			mu.Lock()
+			m[event] = results
+			mu.Unlock()
+			return nil
+		})
+	}
+	return m, g.Wait()
+}
+
+func (db MultiEventDB) EventSummary(q *Query, events ...string) (*EventSummaries, error) {
+	results, err := db.Query(q, events...)
+	defer results.Close()
+	if err != nil {
+		return nil, err
+	}
+	return NewEventSummaries(q.EmptyValue, results.Results()...), nil
+}
+
+func (db MultiEventDB) FieldSummary(q *Query, events ...string) (FieldSummaries, error) {
+	results, err := db.Query(q, events...)
+	defer results.Close()
+	if err != nil {
+		return nil, err
+	}
+	sums := FieldSummaries{}
+	sums = sums.Append(results.Results()...)
+	return sums, nil
+}
+
+func (db MultiEventDB) Summary(q *Query, events ...string) (MultiScanResults, error) {
+	q.Step = -1
+	return db.Query(q, events...)
 }
 
 func DumpKeys(db *badger.DB, w io.Writer) error {
@@ -462,4 +523,50 @@ func DumpKeys(db *badger.DB, w io.Writer) error {
 		}
 		return nil
 	})
+}
+
+type Query struct {
+	Match      Fields        `json:"match,omitempty"`
+	Group      []string      `json:"group,omitempty"`
+	Start      time.Time     `json:"start"`
+	End        time.Time     `json:"end"`
+	Step       time.Duration `json:"step"`
+	EmptyValue string        `json:"empty,omitempty"`
+}
+
+func (q *Query) SetValues(values url.Values) {
+	if step, ok := values["step"]; ok {
+		if len(step) > 0 {
+			q.Step, _ = time.ParseDuration(step[0])
+		} else {
+			q.Step = 0
+		}
+	} else {
+		q.Step = -1
+	}
+	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
+	q.Start = time.Unix(start, 0)
+	end, _ := strconv.ParseInt(values.Get("end"), 10, 64)
+	q.End = time.Unix(end, 0)
+	match := q.Match[:0]
+	for key, values := range values {
+		if strings.HasPrefix(key, "match.") {
+			label := strings.TrimPrefix(key, "match.")
+			for _, value := range values {
+				match = append(match, Field{
+					Label: label,
+					Value: value,
+				})
+			}
+		}
+	}
+	sort.Stable(match)
+	q.Match = match
+	group, ok := values["group"]
+	if ok && len(group) == 0 {
+		group = make([]string, 0, len(q.Match))
+		group = q.Match.appendDistinctLabels(group)
+	}
+	q.Group = group
+	q.EmptyValue = values.Get("empty")
 }

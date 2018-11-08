@@ -2,8 +2,11 @@ package meter
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 )
+
+var _ sort.Interface = DataPoints{}
 
 // AssertEqual checks if values are equal
 func AssertEqual(t *testing.T, a interface{}, b interface{}) {

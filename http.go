@@ -19,70 +19,15 @@ import (
 // 	QueryParamStart      = "start"
 // 	QueryParamEnd        = "end"
 // 	QueryParamGroup      = "group"
-// 	QueryParamMode       = "mode"
 // )
-
-// func ParseQuery(q url.Values, tdec tcodec.TimeDecoder) (s QueryBuilder, err error) {
-// 	eventNames := q[QueryParamEvent]
-// 	delete(q, QueryParamEvent)
-// 	if len(eventNames) == 0 {
-// 		err = fmt.Errorf("Missing query.%s", QueryParamEvent)
-// 		return
-// 	}
-// 	if _, ok := q[QueryParamResolution]; ok {
-// 		s.Resolution = q.Get(QueryParamResolution)
-// 		delete(q, QueryParamResolution)
-// 	} else {
-// 		err = fmt.Errorf("Missing query.%s", QueryParamResolution)
-// 		return
-// 	}
-// 	if _, ok := q[QueryParamGroup]; ok {
-// 		s.Group = q[QueryParamGroup]
-// 		delete(q, QueryParamGroup)
-// 	}
-
-// 	if start, ok := q[QueryParamStart]; !ok {
-// 		err = fmt.Errorf("Missing query.%s", QueryParamStart)
-// 		return
-// 	} else if s.Start, err = tdec.UnmarshalTime(start[0]); err != nil {
-// 		err = fmt.Errorf("Invalid query.%s: %s", QueryParamStart, err)
-// 		return
-// 	}
-// 	delete(q, QueryParamStart)
-// 	if end, ok := q[QueryParamEnd]; !ok {
-// 		err = fmt.Errorf("Missing query.%s", QueryParamEnd)
-// 		return
-// 	} else if s.End, err = tdec.UnmarshalTime(end[0]); err != nil {
-// 		err = fmt.Errorf("Invalid query.%s: %s", QueryParamEnd, err)
-// 		return
-// 	}
-// 	delete(q, QueryParamEnd)
-// 	s.Query = q
-// 	if now := time.Now(); s.End.After(now) {
-// 		s.End = now
-// 	}
-// 	if s.Start.IsZero() || s.Start.After(s.End) {
-// 		s.Start = s.End
-// 	}
-// 	switch q.Get(QueryParamMode) {
-// 	case "exact":
-// 		s.Mode = ModeExact
-// 	case "values":
-// 		s.Mode = ModeValues
-// 	default:
-// 		s.Mode = ModeScan
-// 	}
-// 	delete(q, QueryParamMode)
-// 	s.Events = eventNames
-// 	return
-
-// }
 
 func Handler(events MultiEventDB) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", StoreHandler(events))
-	mux.HandleFunc("/scan", ScanHandler(events))
+	mux.HandleFunc("/query", ScanHandler(events))
 	mux.HandleFunc("/summary", SummaryHandler(events))
+	mux.HandleFunc("/fields", FieldSummaryHandler(events))
+	mux.HandleFunc("/labels", LabelsHandler(events))
 	return mux
 }
 
@@ -106,11 +51,32 @@ func (r *StoreRequest) Reset() {
 func byName(events ...*EventDB) map[string]*EventDB {
 	m := make(map[string]*EventDB, len(events))
 	for _, event := range events {
-		m[event.Event] = event
+		m[event.Event()] = event
 	}
 	return m
 }
 
+func LabelsHandler(db MultiEventDB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		events := r.URL.Query()["events"]
+		labels, err := db.Labels(events...)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		serveJSON(w, labels)
+	}
+}
+
+func serveJSON(w http.ResponseWriter, x interface{}) error {
+	enc := json.NewEncoder(w)
+	w.Header().Set("Content-Type", "application/json")
+	return enc.Encode(x)
+}
 func StoreHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -146,24 +112,40 @@ func StoreHandler(db MultiEventDB) http.HandlerFunc {
 	}
 }
 
-func SummaryHandler(db MultiEventDB) http.HandlerFunc {
+func FieldSummaryHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 		values := r.URL.Query()
-		event := values.Get("event")
 		q := Query{}
 		q.SetValues(values)
-		results, err := db.Summary(event, &q)
+		sum, err := db.FieldSummary(&q, values["event"]...)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		enc := json.NewEncoder(w)
-		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(results)
+		serveJSON(w, sum)
+	}
+}
+
+func SummaryHandler(db MultiEventDB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		q := Query{}
+		values := r.URL.Query()
+		q.SetValues(values)
+		q.Step = -1
+		sum, err := db.EventSummary(&q, values["event"]...)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		serveJSON(w, sum.Table())
 	}
 }
 
@@ -176,14 +158,13 @@ func ScanHandler(db MultiEventDB) http.HandlerFunc {
 		q := Query{}
 		values := r.URL.Query()
 		q.SetValues(values)
-		results, err := db.Scan(&q, values["event"]...)
+		results, err := db.Query(&q, values["event"]...)
+		defer results.Close()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		enc := json.NewEncoder(w)
-		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(results)
+		serveJSON(w, results)
 	}
 }
 
@@ -293,8 +274,8 @@ func DumpKeysHandler(db *badger.DB) http.HandlerFunc {
 		w.Header().Set("Content-Type", "text/plain")
 		DumpKeys(db, w)
 	}
-
 }
+
 func DebugHandler(db *badger.DB) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/keys", DumpKeysHandler(db))

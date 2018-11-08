@@ -2,9 +2,9 @@ package meter
 
 import (
 	"encoding/json"
-	"net/url"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -30,8 +30,6 @@ func (data DataPoints) IndexOf(tm time.Time) int {
 	}
 	return -1
 }
-
-var _ sort.Interface = DataPoints{}
 
 func (s DataPoints) Sort() {
 	sort.Sort(s)
@@ -89,174 +87,199 @@ func (s DataPoints) MarshalJSON() (data []byte, err error) {
 	return data, nil
 }
 
-type TimeSeries struct {
-	Event  string     `json:"event"`
-	Fields Fields     `json:"fields"`
-	Data   DataPoints `json:"data"`
+type ScanResult struct {
+	Event  string      `json:"event"`
+	Fields Fields      `json:"fields,omitempty"`
+	Total  int64       `json:"total"`
+	Data   []DataPoint `json:"data,omitempty"`
 }
 
-type EventScan struct {
-	*Query
-	Event   string
-	Results []TimeSeries
-}
-type SummaryScan struct {
-	*Query
-	Event   string
-	Results []Summary
-}
-type EventSummary struct {
-	*Query
-	Event   string    `json:"event"`
-	Results []Summary `json:"results"`
+var resultsPool sync.Pool
+
+func blankResult() *ScanResult {
+	if x := resultsPool.Get(); x != nil {
+		return x.(*ScanResult)
+	}
+	return new(ScanResult)
 }
 
-type Summary struct {
+func closeResults(results ...*ScanResult) {
+	for _, r := range results {
+		r.Close()
+	}
+}
+
+func (r *ScanResult) Close() {
+	if r != nil {
+		r.Reset()
+		resultsPool.Put(r)
+	}
+}
+
+func (r *ScanResult) Reset() {
+	*r = ScanResult{
+		Fields: r.Fields[:0],
+		Data:   r.Data[:0],
+	}
+}
+
+func (r *ScanResult) Add(ts, n int64) error {
+	r.Total += n
+	if len(r.Data) > 0 {
+		if d := r.Data[len(r.Data)-1]; d.Timestamp == ts {
+			d.Value += n
+			return nil
+		}
+	}
+	r.Data = append(r.Data, DataPoint{Timestamp: ts, Value: n})
+	return nil
+}
+
+type MultiScanResults map[string][]*ScanResult
+
+func (m MultiScanResults) Close() {
+	if m == nil {
+		return
+	}
+	for event, results := range m {
+		delete(m, event)
+		closeResults(results...)
+	}
+}
+func (m MultiScanResults) Results() (results []*ScanResult) {
+	for event := range m {
+		results = append(results, m[event]...)
+	}
+	return results
+}
+
+func (r *EventSummary) TableRow(events []string) []interface{} {
+	row := make([]interface{}, 0, len(r.Values)+len(events))
+	for _, v := range r.Values {
+		row = append(row, v)
+	}
+	for _, event := range events {
+		row = append(row, r.Totals[event])
+	}
+	return row
+}
+
+type FieldSummary struct {
+	Event  string           `json:"event"`
 	Label  string           `json:"label"`
 	Values map[string]int64 `json:"values"`
 }
 
-func NewSummaryScan(event string, q *Query) *SummaryScan {
-	scan := SummaryScan{
-		Query:   q,
-		Event:   event,
-		Results: make([]Summary, len(q.Group)),
+func (s *FieldSummary) Add(value string, n int64) {
+	if s.Values == nil {
+		s.Values = make(map[string]int64)
 	}
-	for i, label := range q.Group {
-		scan.Results[i] = Summary{
-			Label:  label,
-			Values: make(map[string]int64),
+	s.Values[value] += n
+}
+
+type FieldSummaries []FieldSummary
+
+func (sums FieldSummaries) Append(results ...*ScanResult) FieldSummaries {
+	for _, r := range results {
+		for j := range r.Fields {
+			f := &r.Fields[j]
+			sums = sums.append(r.Event, f.Label, f.Value, r.Total)
 		}
 	}
-	return &scan
+	return sums
 }
 
-func (scan *SummaryScan) ScanEvent(_ string, id uint64, fields Fields, _, n int64) {
-	for i := range scan.Results {
-		d := &scan.Results[i]
-		if i := fields.IndexOf(d.Label); 0 <= i && i < len(fields) {
-			f := &fields[i]
-			d.Values[f.Value] += n
-		} else if scan.EmptyValue != "" {
-			d.Values[scan.EmptyValue] += n
+func (sums FieldSummaries) append(event, label, value string, n int64) FieldSummaries {
+	for i := range sums {
+		sum := &sums[i]
+		if sum.Event == event && sum.Label == label {
+			sum.Add(value, n)
+			return sums
 		}
 	}
-}
-
-type Query struct {
-	Match      Fields        `json:"match,omitempty"`
-	Group      []string      `json:"group,omitempty"`
-	Start      time.Time     `json:"start"`
-	End        time.Time     `json:"end"`
-	Step       time.Duration `json:"step"`
-	EmptyValue string        `json:"empty,omitempty"`
-}
-
-type TimeSeriesScan struct {
-	*Query
-	Event   string       `json:"event"`
-	Results []TimeSeries `json:"results"`
-	index   map[uint64]int
-	labels  []string
-	step    int64
-	err     error
-}
-
-func (scan TimeSeriesScan) Err() error {
-	return scan.err
-}
-
-func NewTimeSeriesScan(event string, q *Query) *TimeSeriesScan {
-	scan := TimeSeriesScan{
-		Query: q,
-		Event: event,
-		index: make(map[uint64]int),
-	}
-	if len(q.Group) > 0 {
-		scan.labels = append(make([]string, 0, len(q.Group)), q.Group...)
-	} else if len(q.Match) > 0 {
-		scan.labels = q.Match.AppendLabelsDistinct(make([]string, 0, len(q.Match)))
-	}
-	if scan.Step < time.Second {
-		scan.step = 1
-	} else {
-		scan.step = int64(scan.Step / time.Second)
-	}
-
-	return &scan
-}
-
-func (scan *TimeSeriesScan) ScanEvent(_ string, id uint64, fields Fields, ts, n int64) {
-	i := scan.indexOf(id, fields)
-	if 0 <= i && i < len(scan.Results) {
-		r := &scan.Results[i]
-		ts -= ts % scan.step
-		if last := len(r.Data) - 1; 0 <= last && last < len(r.Data) {
-			if d := &r.Data[last]; d.Timestamp == ts {
-				d.Value += n
-				return
-			}
-		}
-		r.Data = append(r.Data, DataPoint{Timestamp: ts, Value: n})
-	}
-}
-
-func (scan *TimeSeriesScan) Labels() []string {
-	if scan.labels == nil {
-	}
-	return scan.labels
-}
-
-func (scan *TimeSeriesScan) set(id uint64, i int) {
-	if scan.index == nil {
-		scan.index = make(map[uint64]int)
-	}
-	scan.index[id] = i
-}
-
-func (scan *TimeSeriesScan) normalizeFields(fields Fields) Fields {
-	// Get a filtered copy of fields
-	result := Fields(make([]Field, len(scan.labels)))
-	for i, label := range scan.labels {
-		if j := fields.IndexOf(label); 0 <= j && j < len(fields) {
-			result[i] = fields[j]
-		} else {
-			result[i] = Field{Label: label, Value: scan.EmptyValue}
-		}
-	}
-	sort.Sort(result)
-	return result
-}
-func (scan *TimeSeriesScan) indexOf(id uint64, fields Fields) int {
-	if i, ok := scan.index[id]; ok {
-		return i
-	}
-
-	fields = scan.normalizeFields(fields)
-
-	for i := range scan.Results {
-		r := &scan.Results[i]
-		if r.Fields.Equal(fields) {
-			scan.index[id] = i
-			return i
-		}
-	}
-	scan.index[id] = len(scan.Results)
-	scan.Results = append(scan.Results, TimeSeries{
-		Event:  scan.Event,
-		Fields: fields,
+	return append(sums, FieldSummary{
+		Event:  event,
+		Label:  label,
+		Values: map[string]int64{value: n},
 	})
-	return scan.index[id]
 }
 
-func (q *Query) SetValues(values url.Values) {
-	q.Step, _ = time.ParseDuration(values.Get("step"))
-	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
-	q.Start = time.Unix(start, 0)
-	end, _ := strconv.ParseInt(values.Get("end"), 10, 64)
-	q.End = time.Unix(end, 0)
-	q.Group = append(q.Group[:0], values["group"]...)
-	q.Match = SplitAppendFields(q.Match[:0], ':', values["match"]...)
-	sort.Stable(q.Match)
-	q.EmptyValue = values.Get("empty")
+type EventSummaries struct {
+	Labels []string
+	Events []string
+	Data   []EventSummary
+}
+
+func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
+	for _, label := range labels {
+		v := fields.Get(label)
+		if v == "" {
+			v = empty
+		}
+		dst = append(dst, v)
+	}
+	return dst
+}
+
+func NewEventSummaries(empty string, results ...*ScanResult) *EventSummaries {
+	s := new(EventSummaries)
+	for _, r := range results {
+		s.Events = appendDistinct(s.Events, r.Event)
+		for i := range r.Fields {
+			f := &r.Fields[i]
+			s.Labels = appendDistinct(s.Labels, f.Label)
+		}
+	}
+	sort.Strings(s.Labels)
+	values := make([]string, len(s.Labels))
+	sort.Strings(s.Events)
+	for _, r := range results {
+		if r.Total == 0 {
+			continue
+		}
+		values = r.Fields.AppendValues(values[:0], empty, s.Labels...)
+		s.add(r.Event, values, r.Total)
+	}
+
+	return s
+}
+
+type EventSummary struct {
+	Values []string
+	Totals map[string]int64
+}
+
+func (s *EventSummaries) add(event string, values []string, n int64) {
+	for i := range s.Data {
+		sum := &s.Data[i]
+		if stringsEqual(sum.Values, values) {
+			sum.Totals[event] = n
+			return
+		}
+	}
+	s.Data = append(s.Data, EventSummary{
+		Values: values,
+		Totals: map[string]int64{event: n},
+	})
+
+}
+
+func (s *EventSummaries) Table() Table {
+	tbl := Table{}
+	for _, label := range s.Labels {
+		tbl.Columns = append(tbl.Columns, "label:"+label)
+	}
+	for _, event := range s.Events {
+		tbl.Columns = append(tbl.Columns, "event:"+event)
+	}
+	for i := range s.Data {
+		r := &s.Data[i]
+		tbl.Data = append(tbl.Data, r.TableRow(s.Events))
+	}
+	return tbl
+}
+
+type Table struct {
+	Columns []interface{}   `json:"cols"`
+	Data    [][]interface{} `json:"data"`
 }

@@ -3,6 +3,7 @@ package meter
 import (
 	"encoding/json"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -12,6 +13,16 @@ type Field struct {
 }
 type Fields []Field
 
+func (fields Fields) Get(label string) string {
+	for i := range fields {
+		f := &fields[i]
+		if f.Label == label {
+			return f.Value
+		}
+	}
+	return ""
+}
+
 func (fields Fields) Values() (values url.Values) {
 	values = make(map[string][]string, len(fields))
 	for i := range fields {
@@ -19,15 +30,6 @@ func (fields Fields) Values() (values url.Values) {
 		values[f.Label] = append(values[f.Label], f.Value)
 	}
 	return
-}
-
-func (fields Fields) AppendValues(values url.Values) Fields {
-	for label := range values {
-		for _, value := range values[label] {
-			fields = append(fields, Field{Label: label, Value: value})
-		}
-	}
-	return fields
 }
 
 func (fields Fields) Grow(size int) Fields {
@@ -159,22 +161,6 @@ func (fields Fields) Equal(other Fields) bool {
 	return false
 }
 
-func (fields Fields) Filter(dst Fields, labels ...string) Fields {
-	if len(labels) == 0 {
-		return append(dst, fields...)
-	}
-	for i := range fields {
-		f := &fields[i]
-		for _, label := range labels {
-			if label == f.Label {
-				dst = append(dst, *f)
-				break
-			}
-		}
-	}
-	return dst
-}
-
 func (fields Fields) Len() int {
 	return len(fields)
 }
@@ -196,6 +182,7 @@ func (fields Fields) AppendLabelsDistinct(labels []string) []string {
 	}
 	return labels
 }
+
 func (fields Fields) AppendLabels(labels []string) []string {
 	for i := range fields {
 		f := &fields[i]
@@ -215,24 +202,6 @@ func (fields Fields) Seek(label string) Fields {
 	return nil
 }
 
-func (fields Fields) MatchValues(values url.Values) bool {
-	n := 0
-	for i := range fields {
-		f := &fields[i]
-		if want, ok := values[f.Label]; ok {
-			if len(want) > 0 && indexOf(want, f.Value) == -1 {
-				return false
-			}
-			n++
-		}
-	}
-	return n == len(values)
-}
-
-func (fields Fields) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fields.Map())
-}
-
 func (fields Fields) Map() map[string]string {
 	if fields == nil {
 		return nil
@@ -244,18 +213,8 @@ func (fields Fields) Map() map[string]string {
 	}
 	return m
 }
-
-func SubValues(separator byte, values ...string) (q url.Values) {
-	q = make(map[string][]string, len(values))
-	for _, kv := range values {
-		if pos := strings.IndexByte(kv, separator); 0 <= pos && pos < len(kv) {
-			if k, v := kv[:pos], kv[pos+1:]; k != "" && v != "" {
-				q[k] = append(q[k], v)
-			}
-		}
-	}
-	return
-
+func (fields Fields) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fields.Map())
 }
 
 func SplitAppendFields(fields Fields, separator byte, values ...string) Fields {
@@ -272,3 +231,71 @@ func SplitAppendFields(fields Fields, separator byte, values ...string) Fields {
 	return fields
 
 }
+
+func (fields Fields) appendDistinctLabels(dst []string) []string {
+	for i := range fields {
+		f := &fields[i]
+		if indexOf(dst, f.Label) == -1 {
+			dst = append(dst, f.Label)
+		}
+	}
+	return dst
+
+}
+
+func (fields Fields) Copy() Fields {
+	if fields == nil {
+		return nil
+	}
+	cp := make([]Field, len(fields))
+	copy(cp, fields)
+	return cp
+}
+func (fields Fields) Sorted() Fields {
+	fields = fields.Copy()
+	sort.Stable(fields)
+	return fields
+}
+
+// func SubValues(separator byte, values ...string) (q url.Values) {
+// 	q = make(map[string][]string, len(values))
+// 	for _, kv := range values {
+// 		if pos := strings.IndexByte(kv, separator); 0 <= pos && pos < len(kv) {
+// 			if k, v := kv[:pos], kv[pos+1:]; k != "" && v != "" {
+// 				q[k] = append(q[k], v)
+// 			}
+// 		}
+// 	}
+// 	return
+
+// }
+
+// func (fields Fields) MatchValues(values url.Values) bool {
+// 	n := 0
+// 	for i := range fields {
+// 		f := &fields[i]
+// 		if want, ok := values[f.Label]; ok {
+// 			if len(want) > 0 && indexOf(want, f.Value) == -1 {
+// 				return false
+// 			}
+// 			n++
+// 		}
+// 	}
+// 	return n == len(values)
+// }
+
+// func (fields Fields) Filter(dst Fields, labels ...string) Fields {
+// 	if len(labels) == 0 {
+// 		return append(dst, fields...)
+// 	}
+// 	for i := range fields {
+// 		f := &fields[i]
+// 		for _, label := range labels {
+// 			if label == f.Label {
+// 				dst = append(dst, *f)
+// 				break
+// 			}
+// 		}
+// 	}
+// 	return dst
+// }
