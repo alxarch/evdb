@@ -3,6 +3,7 @@ package meter
 import (
 	"encoding/json"
 	"sort"
+	"sync"
 )
 
 type Field struct {
@@ -34,7 +35,18 @@ func (fields Fields) Grow(size int) Fields {
 	return fields
 }
 
-func (fields Fields) AppendRawString(s string) Fields {
+func (fields Fields) AppendTo(dst []byte) []byte {
+	for i := range fields {
+		f := &fields[i]
+		dst = append(dst, byte(len(f.Label)))
+		dst = append(dst, f.Label...)
+		dst = append(dst, byte(len(f.Value)))
+		dst = append(dst, f.Value...)
+	}
+	return dst
+}
+
+func FieldsFromString(s string) (fields Fields) {
 	if len(s) > 0 {
 		i := len(fields)
 		fields = fields.Grow(int(s[0]))
@@ -63,11 +75,6 @@ func (fields Fields) AppendRawString(s string) Fields {
 
 	}
 	return fields
-
-}
-
-func FieldsFromString(s string) (fields Fields) {
-	return fields.AppendRawString(s)
 }
 
 // MatchSorted matches 2 sets of sorted fields.
@@ -158,4 +165,22 @@ func (fields Fields) Sorted() Fields {
 	fields = fields.Copy()
 	sort.Stable(fields)
 	return fields
+}
+
+type FieldCache struct {
+	mu     sync.RWMutex
+	ids    map[string]uint64
+	fields map[uint64]Fields
+}
+
+func (c *FieldCache) ID(fields Fields) (uint64, bool) {
+	raw := fields.AppendTo(nil)
+	return c.RawID(raw)
+}
+
+func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
+	c.mu.RLock()
+	id, ok = c.ids[string(raw)]
+	c.mu.RUnlock()
+	return
 }

@@ -9,6 +9,7 @@ import (
 type Event struct {
 	Name     string   `json:"name"`
 	Labels   []string `json:"labels"`
+	sorted   labelIndex
 	mu       sync.RWMutex
 	counters Snapshot
 	index    map[uint64][]int
@@ -22,6 +23,7 @@ func NewEvent(name string, labels ...string) *Event {
 	e := Event{
 		Name:     name,
 		Labels:   labels,
+		sorted:   newLabeLIndex(labels...),
 		counters: make([]Counter, 0, defaultEventSize),
 		index:    make(map[uint64][]int, defaultEventSize),
 	}
