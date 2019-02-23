@@ -385,6 +385,7 @@ retry:
 	return
 }
 
+// MultiEventDB is a db of multiple events
 type MultiEventDB map[string]*EventDB
 
 func NewMultiEventDB(db *badger.DB, events ...string) MultiEventDB {
@@ -481,6 +482,7 @@ func (db MultiEventDB) Summary(q *Query, events ...string) (MultiScanResults, er
 	return db.Query(q, events...)
 }
 
+// Query is a query for event results
 type Query struct {
 	Match      Fields        `json:"match,omitempty"`
 	Group      []string      `json:"group,omitempty"`
@@ -490,6 +492,7 @@ type Query struct {
 	EmptyValue string        `json:"empty,omitempty"`
 }
 
+// SetValues sets query values from a URL query
 func (q *Query) SetValues(values url.Values) {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
@@ -530,6 +533,7 @@ func (q *Query) SetValues(values url.Values) {
 	q.EmptyValue = values.Get("empty")
 }
 
+// DumpKeys dumps keys from a badger.DB to a writer
 func DumpKeys(db *badger.DB, w io.Writer) error {
 	return db.View(func(txn *badger.Txn) error {
 		iter := txn.NewIterator(badger.IteratorOptions{

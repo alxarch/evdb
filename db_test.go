@@ -1,4 +1,4 @@
-package meter
+package meter_test
 
 // func Test_rawFieldMatcher(t *testing.T) {
 // 	q := url.Values{

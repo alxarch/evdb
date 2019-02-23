@@ -2,24 +2,17 @@ package meter
 
 import (
 	"bytes"
-	"context"
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger"
 )
-
-// const (
-// 	QueryParamEvent      = "event"
-// 	QueryParamResolution = "res"
-// 	QueryParamStart      = "start"
-// 	QueryParamEnd        = "end"
-// 	QueryParamGroup      = "group"
-// )
 
 func Handler(events MultiEventDB) http.Handler {
 	mux := http.NewServeMux()
@@ -38,6 +31,17 @@ type StoreRequest struct {
 	Counters Snapshot  `json:"counters"`
 }
 
+func (r *StoreRequest) SetEvent(event *Event, tm time.Time) {
+	for i := range r.Counters {
+		r.Counters[i] = Counter{}
+	}
+	*r = StoreRequest{
+		Time:     tm,
+		Event:    event.Name,
+		Labels:   append(r.Labels[:0], event.Labels...),
+		Counters: event.Flush(r.Counters[:0]),
+	}
+}
 func (r *StoreRequest) Reset() {
 	for i := range r.Counters {
 		r.Counters[i] = Counter{}
@@ -77,34 +81,46 @@ func serveJSON(w http.ResponseWriter, x interface{}) error {
 	w.Header().Set("Content-Type", "application/json")
 	return enc.Encode(x)
 }
+
 func StoreHandler(db MultiEventDB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
 			return
 		}
 		defer r.Body.Close()
-		s := getStoreBuffer()
-		defer putStoreBuffer(s)
-		_, err := s.Buffer.ReadFrom(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+		var body io.Reader
+		switch r.Header.Get("Content-Encoding") {
+		case "gzip":
+			zr, err := gzip.NewReader(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer zr.Close()
+			body = zr
+		case "deflate":
+			zr := flate.NewReader(r.Body)
+			defer zr.Close()
+			body = zr
+		default:
+			body = r.Body
 		}
-		if err := json.Unmarshal(s.Buffer.Bytes(), &s.StoreRequest); err != nil {
+		req := StoreRequest{}
+		dec := json.NewDecoder(body)
+		if err := dec.Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if s.Time.IsZero() {
-			s.Time = time.Now()
-
+		if req.Time.IsZero() {
+			req.Time = time.Now()
 		}
-		db, _ := db.Get(s.StoreRequest.Event)
+		db, _ := db.Get(req.Event)
 		if db == nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if err := db.Store(s.Time, s.Labels, s.Counters); err != nil {
+		if err := db.Store(req.Time, req.Labels, req.Counters); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -169,116 +185,110 @@ func ScanHandler(db MultiEventDB) http.HandlerFunc {
 }
 
 type HTTPClient struct {
-	URL string
 	*http.Client
+	URL string
 }
 
-func (c *HTTPClient) Batch(logger *log.Logger, events ...*Event) {
-	wg := new(sync.WaitGroup)
-	for _, e := range events {
-		wg.Add(1)
-		go func(e *Event) {
-			defer wg.Done()
-			if err := c.Sync(e); err != nil {
-				if logger != nil {
-					logger.Printf("Failed to sync event %s: %s\n", e.Name, err)
-				}
-			}
-		}(e)
-	}
-	wg.Wait()
-
+type syncError struct {
+	Event      string
+	StatusCode int
 }
 
-func (c *HTTPClient) Run(ctx context.Context, interval time.Duration, logger *log.Logger, events ...*Event) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	tick := time.NewTicker(interval)
-	pack := time.NewTicker(time.Hour)
-	defer c.Batch(logger, events...)
-	for {
-		select {
-		case <-ctx.Done():
-			pack.Stop()
-			tick.Stop()
-			return
-		case <-tick.C:
-			c.Batch(logger, events...)
-		case <-pack.C:
-			for _, event := range events {
-				event.Pack()
-			}
-		}
-	}
+func (e *syncError) Error() string {
+	return fmt.Sprintf("Sync %q failed: HTTP Status %d", e.Event, e.StatusCode)
 }
 
-var storeBufferPool sync.Pool
-
-type storeBuffer struct {
-	StoreRequest
-	bytes.Buffer
+type syncBuffer struct {
+	buffer bytes.Buffer
+	gzip   *gzip.Writer
+	json   *json.Encoder
 }
 
-func putStoreBuffer(s *storeBuffer) {
-	if s != nil {
-		s.Buffer.Reset()
-		s.StoreRequest.Reset()
-		storeBufferPool.Put(s)
+var syncBuffers sync.Pool
+
+func getSyncBuffer() *syncBuffer {
+	if x := syncBuffers.Get(); x != nil {
+		return x.(*syncBuffer)
 	}
-}
-func getStoreBuffer() *storeBuffer {
-	if x := storeBufferPool.Get(); x != nil {
-		return x.(*storeBuffer)
-	}
-	return new(storeBuffer)
+	return new(syncBuffer)
 }
 
-func (c *HTTPClient) Sync(e *Event) error {
+func putSyncBuffer(b *syncBuffer) {
+	syncBuffers.Put(b)
+}
 
-	s := getStoreBuffer()
-	defer putStoreBuffer(s)
-	s.Counters = e.Flush(s.Counters)
-	// if desc.Type() == MetricTypeIncrement {
-	s.Counters = s.Counters.FilterZero()
-	// }
-	if len(s.Counters) == 0 {
-		return nil
+func (b *syncBuffer) Encode(x interface{}) error {
+	b.buffer.Reset()
+	if b.gzip == nil {
+		b.gzip = gzip.NewWriter(&b.buffer)
+	} else {
+		b.gzip.Reset(&b.buffer)
 	}
-	s.Time = time.Now()
-	s.Event = e.Name
-	s.Labels = append(s.Labels[:0], e.Labels...)
-	enc := json.NewEncoder(&s.Buffer)
-	if err := enc.Encode(&s.StoreRequest); err != nil {
+	if b.json == nil {
+		b.json = json.NewEncoder(b.gzip)
+	}
+	if err := b.json.Encode(x); err != nil {
 		return err
 	}
+	return b.gzip.Close()
+}
+
+func (c *HTTPClient) Sync(e *Event, tm time.Time) (err error) {
+	s := getSnapshot()
+	defer putSnapshot(s)
+	if s = e.Flush(s[:0]); len(s) == 0 {
+		return
+	}
+	defer func() {
+		if err != nil {
+			// Merge back snapshot if sync failed
+			e.Merge(s)
+		}
+	}()
+	body := getSyncBuffer()
+	defer putSyncBuffer(body)
+	store := StoreRequest{
+		Time:     tm,
+		Event:    e.Name,
+		Labels:   e.Labels,
+		Counters: s,
+	}
+	err = body.Encode(&store)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, c.URL, &body.buffer)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+
 	client := c.Client
 	if client == nil {
 		client = http.DefaultClient
 	}
-	res, err := client.Post(c.URL, "application/json", &s.Buffer)
+	res, err := client.Do(req)
 	if err != nil {
-		e.Merge(s.Counters)
-		return err
+		return
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		e.Merge(s.Counters)
-		return fmt.Errorf("Failed to sync event %s to %s: %d %s", e.Name, c.URL, res.StatusCode, res.Status)
+		err = &syncError{
+			Event:      e.Name,
+			StatusCode: res.StatusCode,
+		}
 	}
-	return nil
+	return
 }
 
-func DumpKeysHandler(db *badger.DB) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		DumpKeys(db, w)
-	}
-}
-
+// DebugHandler returns a debug handler for a db
 func DebugHandler(db *badger.DB) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/keys", DumpKeysHandler(db))
+	mux.HandleFunc("/keys", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		DumpKeys(db, w)
+	})
 	return mux
 
 }

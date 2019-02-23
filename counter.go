@@ -1,6 +1,9 @@
 package meter
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+)
 
 type Counter struct {
 	Count  int64    `json:"n"`
@@ -91,31 +94,31 @@ func (c *Counter) Match(values []string) bool {
 // 	return c.AppendJSON(nil), nil
 // }
 
-// func (c *Counter) AppendJSON(dst []byte) []byte {
-// 	dst = append(dst, '[')
-// 	dst = strconv.AppendInt(dst, c.Count, 10)
-// 	dst = append(dst, ',', '[')
-// 	for i, v := range c.Values {
-// 		if i > 0 {
-// 			dst = append(dst, ',')
-// 		}
-// 		dst = append(dst, '"')
-// 		dst = append(dst, v...)
-// 		dst = append(dst, '"')
-// 	}
-// 	dst = append(dst, ']', ']')
-// 	return dst
-// }
+func (c *Counter) AppendJSON(dst []byte) []byte {
+	dst = append(dst, '[')
+	dst = strconv.AppendInt(dst, c.Count, 10)
+	dst = append(dst, ',', '[')
+	for i, v := range c.Values {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, '"')
+		dst = append(dst, v...)
+		dst = append(dst, '"')
+	}
+	dst = append(dst, ']', ']')
+	return dst
+}
 
-// func (s Snapshot) AppendJSON(dst []byte) []byte {
-// 	dst = append(dst, '[')
-// 	for i := range s {
-// 		if i > 0 {
-// 			dst = append(dst, ',')
-// 		}
-// 		c := &s[i]
-// 		dst = c.AppendJSON(dst)
-// 	}
-// 	dst = append(dst, ']')
-// 	return dst
-// }
+func (s Snapshot) AppendJSON(dst []byte) []byte {
+	dst = append(dst, '[')
+	for i := range s {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		c := &s[i]
+		dst = c.AppendJSON(dst)
+	}
+	dst = append(dst, ']')
+	return dst
+}

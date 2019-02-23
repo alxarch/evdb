@@ -25,32 +25,3 @@ func TestFields_MatchSorted(t *testing.T) {
 	}
 
 }
-
-// func TestFields_MatchValues(t *testing.T) {
-// 	fields := Fields{
-// 		{Label: "foo", Value: "bar"},
-// 	}
-// 	match := url.Values{
-// 		"foo": []string{"bar", "baz"},
-// 		"bar": []string{"baz"},
-// 	}
-// 	if fields.MatchValues(match) {
-// 		t.Errorf("Invalid match")
-// 	}
-// 	delete(match, "bar")
-// 	if !fields.MatchValues(match) {
-// 		t.Errorf("No match")
-// 	}
-// 	if !fields.MatchValues(nil) {
-// 		t.Errorf("No match")
-// 	}
-
-// }
-
-// func TestSubValues(t *testing.T) {
-// 	v := SubValues(':', "foo:bar", "bar:baz")
-// 	AssertEqual(t, v, url.Values{
-// 		"foo": []string{"bar"},
-// 		"bar": []string{"baz"},
-// 	})
-// }

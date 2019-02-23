@@ -16,7 +16,6 @@ var (
 	dataDir    = flag.String("dir", "", "Data dir")
 	addr       = flag.String("address", ":8080", "HTTP Listen address")
 	gcInterval = flag.Duration("gc-interval", 5*time.Minute, "Badger values GC interval")
-	ttl        = flag.Duration("ttl", 0, "Time series TTL")
 	minStep    = flag.Duration("min-step", time.Second, "Minimum step for results")
 )
 
@@ -35,12 +34,9 @@ func main() {
 		log.Fatal("Failed to open db", err)
 	}
 	defer db.Close()
-	events := []*meter.EventDB{}
-	for _, event := range flag.Args() {
-		events = append(events, meter.NewEventDB(event, db, 0))
-	}
+	events := meter.NewMultiEventDB(db, flag.Args()...)
 	http.Handle("/debug/", http.StripPrefix("/debug", meter.DebugHandler(db)))
-	http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events...)))
+	http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events)))
 	if err := http.ListenAndServe(*addr, nil); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
