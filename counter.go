@@ -10,6 +10,35 @@ type Counter struct {
 	Values []string `json:"v,omitempty"`
 }
 
+func (c *Counter) Match(values []string) bool {
+	if len(c.Values) == len(values) {
+		values = values[:len(c.Values)]
+		for i := range c.Values {
+			if c.Values[i] == values[i] {
+				continue
+			}
+			return false
+		}
+		return true
+	}
+	return false
+}
+func (c *Counter) AppendJSON(dst []byte) []byte {
+	dst = append(dst, '[')
+	dst = strconv.AppendInt(dst, c.Count, 10)
+	dst = append(dst, ',', '[')
+	for i, v := range c.Values {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(dst, '"')
+		dst = append(dst, v...)
+		dst = append(dst, '"')
+	}
+	dst = append(dst, ']', ']')
+	return dst
+}
+
 type Snapshot []Counter
 
 func (s Snapshot) FilterZero() Snapshot {
@@ -32,6 +61,19 @@ func (s Snapshot) Reset() Snapshot {
 	return s[:0]
 }
 
+func (s Snapshot) AppendJSON(dst []byte) []byte {
+	dst = append(dst, '[')
+	for i := range s {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		c := &s[i]
+		dst = c.AppendJSON(dst)
+	}
+	dst = append(dst, ']')
+	return dst
+}
+
 var snapshotPool sync.Pool
 
 func getSnapshot() Snapshot {
@@ -44,20 +86,6 @@ func getSnapshot() Snapshot {
 
 func putSnapshot(s Snapshot) {
 	snapshotPool.Put(s.Reset())
-}
-
-func (c *Counter) Match(values []string) bool {
-	if len(c.Values) == len(values) {
-		values = values[:len(c.Values)]
-		for i := range c.Values {
-			if c.Values[i] == values[i] {
-				continue
-			}
-			return false
-		}
-		return true
-	}
-	return false
 }
 
 // func (c *Counter) UnmarshalJSON(data []byte) error {
@@ -93,32 +121,3 @@ func (c *Counter) Match(values []string) bool {
 // func (c *Counter) MarshalJSON() ([]byte, error) {
 // 	return c.AppendJSON(nil), nil
 // }
-
-func (c *Counter) AppendJSON(dst []byte) []byte {
-	dst = append(dst, '[')
-	dst = strconv.AppendInt(dst, c.Count, 10)
-	dst = append(dst, ',', '[')
-	for i, v := range c.Values {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-		dst = append(dst, '"')
-		dst = append(dst, v...)
-		dst = append(dst, '"')
-	}
-	dst = append(dst, ']', ']')
-	return dst
-}
-
-func (s Snapshot) AppendJSON(dst []byte) []byte {
-	dst = append(dst, '[')
-	for i := range s {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-		c := &s[i]
-		dst = c.AppendJSON(dst)
-	}
-	dst = append(dst, ']')
-	return dst
-}

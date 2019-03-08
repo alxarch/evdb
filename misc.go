@@ -1,33 +1,34 @@
 package meter
 
 import (
+	"compress/flate"
+	"compress/gzip"
+	"net/http"
 	"sync"
-	"sync/atomic"
+	"time"
 )
 
 // OnceNoError is like sync.Once but retries until no error occured.
-type OnceNoError struct {
-	mu   sync.Mutex
-	done uint32
-}
+// type OnceNoError struct {
+// 	mu   sync.Mutex
+// 	done uint32
+// }
 
-// Do calls fn if no previous call resulted in non nil error
-func (once *OnceNoError) Do(fn func() error) (err error) {
-	if atomic.LoadUint32(&once.done) == 1 {
-		return
-	}
-	once.mu.Lock()
-	defer once.mu.Unlock()
-	if once.done == 0 {
-		defer func() {
-			if err == nil {
-				atomic.StoreUint32(&once.done, 1)
-			}
-		}()
-		err = fn()
-	}
-	return
-}
+// // Do calls fn if no previous call resulted in non nil error
+// func (o *OnceNoError) Do(fn func() error) (err error) {
+// 	if atomic.LoadUint32(&o.done) == 1 {
+// 		return
+// 	}
+// 	o.mu.Lock()
+// 	defer o.mu.Unlock()
+// 	if o.done == 0 {
+// 		err = fn()
+// 		if err == nil {
+// 			atomic.StoreUint32(&o.done, 1)
+// 		}
+// 	}
+// 	return
+// }
 
 func stringsEqual(a, b []string) bool {
 	if len(a) == len(b) {
@@ -41,6 +42,20 @@ func stringsEqual(a, b []string) bool {
 	}
 	return false
 }
+func distinctSorted(ss []string) []string {
+	var (
+		i    int
+		last string
+	)
+	for _, s := range ss {
+		if i == 0 || s != last {
+			last = s
+			ss[i] = s
+			i++
+		}
+	}
+	return ss[:i]
+}
 func appendDistinct(dst []string, src ...string) []string {
 	for i, s := range src {
 		if indexOf(dst, s[:i]) == -1 {
@@ -50,6 +65,13 @@ func appendDistinct(dst []string, src ...string) []string {
 	return dst
 }
 
+// func readTimestampSuffix(key []byte) int64 {
+// 	if n := len(key) - 8; 0 <= n && n < len(key) {
+// 		return int64(binary.BigEndian.Uint64(key[n:]))
+// 	}
+// 	return 0
+// }
+
 func indexOf(values []string, s string) int {
 	for i := 0; 0 <= i && i < len(values); i++ {
 		if values[i] == s {
@@ -57,16 +79,6 @@ func indexOf(values []string, s string) int {
 		}
 	}
 	return -1
-}
-
-func stepTS(ts, step int64) int64 {
-	if step > 0 {
-		return ts - ts%step
-	}
-	if step == 0 {
-		return ts
-	}
-	return 0
 }
 
 // Inline and byte-free variant of hash/fnv's fnv64a.
@@ -109,4 +121,59 @@ func hashFNVa32(data []byte) uint32 {
 		h = addFNVa32(h, uint32(b))
 	}
 	return h
+}
+
+var buffers sync.Pool
+
+const kiB = 1024
+
+func getBuffer() []byte {
+	if x, ok := buffers.Get().([]byte); ok {
+		return x
+	}
+	return make([]byte, 4*kiB)
+}
+
+func putBuffer(buf []byte) {
+	buffers.Put(buf)
+}
+
+func stepTS(ts, step int64) int64 {
+	if step > 0 {
+		return ts - ts%step
+	}
+	if step == 0 {
+		return ts
+	}
+	return 0
+}
+
+func normalizeStep(step time.Duration) time.Duration {
+	switch {
+	case step <= 0:
+		return step
+	case step < time.Second:
+		return time.Second
+	default:
+		return step.Truncate(time.Second)
+	}
+}
+
+func InflateRequest(next http.Handler) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body := r.Body
+		defer body.Close()
+		switch r.Header.Get("Content-Encoding") {
+		case "gzip":
+			// err is returned on first read
+			zr, _ := gzip.NewReader(body)
+			r.Header.Del("Content-Encoding")
+			r.Body = zr
+		case "deflate":
+			zr := flate.NewReader(body)
+			r.Header.Del("Content-Encoding")
+			r.Body = zr
+		}
+		next.ServeHTTP(w, r)
+	}
 }
