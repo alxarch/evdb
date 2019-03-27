@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/dgraph-io/badger"
+	"golang.org/x/sync/errgroup"
 )
 
 type badgerStore struct {
@@ -144,6 +146,268 @@ func (b *badgerStore) storeEvent(key, value []byte) error {
 	return txn.Commit(nil)
 }
 
+// dumpKeys dumps keys from a badger.DB to a writer
+func (b *badgerStore) dumpKeys(w io.Writer) error {
+	return b.View(func(txn *badger.Txn) error {
+		iter := txn.NewIterator(badger.IteratorOptions{
+			PrefetchValues: false,
+		})
+		defer iter.Close()
+		for iter.Seek(nil); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			key := item.Key()
+			id := binary.BigEndian.Uint64(key[len(key)-8:])
+			switch key[0] {
+			case 'v':
+				v, _ := item.Value()
+				fields := FieldsFromString(string(v))
+				fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
+			case 'e':
+				fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
+			}
+		}
+		return nil
+	})
+}
+
+func (b *badgerStore) query(ctx context.Context, q *Query, items chan<- ScanItem) error {
+	var (
+		queryFields = make(map[uint64]Fields, 16)
+		match       = q.Match.Sorted()
+		done        = ctx.Done()
+		minT, maxT  = q.Start.Unix(), q.End.Unix()
+		step        = int64(q.Step)
+	)
+
+	txn := b.NewTransaction(false)
+	defer txn.Discard()
+	iter := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer iter.Close()
+	b.seekEvent(iter, q.Start)
+	for ; iter.Valid(); iter.Next() {
+		item := iter.Item()
+		key := item.Key()
+		ts, ok := parseEventKey(key)
+		if ok && minT <= ts && ts < maxT {
+			value, err := item.Value()
+			if err != nil {
+				return err
+			}
+			ts = stepTS(ts, step)
+			var id, n uint64
+			for len(value) >= 16 {
+				id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
+				fields, ok := queryFields[id]
+				if !ok {
+					fields = b.cache.Fields(id)
+					if fields == nil {
+						s, err := b.loadFields(txn, id)
+						if err != nil {
+							return err
+						}
+						fields = b.cache.SetString(id, s)
+					}
+					if match.MatchSorted(fields) {
+						if len(q.Group) > 0 {
+							fields = fields.GroupBy(q.EmptyValue, q.Group)
+						}
+					} else {
+						fields = nil
+					}
+					queryFields[id] = fields
+				}
+				if fields == nil {
+					continue
+				}
+				select {
+				case items <- ScanItem{
+					Time:   ts,
+					Fields: fields,
+					Count:  int64(n),
+				}:
+				case <-done:
+					return nil
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (b *badgerStore) Scan(ctx context.Context, q *Query) ScanIterator {
+	if b == nil {
+		return emptyScanIterator{}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	items := make(chan ScanItem)
+	errc := make(chan error, 1)
+	iter := scanIterator{
+		items:  items,
+		errc:   errc,
+		cancel: cancel,
+	}
+	go func() {
+		defer close(errc)
+		defer close(items)
+		errc <- b.query(ctx, q, items)
+	}()
+
+	return &iter
+}
+
+func (b *badgerStore) Compaction(now time.Time) error {
+	txn := b.NewTransaction(false)
+	defer txn.Discard()
+	iter := txn.NewIterator(badger.IteratorOptions{})
+	defer iter.Close()
+	b.seekEvent(iter, time.Time{})
+	if !iter.Valid() {
+		return nil
+	}
+	key := iter.Item().Key()
+	ts, ok := parseEventKey(key)
+	const step = int64(time.Hour)
+	ts = stepTS(ts, step)
+	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
+	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
+		for ; iter.Valid(); iter.Next() {
+			key = iter.Item().Key()
+			ts, ok = parseEventKey(key)
+			if ok && start < ts && ts < end {
+				n++
+			} else if start == ts {
+				continue
+			} else {
+				break
+			}
+		}
+		if n > 0 {
+			err := compaction(b.DB, start, end)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func parseKey(k []byte) (uint64, byte) {
+	if len(k) == 10 {
+		return binary.BigEndian.Uint64(k[2:]), k[0]
+	}
+	return 0, 255
+}
+
+func parseEventKey(k []byte) (int64, bool) {
+	id, b := parseKey(k)
+	return int64(id), b == prefixByteEvent
+}
+
+func parseValueKey(k []byte) (uint64, bool) {
+	id, b := parseKey(k)
+	return id, b == prefixByteValue
+}
+
+type badgerEvents map[string]*badgerStore
+
+func (evs badgerEvents) Scanner(event string) Scanner {
+	return evs[event]
+}
+
+func NewBadgerEvents(opts badger.Options, events ...string) (badgerEvents, error) {
+	mu := sync.Mutex{}
+	evs := make(map[string]*badgerStore, len(events))
+	dir := opts.Dir
+	vdir := opts.ValueDir
+	grp := errgroup.Group{}
+	for _, event := range events {
+		e := event
+		o := opts
+		o.Dir = path.Join(dir, event)
+		o.ValueDir = path.Join(vdir, event)
+		grp.Go(func() error {
+			db, err := badger.Open(o)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			evs[e] = &badgerStore{
+				DB: db,
+			}
+			return nil
+		})
+	}
+	return evs, grp.Wait()
+}
+
+func (b badgerEvents) Store(s *StoreRequest) (err error) {
+	e := b[s.Event]
+	if e == nil {
+		return fmt.Errorf("Unknown event %q", s.Event)
+	}
+	return e.store(s.Time, s.Labels, s.Counters)
+}
+
+func appendUint64(dst []byte, n uint64) []byte {
+	return append(dst,
+		byte(n>>56),
+		byte(n>>48),
+		byte(n>>40),
+		byte(n>>32),
+		byte(n>>24),
+		byte(n>>16),
+		byte(n>>8),
+		byte(n))
+}
+
+// func appendShortString(dst []byte, s string) []byte {
+// 	dst = append(dst, byte(len(s)))
+// 	dst = append(dst, s...)
+// 	return dst
+// }
+
+// func eventKey(dst []byte, event string, ts int64) []byte {
+// 	dst = append(dst, prefixByteEvent)
+// 	dst = appendShortString(dst, event)
+// 	dst = appendUint64(dst, uint64(ts))
+// 	return dst
+// }
+
+// func valueKey(dst []byte, event string, ts int64) []byte {
+// 	dst = append(dst, prefixByteValue)
+// 	dst = appendShortString(dst, event)
+// 	dst = appendUint64(dst, uint64(ts))
+// 	return dst
+// }
+
+func appendKey(dst []byte, prefix byte, id uint64) []byte {
+	return append(dst,
+		prefix,
+		0,
+		byte(id>>56),
+		byte(id>>48),
+		byte(id>>40),
+		byte(id>>32),
+		byte(id>>24),
+		byte(id>>16),
+		byte(id>>8),
+		byte(id),
+	)
+}
+
+func appendValueKey(dst []byte, id uint64) []byte {
+	return appendKey(dst, prefixByteValue, id)
+}
+
+func appendEventKey(dst []byte, tm time.Time) []byte {
+	ts := tm.Unix()
+	return appendKey(dst, prefixByteValue, uint64(ts))
+}
+
 // func (b *badgerStore) Scan(q *Query) (ScanResults, error) {
 // 	var results ScanResults
 // 	cache := &b.cache
@@ -200,77 +464,6 @@ func (b *badgerStore) storeEvent(key, value []byte) error {
 // 	}
 // 	return results, nil
 // }
-
-// dumpKeys dumps keys from a badger.DB to a writer
-func (b *badgerStore) dumpKeys(w io.Writer) error {
-	return b.View(func(txn *badger.Txn) error {
-		iter := txn.NewIterator(badger.IteratorOptions{
-			PrefetchValues: false,
-		})
-		defer iter.Close()
-		for iter.Seek(nil); iter.Valid(); iter.Next() {
-			item := iter.Item()
-			key := item.Key()
-			id := binary.BigEndian.Uint64(key[len(key)-8:])
-			switch key[0] {
-			case 'v':
-				v, _ := item.Value()
-				fields := FieldsFromString(string(v))
-				fmt.Fprintf(w, "v %q %08x %v\n", key[2:len(key)-8], id, fields)
-			case 'e':
-				fmt.Fprintf(w, "e %q@%d\n", key[2:len(key)-8], id)
-			}
-		}
-		return nil
-	})
-}
-
-func parseKey(k []byte) (uint64, byte) {
-	if len(k) == 10 {
-		return binary.BigEndian.Uint64(k[2:]), k[0]
-	}
-	return 0, 255
-}
-
-func parseEventKey(k []byte) (int64, bool) {
-	id, b := parseKey(k)
-	return int64(id), b == prefixByteEvent
-}
-
-func parseValueKey(k []byte) (uint64, bool) {
-	id, b := parseKey(k)
-	return id, b == prefixByteValue
-}
-
-type badgerEvents map[string]*badgerStore
-
-func (evs badgerEvents) Scanner(event string) Scanner {
-	return evs[event]
-}
-
-func NewBadgerEvents(opts badger.Options, events ...string) (badgerEvents, error) {
-	evs := make(map[string]*badgerStore, len(events))
-	dir := opts.Dir
-	for _, event := range events {
-		opts.Dir = path.Join(dir, event)
-		db, err := badger.Open(opts)
-		if err != nil {
-			return nil, err
-		}
-		evs[event] = &badgerStore{
-			DB: db,
-		}
-	}
-	return evs, nil
-}
-
-func (b badgerEvents) Store(s *StoreRequest) (err error) {
-	e := b[s.Event]
-	if e == nil {
-		return fmt.Errorf("Unknown event %q", s.Event)
-	}
-	return e.store(s.Time, s.Labels, s.Counters)
-}
 
 // const (
 // 	eventKey = 'e'
@@ -365,144 +558,3 @@ func (b badgerEvents) Store(s *StoreRequest) (err error) {
 // 	}
 // 	return nil
 // }
-
-func (b *badgerStore) query(ctx context.Context, q *Query, items chan<- ScanItem) error {
-	var (
-		queryFields = make(map[uint64]Fields, 16)
-		match       = q.Match.Sorted()
-		done        = ctx.Done()
-		minT, maxT  = q.Start.Unix(), q.End.Unix()
-		step        = int64(q.Step)
-	)
-
-	txn := b.NewTransaction(false)
-	defer txn.Discard()
-	iter := txn.NewIterator(badger.DefaultIteratorOptions)
-	defer iter.Close()
-	b.seekEvent(iter, q.Start)
-	for ; iter.Valid(); iter.Next() {
-		item := iter.Item()
-		key := item.Key()
-		ts, ok := parseEventKey(key)
-		if ok && minT <= ts && ts < maxT {
-			value, err := item.Value()
-			if err != nil {
-				return err
-			}
-			ts = stepTS(ts, step)
-			var id, n uint64
-			for len(value) >= 16 {
-				id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
-				fields, ok := queryFields[id]
-				if !ok {
-					fields = b.cache.Fields(id)
-					if fields == nil {
-						s, err := b.loadFields(txn, id)
-						if err != nil {
-							return err
-						}
-						fields = b.cache.SetString(id, s)
-					}
-					if match.MatchSorted(fields) {
-						if len(q.Group) > 0 {
-							fields = fields.GroupBy(q.EmptyValue, q.Group)
-						}
-					} else {
-						fields = nil
-					}
-					queryFields[id] = fields
-				}
-				if fields == nil {
-					continue
-				}
-				select {
-				case items <- ScanItem{
-					Time:   ts,
-					Fields: fields,
-					Count:  int64(n),
-				}:
-				case <-done:
-					return nil
-				}
-			}
-		}
-	}
-	return nil
-
-}
-func (b *badgerStore) Scan(ctx context.Context, q *Query) ScanIterator {
-	if b == nil {
-		return emptyScanIterator{}
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	items := make(chan ScanItem)
-	errc := make(chan error, 1)
-	iter := scanIterator{
-		items:  items,
-		errc:   errc,
-		cancel: cancel,
-	}
-	go func() {
-		defer close(errc)
-		defer close(items)
-		errc <- b.query(ctx, q, items)
-	}()
-
-	return &iter
-}
-
-func appendUint64(dst []byte, n uint64) []byte {
-	return append(dst,
-		byte(n>>56),
-		byte(n>>48),
-		byte(n>>40),
-		byte(n>>32),
-		byte(n>>24),
-		byte(n>>16),
-		byte(n>>8),
-		byte(n))
-}
-func appendShortString(dst []byte, s string) []byte {
-	dst = append(dst, byte(len(s)))
-	dst = append(dst, s...)
-	return dst
-}
-
-func eventKey(dst []byte, event string, ts int64) []byte {
-	dst = append(dst, prefixByteEvent)
-	dst = appendShortString(dst, event)
-	dst = appendUint64(dst, uint64(ts))
-	return dst
-}
-func valueKey(dst []byte, event string, ts int64) []byte {
-	dst = append(dst, prefixByteValue)
-	dst = appendShortString(dst, event)
-	dst = appendUint64(dst, uint64(ts))
-	return dst
-}
-
-func appendKey(dst []byte, prefix byte, id uint64) []byte {
-	return append(dst,
-		prefix,
-		0,
-		byte(id>>56),
-		byte(id>>48),
-		byte(id>>40),
-		byte(id>>32),
-		byte(id>>24),
-		byte(id>>16),
-		byte(id>>8),
-		byte(id),
-	)
-}
-func appendValueKey(dst []byte, id uint64) []byte {
-	return appendKey(dst, prefixByteValue, id)
-
-}
-func appendEventKey(dst []byte, tm time.Time) []byte {
-	ts := tm.Unix()
-	return appendKey(dst, prefixByteValue, uint64(ts))
-}

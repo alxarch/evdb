@@ -1,7 +1,6 @@
 package meter
 
 import (
-	"strconv"
 	"sync"
 )
 
@@ -22,21 +21,6 @@ func (c *Counter) Match(values []string) bool {
 		return true
 	}
 	return false
-}
-func (c *Counter) AppendJSON(dst []byte) []byte {
-	dst = append(dst, '[')
-	dst = strconv.AppendInt(dst, c.Count, 10)
-	dst = append(dst, ',', '[')
-	for i, v := range c.Values {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-		dst = append(dst, '"')
-		dst = append(dst, v...)
-		dst = append(dst, '"')
-	}
-	dst = append(dst, ']', ']')
-	return dst
 }
 
 type Snapshot []Counter
@@ -61,19 +45,6 @@ func (s Snapshot) Reset() Snapshot {
 	return s[:0]
 }
 
-func (s Snapshot) AppendJSON(dst []byte) []byte {
-	dst = append(dst, '[')
-	for i := range s {
-		if i > 0 {
-			dst = append(dst, ',')
-		}
-		c := &s[i]
-		dst = c.AppendJSON(dst)
-	}
-	dst = append(dst, ']')
-	return dst
-}
-
 var snapshotPool sync.Pool
 
 func getSnapshot() Snapshot {
@@ -87,37 +58,3 @@ func getSnapshot() Snapshot {
 func putSnapshot(s Snapshot) {
 	snapshotPool.Put(s.Reset())
 }
-
-// func (c *Counter) UnmarshalJSON(data []byte) error {
-// 	data = bytes.TrimSpace(data)
-// 	if len(data) > 0 {
-// 		if data[0] == '[' && data[len(data)-1] == ']' {
-// 			data = bytes.TrimSpace(data[1 : len(data)-1])
-// 			pos := bytes.IndexByte(data, ',')
-// 			if pos == -1 {
-// 				return nil
-// 			}
-// 			n, err := strconv.ParseInt(string(data[:pos]), 10, 64)
-// 			if err != nil {
-// 				return err
-// 			}
-// 			c.Count = n
-// 			return json.Unmarshal(data[pos+1:], &c.Values)
-// 		}
-// 		if data[0] == 'n' {
-// 			if string(data) == "null" {
-// 				return nil
-// 			}
-// 		}
-// 	}
-// 	return errors.New("Invalid JSON data")
-
-// }
-
-// func (s Snapshot) MarshalJSON() ([]byte, error) {
-// 	return s.AppendJSON(nil), nil
-// }
-
-// func (c *Counter) MarshalJSON() ([]byte, error) {
-// 	return c.AppendJSON(nil), nil
-// }

@@ -46,17 +46,16 @@ func (q *Query) SetValues(values url.Values) {
 			}
 		}
 	}
-	sort.Stable(match)
-	q.Match = match
 	group, ok := values["group"]
 	if ok && len(group) == 0 {
-		group = make([]string, 0, len(q.Match))
-		for i := range q.Match {
-			m := &q.Match[i]
+		group = make([]string, 0, len(match))
+		for i := range match {
+			m := &match[i]
 			group = appendDistinct(group, m.Label)
 		}
 	}
-	q.Group = group
+	sort.Stable(match)
+	q.Match, q.Group = match, group
 	q.EmptyValue = values.Get("empty")
 }
 

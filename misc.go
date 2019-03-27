@@ -4,31 +4,10 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
-
-// OnceNoError is like sync.Once but retries until no error occured.
-// type OnceNoError struct {
-// 	mu   sync.Mutex
-// 	done uint32
-// }
-
-// // Do calls fn if no previous call resulted in non nil error
-// func (o *OnceNoError) Do(fn func() error) (err error) {
-// 	if atomic.LoadUint32(&o.done) == 1 {
-// 		return
-// 	}
-// 	o.mu.Lock()
-// 	defer o.mu.Unlock()
-// 	if o.done == 0 {
-// 		err = fn()
-// 		if err == nil {
-// 			atomic.StoreUint32(&o.done, 1)
-// 		}
-// 	}
-// 	return
-// }
 
 func stringsEqual(a, b []string) bool {
 	if len(a) == len(b) {
@@ -98,6 +77,17 @@ func hashAddByte(h uint64, b byte) uint64 {
 	h ^= uint64(b)
 	h *= prime64
 	return h
+}
+
+func vhash(values []string) (h uint64) {
+	h = hashNew()
+	for _, v := range values {
+		for i := 0; 0 <= i && i < len(v); i++ {
+			h = hashAddByte(h, v[i])
+		}
+
+	}
+	return
 }
 
 const (
@@ -176,4 +166,28 @@ func InflateRequest(next http.Handler) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	}
+}
+
+func vdeepcopy(values []string) []string {
+	n := 0
+	b := strings.Builder{}
+	for _, v := range values {
+		n += len(v)
+	}
+	b.Grow(n)
+	for _, v := range values {
+		b.WriteString(v)
+	}
+	tmp := b.String()
+	cp := make([]string, len(values))
+	if len(cp) == len(values) {
+		cp = cp[:len(values)]
+		for i := range values {
+			n = len(values[i])
+			cp[i] = tmp[:n]
+			tmp = tmp[n:]
+		}
+	}
+	return cp
+
 }

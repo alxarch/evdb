@@ -17,12 +17,6 @@ type StoreRequest struct {
 	Counters Snapshot  `json:"counters"`
 }
 
-type StoreEntry struct {
-	Time   time.Time
-	Fields *Fields
-	Count  int64
-}
-
 type EventStore interface {
 	Store(req *StoreRequest) error
 }
@@ -48,18 +42,20 @@ func (event *Event) Store(tm time.Time, db EventStore) error {
 
 func StoreHandler(s EventStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		req := StoreRequest{}
 		defer r.Body.Close()
+		req := StoreRequest{}
 		dec := json.NewDecoder(r.Body)
 		if err := dec.Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			code := http.StatusBadRequest
+			http.Error(w, http.StatusText(code), code)
 			return
 		}
 		if req.Time.IsZero() {
 			req.Time = time.Now()
 		}
 		if err := s.Store(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			code := http.StatusInternalServerError
+			http.Error(w, http.StatusText(code), code)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

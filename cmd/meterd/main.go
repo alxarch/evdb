@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net/http"
@@ -13,31 +14,75 @@ import (
 )
 
 var (
-	dataDir    = flag.String("dir", "", "Data dir")
-	addr       = flag.String("address", ":8080", "HTTP Listen address")
-	gcInterval = flag.Duration("gc-interval", 5*time.Minute, "Badger values GC interval")
-	minStep    = flag.Duration("min-step", time.Second, "Minimum step for results")
+	dataDir = flag.String("dir", "", "Data dir")
+	addr    = flag.String("address", ":8080", "HTTP Listen address")
 )
 
 func main() {
 	flag.Parse()
 	if *dataDir == "" {
 		*dataDir = path.Join(os.TempDir(), "meterd")
-		// os.MkdirAll(path.Join(*dataDir, "values"), os.ModeAppend)
+		if err := os.MkdirAll(*dataDir, os.ModePerm); err != nil {
+			log.Fatal("Failed to create tmp data dir", err)
+		}
 	}
 	options := badger.DefaultOptions
 	options.Dir = *dataDir
-	options.ValueDir = path.Join(*dataDir, "values")
-	db, err := badger.Open(options)
-
+	options.ValueDir = *dataDir
+	events, err := meter.NewBadgerEvents(options, flag.Args()...)
 	if err != nil {
-		log.Fatal("Failed to open db", err)
+		log.Fatal("Failed to open event db", err)
 	}
-	defer db.Close()
-	events := meter.NewMultiEventDB(db, flag.Args()...)
-	http.Handle("/debug/", http.StripPrefix("/debug", meter.DebugHandler(db)))
-	http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events)))
-	if err := http.ListenAndServe(*addr, nil); err != nil && err != http.ErrServerClosed {
+	ctx := context.Background()
+	for event := range events {
+		tick := time.NewTicker(time.Hour)
+		db := events[event]
+		run := func(tm time.Time) {
+			if err := db.Compaction(tm); err != nil {
+				log.Println("Compaction failed", event, err)
+			}
+			if err := db.RunValueLogGC(0.5); err != nil {
+				if err != badger.ErrNoRewrite {
+					log.Println("Value log GC failed", event, err)
+				}
+			}
+		}
+		go func() {
+			run(time.Now())
+			defer db.Close()
+			defer tick.Stop()
+			for {
+				select {
+				case tm := <-tick.C:
+					run(tm)
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	// http.Handle("/debug/", http.StripPrefix("/debug", meter.DebugHandler(db)))
+	q := meter.ScanQueryRunner(events)
+	queryHandler := meter.QueryHandler(q)
+	storeHandler := meter.StoreHandler(events)
+	s := http.Server{
+		Addr: *addr,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodPost:
+				storeHandler(w, r)
+			case http.MethodGet:
+				queryHandler(w, r)
+			default:
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			}
+		}),
+		MaxHeaderBytes:    4096,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	// http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events)))
+	log.Println("Listening on", *addr)
+	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
