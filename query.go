@@ -76,6 +76,9 @@ func QueryHandler(qr QueryRunner) http.HandlerFunc {
 		events := values["event"]
 		q := Query{}
 		q.SetValues(values)
+		if q.End.IsZero() {
+			q.End = time.Now()
+		}
 		typ := ResultTypeFromString(values.Get("results"))
 		if typ == TotalsResult {
 			q.Step = -1

@@ -53,38 +53,35 @@ func (fields Fields) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func FieldsFromString(s string) (fields Fields) {
-	if len(s) > 0 {
-		i := len(fields)
-		fields = fields.Grow(int(s[0]))
-		s = string(s[1:])
-		var f *Field
-		for len(s) > 0 {
-			n := int(s[0])
-			s = s[1:]
-			if 0 <= n && n <= len(s) {
-				if f != nil {
-					f.Value = s[:n]
-					f = nil
-				} else if 0 <= i && i < len(fields) {
-					f = &fields[i]
-					f.Label = s[:n]
-					i++
-				} else {
-					break
-				}
-				s = s[n:]
-			}
+func ZipFields(labels []string, values []string) (fields Fields) {
+	for i, label := range labels {
+		if 0 <= i && i < len(values) {
+			fields = append(fields, Field{
+				Label: label,
+				Value: values[i],
+			})
+		} else {
+			fields = append(fields, Field{
+				Label: label,
+			})
 		}
-		if 0 <= i && i <= len(fields) {
-			return fields[:i]
-		}
-
 	}
-	return fields
+	return
+
 }
 
-// MatchSorted matches 2 sets of sorted fields.
+func (fields *Fields) UnmarshalText(data []byte) error {
+	size, data := shiftUint32(data)
+	fs := make([]Field, 0, size)
+	var label, value string
+	for len(data) > 0 {
+		label, data = shiftString(data)
+		value, data = shiftString(data)
+		fs = append(fs, Field{Label: label, Value: value})
+	}
+	*fields = fs
+	return nil
+}
 
 func (fields Fields) Equal(other Fields) bool {
 	if len(fields) == len(other) {
@@ -188,7 +185,7 @@ next:
 				continue next
 			}
 		}
-		return false
+		// return len(match) == 0
 	}
 	return len(match) == 0
 
@@ -200,23 +197,42 @@ type FieldCache struct {
 	fields map[uint64]Fields
 }
 
-func (c *FieldCache) SetString(id uint64, s string) (fields Fields) {
+func (c *FieldCache) Set(id uint64, fields Fields) Fields {
 	c.mu.Lock()
-	if fields = c.fields[id]; fields != nil {
+	if fields := c.fields[id]; fields != nil {
 		c.mu.Unlock()
-		return
+		return fields
 	}
 	if c.ids == nil {
 		c.ids = make(map[string]uint64)
 	}
-	c.ids[s] = id
-	fields = FieldsFromString(s)
+	raw := fields.AppendTo(nil)
+	c.ids[string(raw)] = id
 	if c.fields == nil {
 		c.fields = make(map[uint64]Fields)
 	}
 	c.fields[id] = fields
 	c.mu.Unlock()
-	return
+	return fields
+}
+func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
+	c.mu.Lock()
+	fields := c.fields[id]
+	if fields != nil {
+		c.mu.Unlock()
+		return fields
+	}
+	if c.ids == nil {
+		c.ids = make(map[string]uint64)
+	}
+	fields.UnmarshalText(raw)
+	c.ids[string(raw)] = id
+	if c.fields == nil {
+		c.fields = make(map[uint64]Fields)
+	}
+	c.fields[id] = fields
+	c.mu.Unlock()
+	return fields
 }
 
 func (c *FieldCache) ID(fields Fields) (uint64, bool) {
@@ -296,7 +312,7 @@ func (index labelIndex) Swap(i, j int) {
 	index[i], index[j] = index[j], index[i]
 }
 
-func newLabeLIndex(labels ...string) labelIndex {
+func newLabelIndex(labels ...string) labelIndex {
 	index := labelIndex(make([]iLabel, len(labels)))
 	for i, label := range labels {
 		index[i] = iLabel{
@@ -309,18 +325,15 @@ func newLabeLIndex(labels ...string) labelIndex {
 }
 
 func (index labelIndex) AppendFields(dst []byte, values []string) []byte {
-	dst = append(dst, byte(len(index)))
+	dst = appendUint32(dst, uint32(len(index)))
 	for i := range index {
 		idx := &index[i]
-		dst = append(dst, byte(len(idx.Label)))
-		dst = append(dst, idx.Label...)
+		dst = appendString(dst, idx.Label)
+		var v string
 		if 0 <= idx.Index && idx.Index < len(values) {
-			v := values[idx.Index]
-			dst = append(dst, byte(len(v)))
-			dst = append(dst, v...)
-		} else {
-			dst = append(dst, 0)
+			v = values[idx.Index]
 		}
+		dst = appendString(dst, v)
 	}
 	return dst
 }

@@ -26,10 +26,11 @@ func main() {
 			log.Fatal("Failed to create tmp data dir", err)
 		}
 	}
+
 	options := badger.DefaultOptions
 	options.Dir = *dataDir
 	options.ValueDir = *dataDir
-	events, err := meter.NewBadgerEvents(options, flag.Args()...)
+	events, err := meter.NewBadgerStore(options, flag.Args()...)
 	if err != nil {
 		log.Fatal("Failed to open event db", err)
 	}
@@ -61,22 +62,31 @@ func main() {
 			}
 		}()
 	}
-	// http.Handle("/debug/", http.StripPrefix("/debug", meter.DebugHandler(db)))
 	q := meter.ScanQueryRunner(events)
 	queryHandler := meter.QueryHandler(q)
 	storeHandler := meter.StoreHandler(events)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug", func(w http.ResponseWriter, r *http.Request) {
+		for event, e := range events {
+			log.Println(event, "keys")
+			meter.DumpKeys(e.DB, w)
+			return
+		}
+	})
+	mux.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			storeHandler(w, r)
+		case http.MethodGet:
+			queryHandler(w, r)
+		default:
+			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		}
+	})
+
 	s := http.Server{
-		Addr: *addr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch r.Method {
-			case http.MethodPost:
-				storeHandler(w, r)
-			case http.MethodGet:
-				queryHandler(w, r)
-			default:
-				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
-			}
-		}),
+		Addr:              *addr,
+		Handler:           mux,
 		MaxHeaderBytes:    4096,
 		ReadHeaderTimeout: 5 * time.Second,
 	}

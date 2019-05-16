@@ -8,6 +8,7 @@ import (
 type Scanner interface {
 	Scan(ctx context.Context, q *Query) ScanIterator
 }
+
 type ScanIterator interface {
 	Next() bool
 	Item() ScanItem
@@ -38,18 +39,18 @@ func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Res
 	}()
 	for i := range events {
 		event := events[i]
-		s := s.Scanner(event)
-		if s == nil {
-			continue
-		}
 		go func() {
 			defer wg.Done()
+			s := s.Scanner(event)
+			if s == nil {
+				// errc <- errMissingEvent(event)
+				return
+			}
 			iter := s.Scan(ctx, q)
 			var results Results
 			for iter.Next() {
 				item := iter.Item()
 				results = results.Add(event, item.Fields, item.Count, item.Time)
-				// ts := item.Time.Unix()
 			}
 			if err := iter.Close(); err != nil {
 				errc <- err
@@ -59,12 +60,15 @@ func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Res
 		}()
 	}
 
+	err, _ := <-errc
+	if err != nil {
+		return nil, err
+	}
 	var results Results
 	for r := range ch {
 		results = append(results, r...)
 	}
-	err, _ := <-errc
-	return results, err
+	return results, nil
 }
 
 func ScanQueryRunner(s Scanners) QueryRunner {

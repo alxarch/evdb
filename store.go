@@ -3,7 +3,9 @@ package meter
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -130,4 +132,77 @@ func (b *syncBuffer) Encode(x interface{}) error {
 		return err
 	}
 	return b.gzip.Close()
+}
+
+type MemoryStore struct {
+	data  []StoreRequest
+	Event string
+}
+
+func (m *MemoryStore) Last() *StoreRequest {
+	if n := len(m.data) - 1; 0 <= n && n < len(m.data) {
+		return &m.data[n]
+	}
+	return nil
+
+}
+
+func (m *MemoryStore) Store(req *StoreRequest) error {
+	if req.Event != m.Event {
+		return errors.New("Invalid event")
+	}
+	last := m.Last()
+	if last == nil || req.Time.After(last.Time) {
+		m.data = append(m.data, *req)
+		return nil
+	}
+	return errors.New("Invalid time")
+}
+
+func (m *MemoryStore) Scanner(event string) Scanner {
+	if event == m.Event {
+		return m
+	}
+	return nil
+}
+
+func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
+	errc := make(chan error)
+	items := make(chan ScanItem)
+	data := m.data
+	ctx, cancel := context.WithCancel(ctx)
+	it := scanIterator{
+		errc:   errc,
+		items:  items,
+		cancel: cancel,
+	}
+	done := ctx.Done()
+	match := q.Match.Sorted()
+	go func() {
+		defer close(items)
+		defer close(errc)
+		for i := range data {
+			d := &data[i]
+			if d.Time.Before(q.Start) {
+				continue
+			}
+			for j := range d.Counters {
+				c := &d.Counters[j]
+				fields := ZipFields(d.Labels, c.Values)
+				ok := fields.MatchSorted(match)
+				if ok {
+					select {
+					case items <- ScanItem{
+						Fields: fields,
+						Time:   d.Time.Unix(),
+						Count:  c.Count,
+					}:
+					case <-done:
+						return
+					}
+				}
+			}
+		}
+	}()
+	return &it
 }
