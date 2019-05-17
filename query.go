@@ -31,9 +31,13 @@ func (q *Query) SetValues(values url.Values) {
 		q.Step = -1
 	}
 	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
-	q.Start = time.Unix(start, 0)
-	end, _ := strconv.ParseInt(values.Get("end"), 10, 64)
-	q.End = time.Unix(end, 0)
+	if start > 0 {
+		q.Start = time.Unix(start, 0).In(time.UTC)
+	}
+	if end, _ := strconv.ParseInt(values.Get("end"), 10, 64); end > 0 {
+		q.End = time.Unix(end, 0).In(time.UTC)
+	}
+
 	match := q.Match[:0]
 	for key, values := range values {
 		if strings.HasPrefix(key, "match.") {
@@ -76,6 +80,9 @@ func QueryHandler(qr QueryRunner) http.HandlerFunc {
 		events := values["event"]
 		q := Query{}
 		q.SetValues(values)
+		if q.Start.IsZero() {
+			q.Start = time.Unix(0, 0)
+		}
 		if q.End.IsZero() {
 			q.End = time.Now()
 		}
