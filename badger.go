@@ -335,6 +335,10 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 					if fields == nil {
 						fields, err := loadFields(txn, b.id, id)
 						if err != nil {
+							if err == badger.ErrKeyNotFound {
+								// Skip unknown id
+								continue
+							}
 							return err
 						}
 						b.fields.Set(id, fields)
