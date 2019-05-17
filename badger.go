@@ -216,7 +216,7 @@ func (b *badgerEvent) loadID(data []byte) (id uint64, err error) {
 			item := iter.Item()
 			vid, ok := parseValueKey(b.id, item.Key())
 			if !ok {
-				return nil
+				break
 			}
 			value, err := item.Value()
 			if err != nil {
@@ -230,7 +230,10 @@ func (b *badgerEvent) loadID(data []byte) (id uint64, err error) {
 		}
 		id = uint64(h)<<32 | uint64(n)
 		key := valueKey(b.id, id)
-		return txn.Set(key[:], data)
+		// Need to make a copy of data
+		val := make([]byte, len(data))
+		copy(val, data)
+		return txn.Set(key[:], val)
 	}
 
 	const maxRetries = 5
