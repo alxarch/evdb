@@ -6,7 +6,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path"
+	"syscall"
 	"time"
 
 	meter "github.com/alxarch/go-meter"
@@ -28,9 +30,15 @@ func main() {
 	}
 
 	options := badger.DefaultOptions
+	options.Truncate = true
 	options.Dir = *dataDir
 	options.ValueDir = *dataDir
-	events, err := meter.NewBadgerStore(options, flag.Args()...)
+	db, err := badger.Open(options)
+	if err != nil {
+		log.Fatal("Failed to open badger DB", err)
+	}
+	defer db.Close()
+	events, err := meter.Open(db, flag.Args()...)
 	if err != nil {
 		log.Fatal("Failed to open event db", err)
 	}
@@ -67,8 +75,7 @@ func main() {
 	storeHandler := meter.StoreHandler(events)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug", func(w http.ResponseWriter, r *http.Request) {
-		for event, e := range events {
-			log.Println(event, "keys")
+		for _, e := range events {
 			meter.DumpKeys(e.DB, w)
 			return
 		}
@@ -90,9 +97,21 @@ func main() {
 		MaxHeaderBytes:    4096,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	// Graceful shutdown
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sigint := make(chan os.Signal, 1)
+		signal.Notify(sigint, os.Interrupt)
+		signal.Notify(sigint, syscall.SIGTERM)
+		<-sigint
+		s.Close()
+	}()
 	// http.Handle("/events/", http.StripPrefix("/events", meter.Handler(events)))
 	log.Println("Listening on", *addr)
 	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	log.Println("Server closed")
+	<-done
 }

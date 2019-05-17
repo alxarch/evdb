@@ -15,15 +15,6 @@ import (
 
 type BadgerEvents map[string]*badgerEvent
 
-func NewBadgerStore(opts badger.Options, events ...string) (BadgerEvents, error) {
-	db, err := badger.Open(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	return open(db, events...)
-}
-
 func (store BadgerEvents) Store(s *StoreRequest) error {
 	e := store[s.Event]
 	if e == nil {
@@ -45,7 +36,7 @@ type badgerEvent struct {
 	fields FieldCache
 }
 
-func open(db *badger.DB, events ...string) (BadgerEvents, error) {
+func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
 	txn := db.NewTransaction(true)
 	defer txn.Discard()
 	dbEvents, err := loadRegisteredEvents(txn)
