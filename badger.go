@@ -308,7 +308,7 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 		match       = q.Match.Sorted()
 		done        = ctx.Done()
 		minT, maxT  = q.Start.Unix(), q.End.Unix()
-		step        = int64(q.Step)
+		step        = int64(q.Step / time.Second)
 	)
 
 	txn := b.DB.NewTransaction(false)
