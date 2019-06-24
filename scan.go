@@ -5,21 +5,26 @@ import (
 	"sync"
 )
 
+// Scanner scans stored data according to a query
 type Scanner interface {
 	Scan(ctx context.Context, q *Query) ScanIterator
 }
 
+// ScanIterator is an iterator over scan results
 type ScanIterator interface {
 	Next() bool
 	Item() ScanItem
 	Close() error
 }
+
+// ScanItem is a result item for a scan
 type ScanItem struct {
 	Time   int64
 	Count  int64
 	Fields Fields
 }
 
+// Scanners provides a Scanner for an event
 type Scanners interface {
 	Scanner(event string) Scanner
 }
@@ -27,6 +32,7 @@ type scanners struct {
 	Scanners
 }
 
+// RunQuery implements QueryRunner interface
 func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Results, error) {
 	errc := make(chan error, len(events))
 	ch := make(chan Results, len(events))
@@ -71,6 +77,7 @@ func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Res
 	return results, nil
 }
 
+// ScanQueryRunner creates a QueryRunner from a Scanners instance
 func ScanQueryRunner(s Scanners) QueryRunner {
 	return scanners{s}
 }

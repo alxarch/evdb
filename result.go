@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// Result is a query result
 type Result struct {
 	Event  string      `json:"event"`
 	Fields Fields      `json:"fields,omitempty"`
@@ -14,8 +15,10 @@ type Result struct {
 	Data   []DataPoint `json:"data,omitempty"`
 }
 
+// ResultType is a type of result
 type ResultType int
 
+// Result types
 const (
 	ArrayResult ResultType = iota
 	TotalsResult
@@ -23,6 +26,7 @@ const (
 	FieldSummaryResult
 )
 
+// ResultTypeFromString converts a string to ResultType
 func ResultTypeFromString(s string) ResultType {
 	switch s {
 	case "totals":
@@ -36,12 +40,14 @@ func ResultTypeFromString(s string) ResultType {
 	}
 }
 
+// Reset resets a result
 func (r *Result) Reset() {
 	*r = Result{
 		Data: r.Data[:0],
 	}
 }
 
+// Add adds n times at ts time to a result
 func (r *Result) Add(ts, n int64) {
 	r.Total += n
 	for i := len(r.Data) - 1; 0 <= i && i < len(r.Data); i-- {
@@ -55,8 +61,10 @@ func (r *Result) Add(ts, n int64) {
 	return
 }
 
+// Results is a slice of results
 type Results []Result
 
+// Add adds a result
 func (results Results) Add(event string, fields Fields, n, ts int64) Results {
 	for i := range results {
 		r := &results[i]
@@ -73,29 +81,34 @@ func (results Results) Add(event string, fields Fields, n, ts int64) Results {
 	})
 }
 
+// DataPoint is a time/count pair
 type DataPoint struct {
 	Timestamp, Value int64
 }
 
+// DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
 
-func (data DataPoints) Find(tm time.Time) (int64, bool) {
-	if i := data.IndexOf(tm); 0 <= i && i < len(data) {
-		return data[i].Value, true
+// Find searches for the count at a specific time
+func (s DataPoints) Find(tm time.Time) (int64, bool) {
+	if i := s.IndexOf(tm); 0 <= i && i < len(s) {
+		return s[i].Value, true
 	}
 	return 0, false
 }
 
-func (data DataPoints) IndexOf(tm time.Time) int {
+// IndexOf returns the index of tm in the collection of data points
+func (s DataPoints) IndexOf(tm time.Time) int {
 	ts := tm.Unix()
-	for i := range data {
-		if d := &data[i]; d.Timestamp == ts {
+	for i := range s {
+		if d := &s[i]; d.Timestamp == ts {
 			return i
 		}
 	}
 	return -1
 }
 
+// Sort sorts a slice of data points in place
 func (s DataPoints) Sort() {
 	sort.Sort(s)
 }
@@ -112,6 +125,7 @@ func (s DataPoints) Less(i, j int) bool {
 	return s[i].Timestamp < s[j].Timestamp
 }
 
+// MarshalJSON implements json.Marshaler interface
 func (p DataPoint) MarshalJSON() (data []byte, err error) {
 	data = make([]byte, 0, 64)
 	data = append(data, '[')
@@ -122,6 +136,7 @@ func (p DataPoint) MarshalJSON() (data []byte, err error) {
 	return data, nil
 }
 
+// UnmarshalJSON implements json.Unmarshaler interface
 func (p *DataPoint) UnmarshalJSON(data []byte) (err error) {
 	value := [2]int64{}
 	if err = json.Unmarshal(data, &value); err == nil {
@@ -130,6 +145,7 @@ func (p *DataPoint) UnmarshalJSON(data []byte) (err error) {
 	return
 }
 
+// MarshalJSON implements json.Marshal interface
 func (s DataPoints) MarshalJSON() (data []byte, err error) {
 	if s == nil {
 		return nil, nil
@@ -152,12 +168,14 @@ func (s DataPoints) MarshalJSON() (data []byte, err error) {
 	return data, nil
 }
 
+// FieldSummary is a query result presented as a summary of field values
 type FieldSummary struct {
 	Event  string           `json:"event"`
 	Label  string           `json:"label"`
 	Values map[string]int64 `json:"values"`
 }
 
+// Add ads a value to a field summary
 func (s *FieldSummary) Add(value string, n int64) {
 	if s.Values == nil {
 		s.Values = make(map[string]int64)
@@ -165,8 +183,10 @@ func (s *FieldSummary) Add(value string, n int64) {
 	s.Values[value] += n
 }
 
+// FieldSummaries is a slice of FieldSummary results
 type FieldSummaries []FieldSummary
 
+// Totals returns a totals-only Results slice
 func (results Results) Totals() Results {
 	for i := range results {
 		r := &results[i]
@@ -174,6 +194,8 @@ func (results Results) Totals() Results {
 	}
 	return results
 }
+
+// FieldSummaries converts a series of results to a slice of FieldSummary results
 func (results Results) FieldSummaries() (s FieldSummaries) {
 	for i := range results {
 		r := &results[i]
@@ -200,16 +222,20 @@ func (sums FieldSummaries) append(event, label, value string, n int64) FieldSumm
 	})
 }
 
+// EventSummaries is a result summary format
 type EventSummaries struct {
 	Labels []string
 	Events []string
 	Data   []EventSummary
 }
+
+// EventSummary groups values with totals
 type EventSummary struct {
 	Values []string
 	Totals map[string]int64
 }
 
+// EventSummaries groups results as EventSummaries
 func (results Results) EventSummaries(empty string) *EventSummaries {
 	s := new(EventSummaries)
 	for i := range results {
@@ -235,6 +261,7 @@ func (results Results) EventSummaries(empty string) *EventSummaries {
 	return s
 }
 
+// TableRow is a helper to convert event summary to table
 func (r *EventSummary) TableRow(events []string) []interface{} {
 	row := make([]interface{}, 0, len(r.Values)+len(events))
 	for _, v := range r.Values {
@@ -261,6 +288,7 @@ func (s *EventSummaries) add(event string, values []string, n int64) {
 
 }
 
+// Table returns event summaries as a table
 func (s *EventSummaries) Table() Table {
 	tbl := Table{}
 	for _, label := range s.Labels {
@@ -276,6 +304,7 @@ func (s *EventSummaries) Table() Table {
 	return tbl
 }
 
+// Table holds generic tabular data
 type Table struct {
 	Columns []interface{}   `json:"cols"`
 	Data    [][]interface{} `json:"data"`

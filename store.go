@@ -2,6 +2,7 @@ package meter
 
 import (
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"time"
 )
 
+// StoreRequest is a request to store a snapshot of an Event
 type StoreRequest struct {
 	Event    string    `json:"event"`
 	Time     time.Time `json:"time,omitempty"`
@@ -20,12 +22,34 @@ type StoreRequest struct {
 	Counters Snapshot  `json:"counters"`
 }
 
+// EventStore stores events
 type EventStore interface {
 	Store(req *StoreRequest) error
 }
 
-func StoreHandler(s EventStore) http.HandlerFunc {
+// InflateRequest middleware inflates request body
+func InflateRequest(next http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		body := r.Body
+		defer body.Close()
+		switch r.Header.Get("Content-Encoding") {
+		case "gzip":
+			// err is returned on first read
+			zr, _ := gzip.NewReader(body)
+			r.Header.Del("Content-Encoding")
+			r.Body = zr
+		case "deflate":
+			zr := flate.NewReader(body)
+			r.Header.Del("Content-Encoding")
+			r.Body = zr
+		}
+		next.ServeHTTP(w, r)
+	}
+}
+
+// StoreHandler returns an HTTP endpoint for an EventStore
+func StoreHandler(s EventStore) http.HandlerFunc {
+	handler := func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		req := StoreRequest{}
 		dec := json.NewDecoder(r.Body)
@@ -45,13 +69,16 @@ func StoreHandler(s EventStore) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"OK"}`))
 	}
+	return InflateRequest(http.HandlerFunc(handler))
 }
 
+// HTTPStore is a remote EventStore over HTTP
 type HTTPStore struct {
 	*http.Client
 	URL string
 }
 
+// Store implements EventStore interface
 func (c *HTTPStore) Store(r *StoreRequest) (err error) {
 	body := getSyncBuffer()
 	defer putSyncBuffer(body)
@@ -116,11 +143,13 @@ func (b *syncBuffer) Encode(x interface{}) error {
 	return b.gzip.Close()
 }
 
+// MemoryStore is an in-memory EventStore for debugging
 type MemoryStore struct {
 	data  []StoreRequest
 	Event string
 }
 
+// Last retuns the last posted StoreRequest
 func (m *MemoryStore) Last() *StoreRequest {
 	if n := len(m.data) - 1; 0 <= n && n < len(m.data) {
 		return &m.data[n]
@@ -129,6 +158,7 @@ func (m *MemoryStore) Last() *StoreRequest {
 
 }
 
+// Store implements EventStore interface
 func (m *MemoryStore) Store(req *StoreRequest) error {
 	if req.Event != m.Event {
 		return errors.New("Invalid event")
@@ -141,6 +171,7 @@ func (m *MemoryStore) Store(req *StoreRequest) error {
 	return errors.New("Invalid time")
 }
 
+// Scanner implements the EventScanner interface
 func (m *MemoryStore) Scanner(event string) Scanner {
 	if event == m.Event {
 		return m
@@ -148,6 +179,7 @@ func (m *MemoryStore) Scanner(event string) Scanner {
 	return nil
 }
 
+// Scan implements the Scanner interface
 func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
 	errc := make(chan error)
 	items := make(chan ScanItem)
@@ -200,6 +232,7 @@ func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
 	return &it
 }
 
+// SyncTask dumps an Event to an EventStore
 func (e *Event) SyncTask(db EventStore) func(time.Time) error {
 	return func(tm time.Time) error {
 		s := getSnapshot()

@@ -21,6 +21,7 @@ type Query struct {
 	EmptyValue string   `json:"empty,omitempty"`
 }
 
+// URL adds the query to a URL
 func (q *Query) URL(baseURL string, events ...string) (string, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -101,10 +102,12 @@ type TimeRange struct {
 	Step  time.Duration `json:"step"`
 }
 
+// QueryRunner runs queries
 type QueryRunner interface {
 	RunQuery(ctx context.Context, q *Query, events ...string) (Results, error)
 }
 
+// QueryHandler returns an HTTP endpoint for a QueryRunner
 func QueryHandler(qr QueryRunner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
@@ -144,11 +147,13 @@ func QueryHandler(qr QueryRunner) http.HandlerFunc {
 	}
 }
 
+// HTTPQueryRunner runs queries over http
 type HTTPQueryRunner struct {
 	URL    string
 	Client *http.Client
 }
 
+// RunQuery implements QueryRunner interface
 func (qr *HTTPQueryRunner) RunQuery(ctx context.Context, q *Query, events ...string) (Results, error) {
 	u, err := q.URL(qr.URL, events...)
 	if err != nil {
