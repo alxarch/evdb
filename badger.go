@@ -13,8 +13,10 @@ import (
 	"github.com/dgraph-io/badger/v2"
 )
 
+// BadgerEvents is a collection of Events stored in BadgerDB
 type BadgerEvents map[string]*badgerEvent
 
+// Open opens a new Event collection stored in BadgerDB
 func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
 	eventIDs, err := loadEventIDs(db, events...)
 	if err != nil {
@@ -33,6 +35,7 @@ func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
 	return store, nil
 }
 
+// Store implements Store interface
 func (store BadgerEvents) Store(s *StoreRequest) error {
 	e := store[s.Event]
 	if e == nil {
@@ -41,6 +44,7 @@ func (store BadgerEvents) Store(s *StoreRequest) error {
 	return e.store(s.Time.Unix(), s.Labels, s.Counters)
 }
 
+// Scanner implements Scanners interface
 func (store BadgerEvents) Scanner(event string) Scanner {
 	if s, ok := store[event]; ok {
 		return s
@@ -232,7 +236,7 @@ func store(db *badger.DB, key, value []byte) error {
 	return txn.Commit()
 }
 
-// dumpKeys dumps keys from a badger.DB to a writer
+// DumpKeys dumps keys from a badger.DB to a writer
 func DumpKeys(db *badger.DB, w io.Writer) error {
 	return db.View(func(txn *badger.Txn) error {
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
@@ -361,6 +365,7 @@ func (b *badgerEvent) Scan(ctx context.Context, q *Query) ScanIterator {
 	return &iter
 }
 
+// Compaction merges event snapshot compacting data to hourly batches
 func (store BadgerEvents) Compaction(now time.Time) error {
 	var (
 		wg   sync.WaitGroup
@@ -605,12 +610,14 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 
 }
 
+// FieldCache is an in memory cache of field ids
 type FieldCache struct {
 	mu     sync.RWMutex
 	ids    map[string]uint64
 	fields map[uint64]Fields
 }
 
+// Set set a field to an id
 func (c *FieldCache) Set(id uint64, fields Fields) Fields {
 	c.mu.Lock()
 	if fields := c.fields[id]; fields != nil {
@@ -629,6 +636,8 @@ func (c *FieldCache) Set(id uint64, fields Fields) Fields {
 	c.mu.Unlock()
 	return fields
 }
+
+// SetRaw sets a raw field value to an id
 func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
 	c.mu.Lock()
 	fields := c.fields[id]
@@ -649,11 +658,13 @@ func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
 	return fields
 }
 
+// ID gets the id of fields
 func (c *FieldCache) ID(fields Fields) (uint64, bool) {
 	raw := fields.AppendTo(nil)
 	return c.RawID(raw)
 }
 
+// RawID returns the id of raw fields
 func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
 	c.mu.RLock()
 	id, ok = c.ids[string(raw)]
@@ -661,6 +672,7 @@ func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
 	return
 }
 
+// Fields gets fields by id
 func (c *FieldCache) Fields(id uint64) (fields Fields) {
 	c.mu.RLock()
 	fields = c.fields[id]
@@ -668,6 +680,7 @@ func (c *FieldCache) Fields(id uint64) (fields Fields) {
 	return
 }
 
+// Labels returns the distinct cached labels
 func (c *FieldCache) Labels() (labels []string) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

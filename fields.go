@@ -5,13 +5,16 @@ import (
 	"sort"
 )
 
+// Field is a Label/Value pair
 type Field struct {
 	Label string
 	Value string
 }
 
+// Fields is a collection of Label/Value pairs
 type Fields []Field
 
+// Reset resets Fields to empty
 func (fields Fields) Reset() Fields {
 	for i := range fields {
 		fields[i] = Field{}
@@ -19,6 +22,7 @@ func (fields Fields) Reset() Fields {
 	return fields[:0]
 }
 
+// Get returns the value of label
 func (fields Fields) Get(label string) string {
 	for i := range fields {
 		f := &fields[i]
@@ -29,6 +33,7 @@ func (fields Fields) Get(label string) string {
 	return ""
 }
 
+// Grow grows Fields to hold at least size fields
 func (fields Fields) Grow(size int) Fields {
 	if size > 0 {
 		size += len(fields)
@@ -42,6 +47,7 @@ func (fields Fields) Grow(size int) Fields {
 	return fields
 }
 
+// AppendTo serializes Fields to binary data by appending
 func (fields Fields) AppendTo(dst []byte) []byte {
 	for i := range fields {
 		f := &fields[i]
@@ -53,6 +59,7 @@ func (fields Fields) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// GroupBy groups fields by labels
 func (fields Fields) GroupBy(empty string, groups []string) Fields {
 	grouped := make([]Field, len(groups))
 	for i, label := range groups {
@@ -68,6 +75,7 @@ func (fields Fields) GroupBy(empty string, groups []string) Fields {
 	return grouped
 }
 
+// AppendValues appends the values for the labels in order
 func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
 	for _, label := range labels {
 		v := fields.Get(label)
@@ -79,6 +87,7 @@ func (fields Fields) AppendValues(dst []string, empty string, labels ...string) 
 	return dst
 }
 
+// UnmarshalText implements TextUnmarshaler interfacee
 func (fields *Fields) UnmarshalText(data []byte) error {
 	size, data := shiftUint32(data)
 	fs := make([]Field, 0, size)
@@ -92,6 +101,7 @@ func (fields *Fields) UnmarshalText(data []byte) error {
 	return nil
 }
 
+// Equal checks if two Fields are equal
 func (fields Fields) Equal(other Fields) bool {
 	if len(fields) == len(other) {
 		other = other[:len(fields)]
@@ -120,6 +130,7 @@ func (fields Fields) Less(i, j int) bool {
 	return fields[i].Label < fields[j].Label
 }
 
+// Map converts a Fields collection to a map
 func (fields Fields) Map() map[string]string {
 	if fields == nil {
 		return nil
@@ -132,10 +143,12 @@ func (fields Fields) Map() map[string]string {
 	return m
 }
 
+// MarshalJSON implements json.Marshaler interface
 func (fields Fields) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields.Map())
 }
 
+// Copy clones a collection of fields
 func (fields Fields) Copy() Fields {
 	if fields == nil {
 		return nil
@@ -144,12 +157,15 @@ func (fields Fields) Copy() Fields {
 	copy(cp, fields)
 	return cp
 }
+
+// Sorted returns a copy of fields sorted by label
 func (fields Fields) Sorted() Fields {
 	fields = fields.Copy()
 	sort.Stable(fields)
 	return fields
 }
 
+// ZipFields creates a field collection zipping labels and values
 func ZipFields(labels []string, values []string) (fields Fields) {
 	for i, label := range labels {
 		if 0 <= i && i < len(values) {
@@ -167,6 +183,7 @@ func ZipFields(labels []string, values []string) (fields Fields) {
 
 }
 
+// MatchSorted matches fields agaist a sorted collection of Fields
 func (fields Fields) MatchSorted(match Fields) bool {
 next:
 	for i := range fields {

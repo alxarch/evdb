@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 )
 
+// Event stores counters for an event
 type Event struct {
 	Name     string   `json:"name"`
 	Labels   []string `json:"labels"`
@@ -17,6 +18,7 @@ const (
 	defaultEventSize = 64
 )
 
+// NewEvent creates a new Event using the specified labels
 func NewEvent(name string, labels ...string) *Event {
 	e := Event{
 		Name:     name,
@@ -28,6 +30,7 @@ func NewEvent(name string, labels ...string) *Event {
 	return &e
 }
 
+// Len returns the number of counters in an Event
 func (e *Event) Len() (n int) {
 	e.mu.RLock()
 	n = len(e.counters)
@@ -42,6 +45,7 @@ func (e *Event) Pack() {
 	e.mu.Unlock()
 }
 
+// Add ads n to a specific counter
 func (e *Event) Add(n int64, values ...string) int64 {
 	h := vhash(values)
 	e.mu.RLock()
@@ -57,6 +61,7 @@ func (e *Event) Add(n int64, values ...string) int64 {
 	return n
 }
 
+// Flush appends counters to a Snapshot and resets all counters to zero
 func (e *Event) Flush(s Snapshot) Snapshot {
 	s = s[:cap(s)]
 	e.mu.RLock()
@@ -78,6 +83,7 @@ func (e *Event) Flush(s Snapshot) Snapshot {
 	return s
 }
 
+// Merge adds all counters from a Snapshot
 func (e *Event) Merge(s Snapshot) {
 	for i := range s {
 		c := &s[i]
@@ -147,11 +153,13 @@ func (e *Event) pack() {
 	e.counters = counters
 }
 
+// Counter counts events labeled by values
 type Counter struct {
 	Count  int64    `json:"n"`
 	Values []string `json:"v,omitempty"`
 }
 
+// Match checks if values match counter's own values
 func (c *Counter) Match(values []string) bool {
 	if len(c.Values) == len(values) {
 		values = values[:len(c.Values)]
@@ -166,8 +174,10 @@ func (c *Counter) Match(values []string) bool {
 	return false
 }
 
+// Snapshot is a collection of counters
 type Snapshot []Counter
 
+// FilterZero filters out empty counters in-place
 func (s Snapshot) FilterZero() Snapshot {
 	j := 0
 	for i := range s {
@@ -181,6 +191,7 @@ func (s Snapshot) FilterZero() Snapshot {
 	return s[:j]
 }
 
+// Reset resets a snapshot
 func (s Snapshot) Reset() Snapshot {
 	for i := range s {
 		s[i] = Counter{}

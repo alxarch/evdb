@@ -1,10 +1,7 @@
 package meter
 
 import (
-	"compress/flate"
-	"compress/gzip"
 	"encoding/binary"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -147,25 +144,6 @@ func normalizeStep(step time.Duration) time.Duration {
 		return time.Second
 	default:
 		return step.Truncate(time.Second)
-	}
-}
-
-func InflateRequest(next http.Handler) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		body := r.Body
-		defer body.Close()
-		switch r.Header.Get("Content-Encoding") {
-		case "gzip":
-			// err is returned on first read
-			zr, _ := gzip.NewReader(body)
-			r.Header.Del("Content-Encoding")
-			r.Body = zr
-		case "deflate":
-			zr := flate.NewReader(body)
-			r.Header.Del("Content-Encoding")
-			r.Body = zr
-		}
-		next.ServeHTTP(w, r)
 	}
 }
 

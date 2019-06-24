@@ -43,33 +43,24 @@ func main() {
 		log.Fatal("Failed to open event db", err)
 	}
 	ctx := context.Background()
-	for event := range events {
+	go func() {
 		tick := time.NewTicker(time.Hour)
-		db := events[event]
 		run := func(tm time.Time) {
-			if err := db.Compaction(tm); err != nil {
-				log.Println("Compaction failed", event, err)
-			}
-			if err := db.RunValueLogGC(0.5); err != nil {
-				if err != badger.ErrNoRewrite {
-					log.Println("Value log GC failed", event, err)
-				}
+			if err := events.Compaction(tm); err != nil {
+				log.Println("Compaction failed", err)
 			}
 		}
-		go func() {
-			run(time.Now())
-			defer db.Close()
-			defer tick.Stop()
-			for {
-				select {
-				case tm := <-tick.C:
-					run(tm)
-				case <-ctx.Done():
-					return
-				}
+		run(time.Now())
+		defer tick.Stop()
+		for {
+			select {
+			case tm := <-tick.C:
+				run(tm)
+			case <-ctx.Done():
+				return
 			}
-		}()
-	}
+		}
+	}()
 	q := meter.ScanQueryRunner(events)
 	queryHandler := meter.QueryHandler(q)
 	storeHandler := meter.StoreHandler(events)
