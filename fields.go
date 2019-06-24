@@ -3,13 +3,13 @@ package meter
 import (
 	"encoding/json"
 	"sort"
-	"sync"
 )
 
 type Field struct {
 	Label string
 	Value string
 }
+
 type Fields []Field
 
 func (fields Fields) Reset() Fields {
@@ -53,21 +53,30 @@ func (fields Fields) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func ZipFields(labels []string, values []string) (fields Fields) {
-	for i, label := range labels {
-		if 0 <= i && i < len(values) {
-			fields = append(fields, Field{
-				Label: label,
-				Value: values[i],
-			})
-		} else {
-			fields = append(fields, Field{
-				Label: label,
-			})
+func (fields Fields) GroupBy(empty string, groups []string) Fields {
+	grouped := make([]Field, len(groups))
+	for i, label := range groups {
+		value := fields.Get(label)
+		if value == "" {
+			value = empty
+		}
+		grouped[i] = Field{
+			Label: label,
+			Value: value,
 		}
 	}
-	return
+	return grouped
+}
 
+func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
+	for _, label := range labels {
+		v := fields.Get(label)
+		if v == "" {
+			v = empty
+		}
+		dst = append(dst, v)
+	}
+	return dst
 }
 
 func (fields *Fields) UnmarshalText(data []byte) error {
@@ -122,6 +131,7 @@ func (fields Fields) Map() map[string]string {
 	}
 	return m
 }
+
 func (fields Fields) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields.Map())
 }
@@ -140,22 +150,21 @@ func (fields Fields) Sorted() Fields {
 	return fields
 }
 
-type FieldMatcher interface {
-	MatchFields(fields Fields) bool
-}
+func ZipFields(labels []string, values []string) (fields Fields) {
+	for i, label := range labels {
+		if 0 <= i && i < len(values) {
+			fields = append(fields, Field{
+				Label: label,
+				Value: values[i],
+			})
+		} else {
+			fields = append(fields, Field{
+				Label: label,
+			})
+		}
+	}
+	return
 
-type matchAllFields struct{}
-
-func (matchAllFields) MatchFields(_ Fields) bool { return true }
-
-type FieldMatcherFunc func(Fields) bool
-
-func (f FieldMatcherFunc) MatchFields(fields Fields) bool {
-	return f(fields)
-}
-
-func (fields Fields) SortedMatcher() FieldMatcherFunc {
-	return fields.Sorted().MatchSorted
 }
 
 func (fields Fields) MatchSorted(match Fields) bool {
@@ -189,151 +198,4 @@ next:
 	}
 	return len(match) == 0
 
-}
-
-type FieldCache struct {
-	mu     sync.RWMutex
-	ids    map[string]uint64
-	fields map[uint64]Fields
-}
-
-func (c *FieldCache) Set(id uint64, fields Fields) Fields {
-	c.mu.Lock()
-	if fields := c.fields[id]; fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	raw := fields.AppendTo(nil)
-	c.ids[string(raw)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
-	c.mu.Lock()
-	fields := c.fields[id]
-	if fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	fields.UnmarshalText(raw)
-	c.ids[string(raw)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-
-func (c *FieldCache) ID(fields Fields) (uint64, bool) {
-	raw := fields.AppendTo(nil)
-	return c.RawID(raw)
-}
-
-func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
-	c.mu.RLock()
-	id, ok = c.ids[string(raw)]
-	c.mu.RUnlock()
-	return
-}
-
-func (cache *FieldCache) Fields(id uint64) (fields Fields) {
-	cache.mu.RLock()
-	fields = cache.fields[id]
-	cache.mu.RUnlock()
-	return
-}
-
-func (cache *FieldCache) Labels() (labels []string) {
-	cache.mu.RLock()
-	defer cache.mu.RUnlock()
-	for _, fields := range cache.fields {
-		for i := range fields {
-			f := &fields[i]
-			labels = append(labels, f.Label)
-		}
-	}
-	sort.Strings(labels)
-	return distinctSorted(labels)
-}
-
-func (fields Fields) GroupBy(empty string, groups []string) Fields {
-	grouped := make([]Field, len(groups))
-	for i, label := range groups {
-		value := fields.Get(label)
-		if value == "" {
-			value = empty
-		}
-		grouped[i] = Field{
-			Label: label,
-			Value: value,
-		}
-	}
-	return grouped
-}
-
-func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
-	for _, label := range labels {
-		v := fields.Get(label)
-		if v == "" {
-			v = empty
-		}
-		dst = append(dst, v)
-	}
-	return dst
-}
-
-type iLabel struct {
-	Label string
-	Index int
-}
-
-type labelIndex []iLabel
-
-func (index labelIndex) Len() int {
-	return len(index)
-}
-
-func (index labelIndex) Less(i, j int) bool {
-	return index[i].Label < index[j].Label
-}
-
-func (index labelIndex) Swap(i, j int) {
-	index[i], index[j] = index[j], index[i]
-}
-
-func newLabelIndex(labels ...string) labelIndex {
-	index := labelIndex(make([]iLabel, len(labels)))
-	for i, label := range labels {
-		index[i] = iLabel{
-			Label: label,
-			Index: i,
-		}
-	}
-	sort.Stable(index)
-	return index
-}
-
-func (index labelIndex) AppendFields(dst []byte, values []string) []byte {
-	dst = appendUint32(dst, uint32(len(index)))
-	for i := range index {
-		idx := &index[i]
-		dst = appendString(dst, idx.Label)
-		var v string
-		if 0 <= idx.Index && idx.Index < len(values) {
-			v = values[idx.Index]
-		}
-		dst = appendString(dst, v)
-	}
-	return dst
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"sync"
 	"time"
 )
@@ -21,25 +22,6 @@ type StoreRequest struct {
 
 type EventStore interface {
 	Store(req *StoreRequest) error
-}
-
-func (event *Event) Store(tm time.Time, db EventStore) error {
-	s := getSnapshot()
-	defer putSnapshot(s)
-	if s = event.Flush(s[:0]); len(s) == 0 {
-		return nil
-	}
-	req := StoreRequest{
-		Event:    event.Name,
-		Labels:   event.Labels,
-		Time:     tm,
-		Counters: s,
-	}
-	if err := db.Store(&req); err != nil {
-		event.Merge(s)
-		return err
-	}
-	return nil
 }
 
 func StoreHandler(s EventStore) http.HandlerFunc {
@@ -178,6 +160,14 @@ func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
 	}
 	done := ctx.Done()
 	match := q.Match.Sorted()
+	groups := q.Group
+	if len(groups) > 0 {
+		sort.Strings(groups)
+	}
+	step := int64(q.Step / time.Second)
+	if step < 1 {
+		step = 1
+	}
 	go func() {
 		defer close(items)
 		defer close(errc)
@@ -191,10 +181,13 @@ func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
 				fields := ZipFields(d.Labels, c.Values)
 				ok := fields.MatchSorted(match)
 				if ok {
+					if len(groups) > 0 {
+						fields = fields.GroupBy(q.EmptyValue, groups)
+					}
 					select {
 					case items <- ScanItem{
 						Fields: fields,
-						Time:   d.Time.Unix(),
+						Time:   stepTS(d.Time.Unix(), step),
 						Count:  c.Count,
 					}:
 					case <-done:
@@ -205,4 +198,26 @@ func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
 		}
 	}()
 	return &it
+}
+
+func (e *Event) SyncTask(db EventStore) func(time.Time) error {
+	return func(tm time.Time) error {
+		s := getSnapshot()
+		defer putSnapshot(s)
+		if s = e.Flush(s[:0]); len(s) == 0 {
+			return nil
+		}
+		req := StoreRequest{
+			Event:    e.Name,
+			Labels:   e.Labels,
+			Time:     tm,
+			Counters: s,
+		}
+		if err := db.Store(&req); err != nil {
+			e.Merge(s)
+			return err
+		}
+		return nil
+
+	}
 }

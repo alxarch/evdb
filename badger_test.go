@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/alxarch/go-meter"
-	"github.com/dgraph-io/badger"
+	badger "github.com/dgraph-io/badger/v2"
 )
 
 func TestBadgerEvents(t *testing.T) {
@@ -22,7 +22,11 @@ func TestBadgerEvents(t *testing.T) {
 	opts.Dir = d
 	opts.ValueDir = d
 
-	db, err := meter.NewBadgerStore(opts, "test")
+	db, err := badger.Open(opts)
+	if err != nil {
+		t.Fatal("Failed to open badger", err)
+	}
+	events, err := meter.Open(db, "test")
 	if err != nil {
 		t.Fatal("Failed to open badger store", err)
 	}
@@ -54,10 +58,10 @@ func TestBadgerEvents(t *testing.T) {
 			},
 		},
 	}
-	if err := db.Store(&req); err != nil {
+	if err := events.Store(&req); err != nil {
 		t.Fatal("Failed to store counters", err)
 	}
-	qr := meter.ScanQueryRunner(db)
+	qr := meter.ScanQueryRunner(events)
 	ctx := context.Background()
 	q := meter.Query{
 		TimeRange: meter.TimeRange{

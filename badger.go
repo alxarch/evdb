@@ -10,10 +10,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgraph-io/badger"
+	"github.com/dgraph-io/badger/v2"
 )
 
 type BadgerEvents map[string]*badgerEvent
+
+func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
+	eventIDs, err := loadEventIDs(db, events...)
+	if err != nil {
+		return nil, err
+	}
+	store := make(map[string]*badgerEvent, len(events))
+
+	for i, event := range events {
+		id := eventIDs[i]
+		store[event] = &badgerEvent{
+			DB: db,
+			id: eventID(id),
+		}
+	}
+
+	return store, nil
+}
 
 func (store BadgerEvents) Store(s *StoreRequest) error {
 	e := store[s.Event]
@@ -34,50 +52,6 @@ type badgerEvent struct {
 	*badger.DB
 	id     eventID
 	fields FieldCache
-}
-
-func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
-	txn := db.NewTransaction(true)
-	defer txn.Discard()
-	dbEvents, err := loadRegisteredEvents(txn)
-	if err != nil {
-		return nil, err
-	}
-	// Read registered event names
-	n := len(dbEvents)
-	store := make(map[string]*badgerEvent, len(events))
-
-	for _, event := range events {
-		id := indexOf(dbEvents, event) + 1
-		if id == 0 {
-			// Event is not registered in DB
-			dbEvents = append(dbEvents, event)
-			id = len(dbEvents)
-		}
-		store[event] = &badgerEvent{
-			DB: db,
-			id: eventID(id),
-		}
-	}
-
-	if len(dbEvents) != n {
-		// New events have been added
-
-		// Serialize registered event names
-		v := appendStringSlice(nil, dbEvents)
-
-		// Store event names
-		var key keyBuffer
-		if err := txn.Set(key[:], v); err != nil {
-			return nil, err
-		}
-
-		if err := txn.Commit(nil); err != nil {
-			return nil, err
-		}
-	}
-
-	return store, nil
 }
 
 const (
@@ -144,12 +118,9 @@ func loadFields(txn *badger.Txn, event eventID, id uint64) (fields Fields, err e
 	if err != nil {
 		return
 	}
-	v, err := item.Value()
-	if err != nil {
-		return
+	if err := item.Value(fields.UnmarshalText); err != nil {
+		return nil, err
 	}
-
-	err = fields.UnmarshalText(v)
 	return
 }
 
@@ -157,9 +128,9 @@ func (b *badgerEvent) Labels() ([]string, error) {
 	return b.fields.Labels(), nil
 }
 
-func (e *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err error) {
+func (b *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err error) {
 	var (
-		cache   = &e.fields
+		cache   = &b.fields
 		index   = newLabelIndex(labels...)
 		scratch [16]byte
 		value   = getBuffer()[:0]
@@ -170,7 +141,7 @@ func (e *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err e
 		buf = index.AppendFields(buf[:0], c.Values)
 		id, ok := cache.RawID(buf)
 		if !ok {
-			id, err = e.loadID(buf)
+			id, err = b.loadID(buf)
 			if err != nil {
 				putBuffer(value)
 				putBuffer(buf)
@@ -182,10 +153,10 @@ func (e *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err e
 		binary.BigEndian.PutUint64(scratch[8:], uint64(c.Count))
 		value = append(value, scratch[:]...)
 	}
-	key := eventKey(e.id, ts)
+	key := eventKey(b.id, ts)
 
 retry:
-	if err = store(e.DB, key[:], value); err == badger.ErrConflict {
+	if err = store(b.DB, key[:], value); err == badger.ErrConflict {
 		goto retry
 	}
 	putBuffer(value)
@@ -209,12 +180,16 @@ func (b *badgerEvent) loadID(data []byte) (id uint64, err error) {
 			if !ok {
 				break
 			}
-			value, err := item.Value()
+			err := item.Value(func(value []byte) error {
+				if bytes.Equal(value, data) {
+					id = vid
+				}
+				return nil
+			})
 			if err != nil {
 				return err
 			}
-			if bytes.Equal(value, data) {
-				id = vid
+			if id == vid {
 				return nil
 			}
 			n++
@@ -244,18 +219,17 @@ func store(db *badger.DB, key, value []byte) error {
 	case badger.ErrKeyNotFound:
 	case nil:
 		// ValueCopy appends to b[:0] so it's no good
-		v, err := item.Value()
-		if err != nil {
-			return err
-		}
-		value = append(value, v...)
+		item.Value(func(v []byte) error {
+			value = append(value, v...)
+			return nil
+		})
 	default:
 		return err
 	}
 	if err := txn.Set(key, value); err != nil {
 		return err
 	}
-	return txn.Commit(nil)
+	return txn.Commit()
 }
 
 // dumpKeys dumps keys from a badger.DB to a writer
@@ -270,15 +244,15 @@ func DumpKeys(db *badger.DB, w io.Writer) error {
 			key := item.Key()
 			switch typ, event, id := parseKey(key); typ {
 			case prefixByteValue:
-				v, _ := item.Value()
-				if err := fields.UnmarshalText(v); err != nil {
+				if err := item.Value(fields.UnmarshalText); err != nil {
 					return err
 				}
-
 				fmt.Fprintf(w, "v event %d field %d value %v\n", event, id, fields)
 			case prefixByteEvent:
-				v, _ := item.Value()
-				fmt.Fprintf(w, "e event %d field %d size %d\n", event, id, len(v)/16)
+				item.Value(func(v []byte) error {
+					fmt.Fprintf(w, "e event %d field %d size %d\n", event, id, len(v)/16)
+					return nil
+				})
 			default:
 				fmt.Fprintf(w, "? %x\n", key)
 			}
@@ -312,49 +286,51 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 		key := item.Key()
 		ts, ok := parseEventKey(b.id, key)
 		if ok && minT <= ts && ts < maxT {
-			value, err := item.Value()
+			ts = stepTS(ts, step)
+			err := item.Value(func(value []byte) error {
+				var id, n uint64
+				for len(value) >= 16 {
+					id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
+					fields, ok := queryFields[id]
+					if !ok {
+						fields = b.fields.Fields(id)
+						if fields == nil {
+							fields, err := loadFields(txn, b.id, id)
+							if err != nil {
+								if err == badger.ErrKeyNotFound {
+									// Skip unknown id
+									continue
+								}
+								return err
+							}
+							b.fields.Set(id, fields)
+						}
+						if fields.MatchSorted(match) {
+							if len(q.Group) > 0 {
+								fields = fields.GroupBy(q.EmptyValue, q.Group)
+							}
+						} else {
+							fields = nil
+						}
+						queryFields[id] = fields
+					}
+					if fields == nil {
+						continue
+					}
+					select {
+					case items <- ScanItem{
+						Time:   ts,
+						Fields: fields,
+						Count:  int64(n),
+					}:
+					case <-done:
+						return nil
+					}
+				}
+				return nil
+			})
 			if err != nil {
 				return err
-			}
-			ts = stepTS(ts, step)
-			var id, n uint64
-			for len(value) >= 16 {
-				id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
-				fields, ok := queryFields[id]
-				if !ok {
-					fields = b.fields.Fields(id)
-					if fields == nil {
-						fields, err := loadFields(txn, b.id, id)
-						if err != nil {
-							if err == badger.ErrKeyNotFound {
-								// Skip unknown id
-								continue
-							}
-							return err
-						}
-						b.fields.Set(id, fields)
-					}
-					if fields.MatchSorted(match) {
-						if len(q.Group) > 0 {
-							fields = fields.GroupBy(q.EmptyValue, q.Group)
-						}
-					} else {
-						fields = nil
-					}
-					queryFields[id] = fields
-				}
-				if fields == nil {
-					continue
-				}
-				select {
-				case items <- ScanItem{
-					Time:   ts,
-					Fields: fields,
-					Count:  int64(n),
-				}:
-				case <-done:
-					return nil
-				}
 			}
 		}
 	}
@@ -387,17 +363,20 @@ func (b *badgerEvent) Scan(ctx context.Context, q *Query) ScanIterator {
 
 func (store BadgerEvents) Compaction(now time.Time) error {
 	var (
-		db   *badger.DB
 		wg   sync.WaitGroup
 		errc = make(chan error, len(store))
+		gc   *badger.DB
 	)
 	wg.Add(len(store))
 	for event := range store {
 		b := store[event]
-		db = b.DB
+		db := b.DB
+		if gc == nil {
+			gc = db
+		}
 		go func() {
 			defer wg.Done()
-			errc <- b.Compaction(now)
+			errc <- compactionScan(db, b.id, now)
 		}()
 	}
 	wg.Wait()
@@ -407,46 +386,10 @@ func (store BadgerEvents) Compaction(now time.Time) error {
 			return err
 		}
 	}
-	if db == nil {
+	if gc == nil {
 		return nil
 	}
-	return db.RunValueLogGC(0.5)
-}
-
-func (b *badgerEvent) Compaction(now time.Time) error {
-	txn := b.DB.NewTransaction(false)
-	defer txn.Discard()
-	iter := txn.NewIterator(badger.IteratorOptions{})
-	defer iter.Close()
-	seekEvent(iter, b.id, time.Time{})
-	if !iter.Valid() {
-		return nil
-	}
-	key := iter.Item().Key()
-	ts, ok := parseEventKey(b.id, key)
-	const step = int64(time.Hour)
-	ts = stepTS(ts, step)
-	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
-	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
-		for ; iter.Valid(); iter.Next() {
-			key = iter.Item().Key()
-			ts, ok = parseEventKey(b.id, key)
-			if ok && start < ts && ts < end {
-				n++
-			} else if start == ts {
-				continue
-			} else {
-				break
-			}
-		}
-		if n > 0 {
-			err := b.compaction(start, end)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+	return gc.RunValueLogGC(0.5)
 }
 
 type compactionEntry struct {
@@ -519,28 +462,68 @@ func (cc compactionBuffer) AppendTo(out []byte) []byte {
 	return out
 }
 
-func (b *badgerEvent) compaction(start, end int64) error {
-	txn := b.DB.NewTransaction(true)
+func compactionScan(db *badger.DB, id eventID, now time.Time) error {
+	txn := db.NewTransaction(false)
+	defer txn.Discard()
+	iter := txn.NewIterator(badger.IteratorOptions{})
+	defer iter.Close()
+	seekEvent(iter, id, time.Time{})
+	if !iter.Valid() {
+		return nil
+	}
+	key := iter.Item().Key()
+	ts, ok := parseEventKey(id, key)
+	const step = int64(time.Hour)
+	ts = stepTS(ts, step)
+	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
+	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
+		for ; iter.Valid(); iter.Next() {
+			key = iter.Item().Key()
+			ts, ok = parseEventKey(id, key)
+			if ok && start < ts && ts < end {
+				n++
+			} else if start == ts {
+				continue
+			} else {
+				break
+			}
+		}
+		if n > 0 {
+			err := compactionTask(db, id, start, end)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+
+}
+
+func compactionTask(db *badger.DB, id eventID, start, end int64) error {
+	txn := db.NewTransaction(true)
 	defer txn.Discard()
 	opt := badger.DefaultIteratorOptions
 	iter := txn.NewIterator(opt)
 	defer iter.Close()
-	seek := eventKey(b.id, start)
+	seek := eventKey(id, start)
 	cc := getCompactionBuffer()
 	defer putCompactionBuffer(cc)
 
 	for iter.Seek(seek[:]); iter.Valid(); iter.Next() {
 		item := iter.Item()
 		key := item.Key()
-		ts, ok := parseEventKey(b.id, key)
+		ts, ok := parseEventKey(id, key)
 		if !ok || ts >= end {
 			break
 		}
-		v, err := item.Value()
+		err := item.Value(func(v []byte) error {
+			cc = cc.Read(v)
+			return nil
+
+		})
 		if err != nil {
 			return err
 		}
-		cc = cc.Read(v)
 		if ts > start {
 			if err := txn.Delete(key); err != nil {
 				return err
@@ -558,12 +541,13 @@ func (b *badgerEvent) compaction(start, end int64) error {
 		if err := txn.Set(seek[:], value); err != nil {
 			return err
 		}
-		return txn.Commit(nil)
+		return txn.Commit()
 	}
 	return nil
+
 }
 
-func loadRegisteredEvents(txn *badger.Txn) ([]string, error) {
+func loadEvents(txn *badger.Txn) ([]string, error) {
 	var key keyBuffer
 	// Zero key holds registered events
 	itm, err := txn.Get(key[:])
@@ -573,10 +557,171 @@ func loadRegisteredEvents(txn *badger.Txn) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := itm.Value()
+	var dbEvents []string
+	if err := itm.Value(func(v []byte) error {
+		dbEvents, _ = shiftStringSlice(v)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return dbEvents, nil
+}
+
+func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+	dbEvents, err := loadEvents(txn)
 	if err != nil {
 		return nil, err
 	}
-	dbEvents, _ := shiftStringSlice(v)
-	return dbEvents, nil
+	n := len(dbEvents)
+	ids := make([]eventID, len(events))
+	for i, event := range events {
+		id := indexOf(dbEvents, event) + 1
+		if id == 0 {
+			// Event is not registered in DB
+			dbEvents = append(dbEvents, event)
+			id = len(dbEvents)
+		}
+		ids[i] = eventID(id)
+	}
+	if len(dbEvents) != n {
+		// New events have been added
+
+		// Serialize registered event names
+		v := appendStringSlice(nil, dbEvents)
+
+		// Store event names
+		var key keyBuffer
+		if err := txn.Set(key[:], v); err != nil {
+			return nil, err
+		}
+
+		if err := txn.Commit(); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+
+}
+
+type FieldCache struct {
+	mu     sync.RWMutex
+	ids    map[string]uint64
+	fields map[uint64]Fields
+}
+
+func (c *FieldCache) Set(id uint64, fields Fields) Fields {
+	c.mu.Lock()
+	if fields := c.fields[id]; fields != nil {
+		c.mu.Unlock()
+		return fields
+	}
+	if c.ids == nil {
+		c.ids = make(map[string]uint64)
+	}
+	raw := fields.AppendTo(nil)
+	c.ids[string(raw)] = id
+	if c.fields == nil {
+		c.fields = make(map[uint64]Fields)
+	}
+	c.fields[id] = fields
+	c.mu.Unlock()
+	return fields
+}
+func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
+	c.mu.Lock()
+	fields := c.fields[id]
+	if fields != nil {
+		c.mu.Unlock()
+		return fields
+	}
+	if c.ids == nil {
+		c.ids = make(map[string]uint64)
+	}
+	fields.UnmarshalText(raw)
+	c.ids[string(raw)] = id
+	if c.fields == nil {
+		c.fields = make(map[uint64]Fields)
+	}
+	c.fields[id] = fields
+	c.mu.Unlock()
+	return fields
+}
+
+func (c *FieldCache) ID(fields Fields) (uint64, bool) {
+	raw := fields.AppendTo(nil)
+	return c.RawID(raw)
+}
+
+func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
+	c.mu.RLock()
+	id, ok = c.ids[string(raw)]
+	c.mu.RUnlock()
+	return
+}
+
+func (c *FieldCache) Fields(id uint64) (fields Fields) {
+	c.mu.RLock()
+	fields = c.fields[id]
+	c.mu.RUnlock()
+	return
+}
+
+func (c *FieldCache) Labels() (labels []string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, fields := range c.fields {
+		for i := range fields {
+			f := &fields[i]
+			labels = append(labels, f.Label)
+		}
+	}
+	sort.Strings(labels)
+	return distinctSorted(labels)
+}
+
+type iLabel struct {
+	Label string
+	Index int
+}
+
+type labelIndex []iLabel
+
+func (index labelIndex) Len() int {
+	return len(index)
+}
+
+func (index labelIndex) Less(i, j int) bool {
+	return index[i].Label < index[j].Label
+}
+
+func (index labelIndex) Swap(i, j int) {
+	index[i], index[j] = index[j], index[i]
+}
+
+func newLabelIndex(labels ...string) labelIndex {
+	index := labelIndex(make([]iLabel, len(labels)))
+	for i, label := range labels {
+		index[i] = iLabel{
+			Label: label,
+			Index: i,
+		}
+	}
+	sort.Stable(index)
+	return index
+}
+
+func (index labelIndex) AppendFields(dst []byte, values []string) []byte {
+	dst = appendUint32(dst, uint32(len(index)))
+	for i := range index {
+		idx := &index[i]
+		dst = appendString(dst, idx.Label)
+		var v string
+		if 0 <= idx.Index && idx.Index < len(values) {
+			v = values[idx.Index]
+		}
+		dst = appendString(dst, v)
+	}
+	return dst
 }
