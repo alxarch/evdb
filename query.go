@@ -19,6 +19,27 @@ type Query struct {
 	EmptyValue string   `json:"empty,omitempty"`
 }
 
+func (q *Query) Values() url.Values {
+	values := url.Values(make(map[string][]string))
+	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
+	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
+	for _, label := range q.Group {
+		values.Add("group", label)
+	}
+	if q.Step != 0 {
+		values.Set("step", q.Step.String())
+	}
+	match := q.Match.Sorted()
+	for _, field := range match {
+		values.Add(`match.`+field.Label, field.Value)
+	}
+	if q.EmptyValue != "" {
+		values.Set("empty", q.EmptyValue)
+	}
+	return values
+
+}
+
 // SetValues sets query values from a URL query
 func (q *Query) SetValues(values url.Values) {
 	if step, ok := values["step"]; ok {
