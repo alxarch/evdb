@@ -1,12 +1,14 @@
-package meter
+package meter_test
 
 import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/alxarch/go-meter/v2"
 )
 
-var _ sort.Interface = DataPoints{}
+var _ sort.Interface = meter.DataPoints{}
 
 // AssertEqual checks if values are equal
 func AssertEqual(t *testing.T, a interface{}, b interface{}) {
@@ -26,4 +28,8 @@ func AssertNil(t *testing.T, a interface{}) {
 	if a != nil {
 		t.Errorf("a != nil %v", a)
 	}
+}
+
+func TestResult(t *testing.T) {
+
 }

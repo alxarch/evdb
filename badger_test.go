@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alxarch/go-meter"
+	meter "github.com/alxarch/go-meter/v2"
 	badger "github.com/dgraph-io/badger/v2"
 )
 

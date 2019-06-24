@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alxarch/go-meter"
+	meter "github.com/alxarch/go-meter/v2"
 )
 
 func Test_MemoryStore(t *testing.T) {

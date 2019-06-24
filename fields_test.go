@@ -3,7 +3,7 @@ package meter_test
 import (
 	"testing"
 
-	"github.com/alxarch/go-meter"
+	meter "github.com/alxarch/go-meter/v2"
 )
 
 func TestFields_MatchSorted(t *testing.T) {

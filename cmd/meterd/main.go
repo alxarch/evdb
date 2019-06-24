@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	meter "github.com/alxarch/go-meter"
-	"github.com/dgraph-io/badger"
+	meter "github.com/alxarch/go-meter/v2"
+	badger "github.com/dgraph-io/badger/v2"
 )
 
 var (
