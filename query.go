@@ -51,6 +51,12 @@ func (q *Query) URL(baseURL string, events ...string) (string, error) {
 
 }
 
+// TruncateTimestamp truncates a timestamp to Query.Step
+func (q *Query) TruncateTimestamp(ts int64) int64 {
+	step := int64(q.Step / time.Second)
+	return stepTS(ts, step)
+}
+
 // SetValues sets query values from a URL query
 func (q *Query) SetValues(values url.Values) {
 	if step, ok := values["step"]; ok {

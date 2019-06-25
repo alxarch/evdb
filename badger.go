@@ -116,18 +116,6 @@ func seekValue(iter *badger.Iterator, event eventID, id uint64) {
 	iter.Seek(key[:])
 }
 
-func loadFields(txn *badger.Txn, event eventID, id uint64) (fields Fields, err error) {
-	key := valueKey(event, id)
-	item, err := txn.Get(key[:])
-	if err != nil {
-		return
-	}
-	if err := item.Value(fields.UnmarshalBinary); err != nil {
-		return nil, err
-	}
-	return
-}
-
 func (b *badgerEvent) Labels() ([]string, error) {
 	return b.fields.Labels(), nil
 }
@@ -271,13 +259,71 @@ func (event errMissingEvent) Error() string {
 	return fmt.Sprintf("Missing event %q", string(event))
 }
 
+func (b *badgerEvent) Fields(id uint64) (Fields, error) {
+	fields := b.fields.Fields(id)
+	if fields != nil {
+		return fields, nil
+	}
+	txn := b.NewTransaction(false)
+	defer txn.Discard()
+	key := valueKey(b.id, id)
+	item, err := txn.Get(key[:])
+	if err != nil {
+		return nil, err
+	}
+	if err := item.Value(fields.UnmarshalBinary); err != nil {
+		return nil, err
+	}
+	b.fields.Set(id, fields)
+	return fields, nil
+}
+
 func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem) error {
 	var (
 		queryFields = make(map[uint64]Fields, 16)
 		match       = q.Match.Sorted()
 		done        = ctx.Done()
 		minT, maxT  = q.Start.Unix(), q.End.Unix()
-		step        = int64(q.Step / time.Second)
+		resolve     = func(id uint64) (Fields, error) {
+			fields, ok := queryFields[id]
+			if ok {
+				return fields, nil
+			}
+			fields, err := b.Fields(id)
+			if err != nil {
+				if err != badger.ErrKeyNotFound {
+					return nil, err
+				}
+				fields = nil
+			} else if fields.MatchSorted(match) {
+				if len(q.Group) > 0 {
+					fields = fields.GroupBy(q.EmptyValue, q.Group)
+				}
+			} else {
+				fields = nil
+			}
+			queryFields[id] = fields
+			return fields, nil
+		}
+		batch     []ScanItem
+		scanValue = func(value []byte) error {
+			var id, n uint64
+			for len(value) >= 16 {
+				id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
+				fields, err := resolve(id)
+				if err != nil {
+					return err
+				}
+				if fields == nil {
+					continue
+				}
+				batch = append(batch, ScanItem{
+					Fields: fields,
+					Count:  int64(n),
+				})
+			}
+			return nil
+		}
 	)
 
 	txn := b.DB.NewTransaction(false)
@@ -290,51 +336,21 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 		key := item.Key()
 		ts, ok := parseEventKey(b.id, key)
 		if ok && minT <= ts && ts < maxT {
-			ts = stepTS(ts, step)
-			err := item.Value(func(value []byte) error {
-				var id, n uint64
-				for len(value) >= 16 {
-					id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
-					fields, ok := queryFields[id]
-					if !ok {
-						fields = b.fields.Fields(id)
-						if fields == nil {
-							fields, err := loadFields(txn, b.id, id)
-							if err != nil {
-								if err == badger.ErrKeyNotFound {
-									// Skip unknown id
-									continue
-								}
-								return err
-							}
-							b.fields.Set(id, fields)
-						}
-						if fields.MatchSorted(match) {
-							if len(q.Group) > 0 {
-								fields = fields.GroupBy(q.EmptyValue, q.Group)
-							}
-						} else {
-							fields = nil
-						}
-						queryFields[id] = fields
-					}
-					if fields == nil {
-						continue
-					}
-					select {
-					case items <- ScanItem{
-						Time:   ts,
-						Fields: fields,
-						Count:  int64(n),
-					}:
-					case <-done:
-						return nil
-					}
-				}
-				return nil
-			})
+			batch = batch[:0]
+			err := item.Value(scanValue)
 			if err != nil {
 				return err
+			}
+			if len(batch) == 0 {
+				continue
+			}
+			for _, item := range batch {
+				item.Time = ts
+				select {
+				case items <- item:
+				case <-done:
+					return nil
+				}
 			}
 		}
 	}
