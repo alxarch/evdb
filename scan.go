@@ -57,7 +57,8 @@ func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Res
 			for iter.Next() {
 				item := iter.Item()
 				tm := q.TruncateTimestamp(item.Time)
-				results = results.Add(event, item.Fields, item.Count, tm)
+				n := float64(item.Count)
+				results = results.Add(event, item.Fields, n, tm)
 			}
 			if err := iter.Close(); err != nil {
 				errc <- err

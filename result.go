@@ -11,7 +11,7 @@ import (
 type Result struct {
 	Event  string      `json:"event"`
 	Fields Fields      `json:"fields,omitempty"`
-	Total  int64       `json:"total"`
+	Total  float64     `json:"total"`
 	Data   []DataPoint `json:"data,omitempty"`
 }
 
@@ -48,7 +48,7 @@ func (r *Result) Reset() {
 }
 
 // Add adds n times at ts time to a result
-func (r *Result) Add(ts, n int64) {
+func (r *Result) Add(ts int64, n float64) {
 	r.Total += n
 	for i := len(r.Data) - 1; 0 <= i && i < len(r.Data); i-- {
 		d := &r.Data[i]
@@ -65,7 +65,7 @@ func (r *Result) Add(ts, n int64) {
 type Results []Result
 
 // Add adds a result
-func (results Results) Add(event string, fields Fields, n, ts int64) Results {
+func (results Results) Add(event string, fields Fields, n float64, ts int64) Results {
 	for i := range results {
 		r := &results[i]
 		if r.Event == event && r.Fields.Equal(fields) {
@@ -83,14 +83,15 @@ func (results Results) Add(event string, fields Fields, n, ts int64) Results {
 
 // DataPoint is a time/count pair
 type DataPoint struct {
-	Timestamp, Value int64
+	Timestamp int64
+	Value     float64
 }
 
 // DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
 
 // Find searches for the count at a specific time
-func (s DataPoints) Find(tm time.Time) (int64, bool) {
+func (s DataPoints) Find(tm time.Time) (float64, bool) {
 	if i := s.IndexOf(tm); 0 <= i && i < len(s) {
 		return s[i].Value, true
 	}
@@ -131,18 +132,27 @@ func (p DataPoint) MarshalJSON() (data []byte, err error) {
 	data = append(data, '[')
 	data = strconv.AppendInt(data, p.Timestamp, 10)
 	data = append(data, ',')
-	data = strconv.AppendInt(data, p.Value, 10)
+	data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
 	data = append(data, ']')
 	return data, nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface
-func (p *DataPoint) UnmarshalJSON(data []byte) (err error) {
-	value := [2]int64{}
-	if err = json.Unmarshal(data, &value); err == nil {
-		p.Timestamp, p.Value = value[0], value[1]
+func (p *DataPoint) UnmarshalJSON(data []byte) error {
+	value := [2]json.Number{}
+	err := json.Unmarshal(data, &value)
+	if err != nil {
+		return err
 	}
-	return
+	p.Timestamp, err = value[0].Int64()
+	if err != nil {
+		return err
+	}
+	p.Value, err = value[1].Float64()
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // MarshalJSON implements json.Marshal interface
@@ -161,7 +171,7 @@ func (s DataPoints) MarshalJSON() (data []byte, err error) {
 		data = append(data, '[')
 		data = strconv.AppendInt(data, p.Timestamp, 10)
 		data = append(data, ',')
-		data = strconv.AppendInt(data, p.Value, 10)
+		data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
 		data = append(data, ']')
 	}
 	data = append(data, ']')
@@ -170,15 +180,15 @@ func (s DataPoints) MarshalJSON() (data []byte, err error) {
 
 // FieldSummary is a query result presented as a summary of field values
 type FieldSummary struct {
-	Event  string           `json:"event"`
-	Label  string           `json:"label"`
-	Values map[string]int64 `json:"values"`
+	Event  string             `json:"event"`
+	Label  string             `json:"label"`
+	Values map[string]float64 `json:"values"`
 }
 
 // Add ads a value to a field summary
-func (s *FieldSummary) Add(value string, n int64) {
+func (s *FieldSummary) Add(value string, n float64) {
 	if s.Values == nil {
-		s.Values = make(map[string]int64)
+		s.Values = make(map[string]float64)
 	}
 	s.Values[value] += n
 }
@@ -207,7 +217,7 @@ func (results Results) FieldSummaries() (s FieldSummaries) {
 	return s
 }
 
-func (sums FieldSummaries) append(event, label, value string, n int64) FieldSummaries {
+func (sums FieldSummaries) append(event, label, value string, n float64) FieldSummaries {
 	for i := range sums {
 		sum := &sums[i]
 		if sum.Event == event && sum.Label == label {
@@ -218,7 +228,7 @@ func (sums FieldSummaries) append(event, label, value string, n int64) FieldSumm
 	return append(sums, FieldSummary{
 		Event:  event,
 		Label:  label,
-		Values: map[string]int64{value: n},
+		Values: map[string]float64{value: n},
 	})
 }
 
@@ -232,7 +242,7 @@ type EventSummaries struct {
 // EventSummary groups values with totals
 type EventSummary struct {
 	Values []string
-	Totals map[string]int64
+	Totals map[string]float64
 }
 
 // EventSummaries groups results as EventSummaries
@@ -273,7 +283,7 @@ func (r *EventSummary) TableRow(events []string) []interface{} {
 	return row
 }
 
-func (s *EventSummaries) add(event string, values []string, n int64) {
+func (s *EventSummaries) add(event string, values []string, n float64) {
 	for i := range s.Data {
 		sum := &s.Data[i]
 		if stringsEqual(sum.Values, values) {
@@ -283,7 +293,7 @@ func (s *EventSummaries) add(event string, values []string, n int64) {
 	}
 	s.Data = append(s.Data, EventSummary{
 		Values: values,
-		Totals: map[string]int64{event: n},
+		Totals: map[string]float64{event: n},
 	})
 
 }
