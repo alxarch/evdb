@@ -122,7 +122,7 @@ func loadFields(txn *badger.Txn, event eventID, id uint64) (fields Fields, err e
 	if err != nil {
 		return
 	}
-	if err := item.Value(fields.UnmarshalText); err != nil {
+	if err := item.Value(fields.UnmarshalBinary); err != nil {
 		return nil, err
 	}
 	return
@@ -248,7 +248,7 @@ func DumpKeys(db *badger.DB, w io.Writer) error {
 			key := item.Key()
 			switch typ, event, id := parseKey(key); typ {
 			case prefixByteValue:
-				if err := item.Value(fields.UnmarshalText); err != nil {
+				if err := item.Value(fields.UnmarshalBinary); err != nil {
 					return err
 				}
 				fmt.Fprintf(w, "v event %d field %d value %v\n", event, id, fields)
@@ -648,7 +648,7 @@ func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
 	if c.ids == nil {
 		c.ids = make(map[string]uint64)
 	}
-	fields.UnmarshalText(raw)
+	fields.UnmarshalBinary(raw)
 	c.ids[string(raw)] = id
 	if c.fields == nil {
 		c.fields = make(map[uint64]Fields)

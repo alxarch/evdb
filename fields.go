@@ -23,48 +23,77 @@ func (fields Fields) Reset() Fields {
 }
 
 // Get returns the value of label
-func (fields Fields) Get(label string) string {
+func (fields Fields) Get(label string) (string, bool) {
 	for i := range fields {
 		f := &fields[i]
 		if f.Label == label {
-			return f.Value
+			return f.Value, true
 		}
 	}
-	return ""
-}
-
-// Grow grows Fields to hold at least size fields
-func (fields Fields) Grow(size int) Fields {
-	if size > 0 {
-		size += len(fields)
-		if 0 <= size && size < cap(fields) {
-			return fields[:size]
-		}
-		tmp := make([]Field, size)
-		copy(tmp, fields)
-		return tmp
-	}
-	return fields
+	return "", false
 }
 
 // AppendTo serializes Fields to binary data by appending
 func (fields Fields) AppendTo(dst []byte) []byte {
+	dst = appendUint32(dst, uint32(len(fields)))
 	for i := range fields {
 		f := &fields[i]
-		dst = append(dst, byte(len(f.Label)))
+		dst = appendUint32(dst, uint32(len(f.Label)))
 		dst = append(dst, f.Label...)
-		dst = append(dst, byte(len(f.Value)))
+		dst = appendUint32(dst, uint32(len(f.Value)))
 		dst = append(dst, f.Value...)
 	}
 	return dst
+}
+
+// ShiftFrom deserializes Fields from binary data
+func (fields Fields) ShiftFrom(data []byte) (Fields, []byte) {
+	_, data = shiftUint32(data)
+	var label, value string
+	for len(data) > 0 {
+		label, data = shiftString(data)
+		value, data = shiftString(data)
+		fields = append(fields, Field{Label: label, Value: value})
+	}
+	return fields, data
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler interfacee
+func (fields *Fields) UnmarshalBinary(data []byte) error {
+	*fields, _ = (*fields).ShiftFrom(data)
+	return nil
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler interfacee
+func (fields Fields) MarshalBinary() ([]byte, error) {
+	return fields.AppendTo(nil), nil
+}
+
+// MarshalJSON implements json.Marshaler interface
+func (fields Fields) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fields.Map())
+}
+
+// UnmarshalJSON implements json.Marshaler interface
+func (fields *Fields) UnmarshalJSON(data []byte) error {
+	values := make(map[string]string)
+	if err := json.Unmarshal(data, &values); err != nil {
+		return err
+	}
+	fs := (*fields)[:0]
+	for label := range values {
+		fs = append(fs, Field{Label: label, Value: values[label]})
+	}
+	*fields = fs
+	return nil
 }
 
 // GroupBy groups fields by labels
 func (fields Fields) GroupBy(empty string, groups []string) Fields {
 	grouped := make([]Field, len(groups))
 	for i, label := range groups {
-		value := fields.Get(label)
-		if value == "" {
+		value, ok := fields.Get(label)
+		if !ok {
 			value = empty
 		}
 		grouped[i] = Field{
@@ -78,27 +107,13 @@ func (fields Fields) GroupBy(empty string, groups []string) Fields {
 // AppendValues appends the values for the labels in order
 func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
 	for _, label := range labels {
-		v := fields.Get(label)
-		if v == "" {
+		v, ok := fields.Get(label)
+		if !ok {
 			v = empty
 		}
 		dst = append(dst, v)
 	}
 	return dst
-}
-
-// UnmarshalText implements TextUnmarshaler interfacee
-func (fields *Fields) UnmarshalText(data []byte) error {
-	size, data := shiftUint32(data)
-	fs := make([]Field, 0, size)
-	var label, value string
-	for len(data) > 0 {
-		label, data = shiftString(data)
-		value, data = shiftString(data)
-		fs = append(fs, Field{Label: label, Value: value})
-	}
-	*fields = fs
-	return nil
 }
 
 // Equal checks if two Fields are equal
@@ -141,11 +156,6 @@ func (fields Fields) Map() map[string]string {
 		m[f.Label] = f.Value
 	}
 	return m
-}
-
-// MarshalJSON implements json.Marshaler interface
-func (fields Fields) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fields.Map())
 }
 
 // Copy clones a collection of fields
