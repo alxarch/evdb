@@ -109,12 +109,12 @@ type TimeRange struct {
 }
 
 // QueryRunner runs queries
-type QueryRunner interface {
-	RunQuery(ctx context.Context, q *Query, events ...string) (Results, error)
+type Querier interface {
+	Query(ctx context.Context, q *Query, events ...string) (Results, error)
 }
 
 // QueryHandler returns an HTTP endpoint for a QueryRunner
-func QueryHandler(qr QueryRunner) http.HandlerFunc {
+func QueryHandler(qr Querier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
 		events := values["event"]
@@ -131,7 +131,7 @@ func QueryHandler(qr QueryRunner) http.HandlerFunc {
 			q.Step = -1
 		}
 		ctx := r.Context()
-		results, err := qr.RunQuery(ctx, &q, events...)
+		results, err := qr.Query(ctx, &q, events...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

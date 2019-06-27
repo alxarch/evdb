@@ -33,40 +33,43 @@ func (fields Fields) Get(label string) (string, bool) {
 	return "", false
 }
 
-// AppendTo serializes Fields to binary data by appending
-func (fields Fields) AppendTo(dst []byte) []byte {
-	dst = appendUint32(dst, uint32(len(fields)))
+// ToBlob implements ToBlober interface
+func (fields Fields) ToBlob(s Blob) (Blob, error) {
+	s = s.WriteU32BE(uint32(len(fields)))
 	for i := range fields {
 		f := &fields[i]
-		dst = appendUint32(dst, uint32(len(f.Label)))
-		dst = append(dst, f.Label...)
-		dst = appendUint32(dst, uint32(len(f.Value)))
-		dst = append(dst, f.Value...)
+		s = s.WriteString(f.Label)
+		s = s.WriteString(f.Value)
 	}
-	return dst
+	return s, nil
 }
 
 // ShiftFrom deserializes Fields from binary data
-func (fields Fields) ShiftFrom(data []byte) (Fields, []byte) {
-	_, data = shiftUint32(data)
+func (fields Fields) Read(b Blob) (Fields, Blob) {
+	n, b := b.ReadU32BE()
 	var label, value string
-	for len(data) > 0 {
-		label, data = shiftString(data)
-		value, data = shiftString(data)
+	for ; len(b) > 0 && n > 0; n-- {
+		label, b = b.ReadString()
+		value, b = b.ReadString()
 		fields = append(fields, Field{Label: label, Value: value})
 	}
-	return fields, data
+	return fields, b
 }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler interfacee
 func (fields *Fields) UnmarshalBinary(data []byte) error {
-	*fields, _ = (*fields).ShiftFrom(data)
+	*fields, _ = (*fields).Read(Blob(data))
 	return nil
+}
+func (fields *Fields) FromBlob(s Blob) (Blob, error) {
+	*fields, s = (*fields).Read(s)
+	return s, nil
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler interfacee
 func (fields Fields) MarshalBinary() ([]byte, error) {
-	return fields.AppendTo(nil), nil
+	s, _ := fields.ToBlob(nil)
+	return s, nil
 }
 
 // MarshalJSON implements json.Marshaler interface

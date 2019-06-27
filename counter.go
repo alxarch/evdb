@@ -11,12 +11,12 @@ type Counter struct {
 	Values []string `json:"v,omitempty"`
 }
 
-// Snapshot is a slice of counters
-type Snapshot []Counter
+// CounterSlice is a slice of counters
+type CounterSlice []Counter
 
 // UnsafeCounters is an index of counters not safe for concurrent use
 type UnsafeCounters struct {
-	counters Snapshot
+	counters CounterSlice
 	index    map[uint64][]int
 }
 
@@ -60,7 +60,7 @@ func (cs *UnsafeCounters) Add(n int64, values ...string) int64 {
 }
 
 // Flush appends all counters to a snapshot and resets them to zero
-func (cs *UnsafeCounters) Flush(s Snapshot) Snapshot {
+func (cs *UnsafeCounters) Flush(s CounterSlice) CounterSlice {
 	s = append(s, cs.counters...)
 	cs.counters.Zero()
 	return s
@@ -115,8 +115,8 @@ func (cs *Counters) Add(n int64, values ...string) int64 {
 	return atomic.AddInt64(&c.Count, n)
 }
 
-// Merge adds all counters from a Snapshot
-func (cs *Counters) Merge(s Snapshot) {
+// Merge adds all counters from a CounterSlice
+func (cs *Counters) Merge(s CounterSlice) {
 	for i := range s {
 		c := &s[i]
 		cs.Add(c.Count, c.Values...)
@@ -151,7 +151,7 @@ func (cs *UnsafeCounters) Pack() {
 }
 
 // FilterZero filters out empty counters in-place
-func (s Snapshot) FilterZero() Snapshot {
+func (s CounterSlice) FilterZero() CounterSlice {
 	j := 0
 	for i := range s {
 		c := &s[i]
@@ -165,7 +165,7 @@ func (s Snapshot) FilterZero() Snapshot {
 }
 
 // Reset resets a snapshot
-func (s Snapshot) Reset() Snapshot {
+func (s CounterSlice) Reset() CounterSlice {
 	for i := range s {
 		s[i] = Counter{}
 	}
@@ -173,7 +173,7 @@ func (s Snapshot) Reset() Snapshot {
 }
 
 // Zero resets all counters to zero count
-func (s Snapshot) Zero() {
+func (s CounterSlice) Zero() {
 	for i := range s {
 		c := &s[i]
 		c.Count = 0
@@ -182,20 +182,20 @@ func (s Snapshot) Zero() {
 
 var snapshotPool sync.Pool
 
-func getSnapshot() Snapshot {
+func getCounterSlice() CounterSlice {
 	if x := snapshotPool.Get(); x != nil {
-		return x.(Snapshot)
+		return x.(CounterSlice)
 	}
-	const minSnapshotSize = 64
-	return make([]Counter, 0, minSnapshotSize)
+	const minCounterSliceSize = 64
+	return make([]Counter, 0, minCounterSliceSize)
 }
 
-func putSnapshot(s Snapshot) {
+func putCounterSlice(s CounterSlice) {
 	snapshotPool.Put(s.Reset())
 }
 
-// Flush appends counters to a Snapshot and resets all counters to zero
-func (cs *Counters) Flush(s Snapshot) Snapshot {
+// Flush appends counters to a CounterSlice and resets all counters to zero
+func (cs *Counters) Flush(s CounterSlice) CounterSlice {
 	src := cs.counters.counters
 	cs.mu.RLock()
 	for i := range src {

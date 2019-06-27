@@ -33,7 +33,7 @@ type scanners struct {
 }
 
 // RunQuery implements QueryRunner interface
-func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Results, error) {
+func (s scanners) Query(ctx context.Context, q *Query, events ...string) (Results, error) {
 	errc := make(chan error, len(events))
 	ch := make(chan Results, len(events))
 	wg := new(sync.WaitGroup)
@@ -80,8 +80,18 @@ func (s scanners) RunQuery(ctx context.Context, q *Query, events ...string) (Res
 }
 
 // ScanQueryRunner creates a QueryRunner from a Scanners instance
-func ScanQueryRunner(s Scanners) QueryRunner {
+func ScanQuerier(s Scanners) Querier {
 	return scanners{s}
+}
+
+func NewScanIterator(ctx context.Context, items <-chan ScanItem, errors <-chan error) ScanIterator {
+	ctx, cancel := context.WithCancel(ctx)
+	iter := scanIterator{
+		cancel: cancel,
+		errc:   errors,
+		items:  items,
+	}
+	return &iter
 }
 
 type scanIterator struct {
@@ -112,8 +122,8 @@ func (it *scanIterator) Close() error {
 	return it.err
 }
 
-type emptyScanIterator struct{}
+type EmptyScanIterator struct{}
 
-func (emptyScanIterator) Item() ScanItem { return ScanItem{} }
-func (emptyScanIterator) Close() error   { return nil }
-func (emptyScanIterator) Next() bool     { return false }
+func (EmptyScanIterator) Item() ScanItem { return ScanItem{} }
+func (EmptyScanIterator) Close() error   { return nil }
+func (EmptyScanIterator) Next() bool     { return false }

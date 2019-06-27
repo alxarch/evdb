@@ -1,32 +1,73 @@
-package meter
+package badgerdb
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/alxarch/go-meter/v2"
 	"github.com/dgraph-io/badger/v2"
 )
 
-// BadgerEvents is a collection of Events stored in BadgerDB
-type BadgerEvents map[string]*badgerEvent
+// DB is a collection of Events stored in BadgerDB
+type DB map[string]*eventDB
+
+type badgerOpener struct{}
+
+func (_ badgerOpener) Open(configURL string, events ...string) (meter.DB, error) {
+	options, err := ParseConfigURL(configURL)
+	if err != nil {
+		return nil, err
+	}
+	db, err := badger.Open(options)
+	if err != nil {
+		return nil, err
+	}
+	return Open(db, events...)
+}
+
+const urlScheme = "badger"
+
+func init() {
+	meter.Register(urlScheme, badgerOpener{})
+}
+
+func ParseConfigURL(configURL string) (badger.Options, error) {
+	options := badger.DefaultOptions
+	c, err := url.Parse(configURL)
+	if err != nil {
+		return options, err
+	}
+	if c.Scheme != urlScheme {
+		return options, errors.New(`Invalid scheme`)
+	}
+	if c.Host != "" {
+		return options, errors.New(`Invalid host`)
+	}
+	options.Dir = c.Path
+	options.ValueDir = c.Path
+	return options, nil
+
+}
 
 // Open opens a new Event collection stored in BadgerDB
-func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
+func Open(db *badger.DB, events ...string) (DB, error) {
 	eventIDs, err := loadEventIDs(db, events...)
 	if err != nil {
 		return nil, err
 	}
-	store := make(map[string]*badgerEvent, len(events))
+	store := make(map[string]*eventDB, len(events))
 
 	for i, event := range events {
 		id := eventIDs[i]
-		store[event] = &badgerEvent{
+		store[event] = &eventDB{
 			DB: db,
 			id: eventID(id),
 		}
@@ -36,7 +77,7 @@ func Open(db *badger.DB, events ...string) (BadgerEvents, error) {
 }
 
 // Store implements Store interface
-func (store BadgerEvents) Store(s *StoreRequest) error {
+func (store DB) Store(s *meter.Snapshot) error {
 	e := store[s.Event]
 	if e == nil {
 		return errMissingEvent(s.Event)
@@ -45,14 +86,23 @@ func (store BadgerEvents) Store(s *StoreRequest) error {
 }
 
 // Scanner implements Scanners interface
-func (store BadgerEvents) Scanner(event string) Scanner {
+func (store DB) Scanner(event string) meter.Scanner {
 	if s, ok := store[event]; ok {
 		return s
 	}
 	return nil
 }
+func (store DB) Query(ctx context.Context, q *meter.Query, events ...string) (meter.Results, error) {
+	return meter.ScanQuerier(store).Query(ctx, q, events...)
+}
+func (store DB) Close() error {
+	for _, db := range store {
+		return db.DB.Close()
+	}
+	return nil
+}
 
-type badgerEvent struct {
+type eventDB struct {
 	*badger.DB
 	id     eventID
 	fields FieldCache
@@ -116,11 +166,11 @@ func seekValue(iter *badger.Iterator, event eventID, id uint64) {
 	iter.Seek(key[:])
 }
 
-func (b *badgerEvent) Labels() ([]string, error) {
+func (b *eventDB) Labels() ([]string, error) {
 	return b.fields.Labels(), nil
 }
 
-func (b *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err error) {
+func (b *eventDB) store(ts int64, labels []string, counters meter.CounterSlice) (err error) {
 	var (
 		cache   = &b.fields
 		index   = newLabelIndex(labels...)
@@ -130,7 +180,7 @@ func (b *badgerEvent) store(ts int64, labels []string, counters Snapshot) (err e
 	)
 	for i := range counters {
 		c := &counters[i]
-		buf = index.AppendFields(buf[:0], c.Values)
+		buf = index.WriteFields(buf[:0], c.Values)
 		id, ok := cache.RawID(buf)
 		if !ok {
 			id, err = b.loadID(buf)
@@ -156,7 +206,7 @@ retry:
 	return nil
 }
 
-func (b *badgerEvent) loadID(data []byte) (id uint64, err error) {
+func (b *eventDB) loadID(data []byte) (id uint64, err error) {
 	h := hashFNVa32(data)
 	id = uint64(h) << 32 // Shift 0000xxxx to xxxx0000
 	update := func(txn *badger.Txn) error {
@@ -230,7 +280,7 @@ func DumpKeys(db *badger.DB, w io.Writer) error {
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 		var k keyBuffer
-		var fields Fields
+		var fields meter.Fields
 		for iter.Seek(k[:]); iter.Valid(); iter.Next() {
 			item := iter.Item()
 			key := item.Key()
@@ -259,7 +309,7 @@ func (event errMissingEvent) Error() string {
 	return fmt.Sprintf("Missing event %q", string(event))
 }
 
-func (b *badgerEvent) Fields(id uint64) (Fields, error) {
+func (b *eventDB) Fields(id uint64) (meter.Fields, error) {
 	fields := b.fields.Fields(id)
 	if fields != nil {
 		return fields, nil
@@ -278,13 +328,13 @@ func (b *badgerEvent) Fields(id uint64) (Fields, error) {
 	return fields, nil
 }
 
-func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem) error {
+func (b *eventDB) query(ctx context.Context, q *meter.Query, items chan<- meter.ScanItem) error {
 	var (
-		queryFields = make(map[uint64]Fields, 16)
+		queryFields = make(map[uint64]meter.Fields, 16)
 		match       = q.Match.Sorted()
 		done        = ctx.Done()
 		minT, maxT  = q.Start.Unix(), q.End.Unix()
-		resolve     = func(id uint64) (Fields, error) {
+		resolve     = func(id uint64) (meter.Fields, error) {
 			fields, ok := queryFields[id]
 			if ok {
 				return fields, nil
@@ -305,7 +355,7 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 			queryFields[id] = fields
 			return fields, nil
 		}
-		batch     []ScanItem
+		batch     []meter.ScanItem
 		scanValue = func(value []byte) error {
 			var id, n uint64
 			for len(value) >= 16 {
@@ -317,7 +367,7 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 				if fields == nil {
 					continue
 				}
-				batch = append(batch, ScanItem{
+				batch = append(batch, meter.ScanItem{
 					Fields: fields,
 					Count:  int64(n),
 				})
@@ -357,32 +407,25 @@ func (b *badgerEvent) query(ctx context.Context, q *Query, items chan<- ScanItem
 	return nil
 }
 
-func (b *badgerEvent) Scan(ctx context.Context, q *Query) ScanIterator {
+func (b *eventDB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
 	if b == nil {
-		return emptyScanIterator{}
+		return meter.EmptyScanIterator{}
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	items := make(chan ScanItem)
+	items := make(chan meter.ScanItem)
 	errc := make(chan error, 1)
-	iter := scanIterator{
-		items:  items,
-		errc:   errc,
-		cancel: cancel,
-	}
 	go func() {
 		defer close(errc)
 		defer close(items)
 		errc <- b.query(ctx, q, items)
 	}()
-
-	return &iter
+	return meter.NewScanIterator(ctx, items, errc)
 }
 
 // Compaction merges event snapshot compacting data to hourly batches
-func (store BadgerEvents) Compaction(now time.Time) error {
+func (store DB) Compaction(now time.Time) error {
 	var (
 		wg   sync.WaitGroup
 		errc = make(chan error, len(store))
@@ -473,14 +516,13 @@ func (cc compactionBuffer) Compact() compactionBuffer {
 func (cc compactionBuffer) Reset() compactionBuffer {
 	return cc[:0]
 }
-
-func (cc compactionBuffer) AppendTo(out []byte) []byte {
+func (cc compactionBuffer) ToBlob(s meter.Blob) (meter.Blob, error) {
 	for i := range cc {
 		c := &cc[i]
-		out = appendUint64(out, c.id)
-		out = appendUint64(out, uint64(c.n))
+		s = s.WriteU64BE(c.id)
+		s = s.WriteU64BE(uint64(c.n))
 	}
-	return out
+	return s, nil
 }
 
 func compactionScan(db *badger.DB, id eventID, now time.Time) error {
@@ -495,7 +537,9 @@ func compactionScan(db *badger.DB, id eventID, now time.Time) error {
 	key := iter.Item().Key()
 	ts, ok := parseEventKey(id, key)
 	const step = int64(time.Hour)
-	ts = stepTS(ts, step)
+	q := meter.Query{}
+	q.Step = time.Duration(step)
+	ts = q.TruncateTimestamp(ts)
 	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
 	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
 		for ; iter.Valid(); iter.Next() {
@@ -557,7 +601,7 @@ func compactionTask(db *badger.DB, id eventID, start, end int64) error {
 	cc = cc.Compact()
 	if len(cc) > 0 {
 		value := getBuffer()
-		value = cc.AppendTo(value[:0])
+		value, _ = cc.ToBlob(value[:0])
 		defer putBuffer(value)
 		if err := txn.Set(seek[:], value); err != nil {
 			return err
@@ -580,7 +624,7 @@ func loadEvents(txn *badger.Txn) ([]string, error) {
 	}
 	var dbEvents []string
 	if err := itm.Value(func(v []byte) error {
-		dbEvents, _ = shiftStringSlice(v)
+		dbEvents, _ = meter.Blob(v).ReadStrings()
 		return nil
 	}); err != nil {
 		return nil, err
@@ -610,7 +654,7 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 		// New events have been added
 
 		// Serialize registered event names
-		v := appendStringSlice(nil, dbEvents)
+		v := meter.Blob(nil).WriteStrings(dbEvents)
 
 		// Store event names
 		var key keyBuffer
@@ -630,11 +674,11 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 type FieldCache struct {
 	mu     sync.RWMutex
 	ids    map[string]uint64
-	fields map[uint64]Fields
+	fields map[uint64]meter.Fields
 }
 
 // Set set a field to an id
-func (c *FieldCache) Set(id uint64, fields Fields) Fields {
+func (c *FieldCache) Set(id uint64, fields meter.Fields) meter.Fields {
 	c.mu.Lock()
 	if fields := c.fields[id]; fields != nil {
 		c.mu.Unlock()
@@ -643,10 +687,10 @@ func (c *FieldCache) Set(id uint64, fields Fields) Fields {
 	if c.ids == nil {
 		c.ids = make(map[string]uint64)
 	}
-	raw := fields.AppendTo(nil)
+	raw, _ := fields.ToBlob(nil)
 	c.ids[string(raw)] = id
 	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
+		c.fields = make(map[uint64]meter.Fields)
 	}
 	c.fields[id] = fields
 	c.mu.Unlock()
@@ -654,7 +698,7 @@ func (c *FieldCache) Set(id uint64, fields Fields) Fields {
 }
 
 // SetRaw sets a raw field value to an id
-func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
+func (c *FieldCache) SetRaw(id uint64, raw []byte) meter.Fields {
 	c.mu.Lock()
 	fields := c.fields[id]
 	if fields != nil {
@@ -667,7 +711,7 @@ func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
 	fields.UnmarshalBinary(raw)
 	c.ids[string(raw)] = id
 	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
+		c.fields = make(map[uint64]meter.Fields)
 	}
 	c.fields[id] = fields
 	c.mu.Unlock()
@@ -675,8 +719,8 @@ func (c *FieldCache) SetRaw(id uint64, raw []byte) Fields {
 }
 
 // ID gets the id of fields
-func (c *FieldCache) ID(fields Fields) (uint64, bool) {
-	raw := fields.AppendTo(nil)
+func (c *FieldCache) ID(fields meter.Fields) (uint64, bool) {
+	raw, _ := fields.ToBlob(nil)
 	return c.RawID(raw)
 }
 
@@ -689,7 +733,7 @@ func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
 }
 
 // Fields gets fields by id
-func (c *FieldCache) Fields(id uint64) (fields Fields) {
+func (c *FieldCache) Fields(id uint64) (fields meter.Fields) {
 	c.mu.RLock()
 	fields = c.fields[id]
 	c.mu.RUnlock()
@@ -741,16 +785,18 @@ func newLabelIndex(labels ...string) labelIndex {
 	return index
 }
 
-func (index labelIndex) AppendFields(dst []byte, values []string) []byte {
-	dst = appendUint32(dst, uint32(len(index)))
+func (index labelIndex) WriteFields(dst meter.Blob, values []string) meter.Blob {
+	dst = dst.WriteU32BE(uint32(len(index)))
 	for i := range index {
 		idx := &index[i]
-		dst = appendString(dst, idx.Label)
+		dst = dst.WriteString(idx.Label)
 		var v string
 		if 0 <= idx.Index && idx.Index < len(values) {
 			v = values[idx.Index]
 		}
-		dst = appendString(dst, v)
+		dst = dst.WriteString(v)
 	}
 	return dst
 }
+
+var _ meter.DB = (*DB)(nil)

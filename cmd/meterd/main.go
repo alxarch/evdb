@@ -3,23 +3,33 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"syscall"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
-	badger "github.com/dgraph-io/badger/v2"
+	badger "github.com/alxarch/go-meter/v2/db/badger"
 )
 
 var (
-	dataDir = flag.String("dir", "", "Data dir")
-	addr    = flag.String("address", ":8080", "HTTP Listen address")
+	dataDir    = flag.String("dir", "", "Storage dir")
+	eventNames = flag.String("events", "", "Event names")
+	addr       = flag.String("address", ":8080", "HTTP Listen address")
 )
 
+func splitEvents(v string) []string {
+	values := strings.Split(v, ",")
+	for i, v := range values {
+		values[i] = strings.TrimSpace(v)
+	}
+	return values
+}
 func main() {
 	flag.Parse()
 	if *dataDir == "" {
@@ -28,25 +38,18 @@ func main() {
 			log.Fatal("Failed to create tmp data dir", err)
 		}
 	}
+	storageURL := fmt.Sprintf(`badger://%s?truncate=true`, *dataDir)
+	db, err := meter.Open(storageURL, splitEvents(*eventNames)...)
+	if err != nil {
+		log.Fatal("Failed to open ")
+	}
 
-	options := badger.DefaultOptions
-	options.Truncate = true
-	options.Dir = *dataDir
-	options.ValueDir = *dataDir
-	db, err := badger.Open(options)
-	if err != nil {
-		log.Fatal("Failed to open badger DB", err)
-	}
 	defer db.Close()
-	events, err := meter.Open(db, flag.Args()...)
-	if err != nil {
-		log.Fatal("Failed to open event db", err)
-	}
 	ctx := context.Background()
 	go func() {
 		tick := time.NewTicker(time.Hour)
 		run := func(tm time.Time) {
-			if err := events.Compaction(tm); err != nil {
+			if err := db.(badger.DB).Compaction(tm); err != nil {
 				log.Println("Compaction failed", err)
 			}
 		}
@@ -61,13 +64,13 @@ func main() {
 			}
 		}
 	}()
-	q := meter.ScanQueryRunner(events)
-	queryHandler := meter.QueryHandler(q)
-	storeHandler := meter.StoreHandler(events)
+	queryHandler := meter.QueryHandler(db)
+	storeHandler := meter.StoreHandler(db)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug", func(w http.ResponseWriter, r *http.Request) {
+		events, _ := db.(badger.DB)
 		for _, e := range events {
-			meter.DumpKeys(e.DB, w)
+			badger.DumpKeys(e.DB, w)
 			return
 		}
 	})

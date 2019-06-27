@@ -1,4 +1,4 @@
-package meter_test
+package badgerdb_test
 
 import (
 	"context"
@@ -9,7 +9,8 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
-	badger "github.com/dgraph-io/badger/v2"
+	bdb "github.com/alxarch/go-meter/v2/db/badger"
+	"github.com/dgraph-io/badger/v2"
 )
 
 func TestBadgerEvents(t *testing.T) {
@@ -26,7 +27,7 @@ func TestBadgerEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal("Failed to open badger", err)
 	}
-	events, err := meter.Open(db, "test")
+	events, err := bdb.Open(db, "test")
 	if err != nil {
 		t.Fatal("Failed to open badger store", err)
 	}
