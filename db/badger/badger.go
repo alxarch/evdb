@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"sort"
 	"sync"
 	"time"
@@ -19,43 +17,43 @@ import (
 // DB is a collection of Events stored in BadgerDB
 type DB map[string]*eventDB
 
-type badgerOpener struct{}
+// type badgerOpener struct{}
 
-func (_ badgerOpener) Open(configURL string, events ...string) (meter.DB, error) {
-	options, err := ParseConfigURL(configURL)
-	if err != nil {
-		return nil, err
-	}
-	db, err := badger.Open(options)
-	if err != nil {
-		return nil, err
-	}
-	return Open(db, events...)
-}
+// func (_ badgerOpener) Open(configURL string, events ...string) (meter.DB, error) {
+// 	options, err := ParseConfigURL(configURL)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	db, err := badger.Open(options)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	return Open(db, events...)
+// }
 
-const urlScheme = "badger"
+// const urlScheme = "badger"
 
-func init() {
-	meter.Register(urlScheme, badgerOpener{})
-}
+// func init() {
+// 	meter.Register(urlScheme, badgerOpener{})
+// }
 
-func ParseConfigURL(configURL string) (badger.Options, error) {
-	options := badger.DefaultOptions
-	c, err := url.Parse(configURL)
-	if err != nil {
-		return options, err
-	}
-	if c.Scheme != urlScheme {
-		return options, errors.New(`Invalid scheme`)
-	}
-	if c.Host != "" {
-		return options, errors.New(`Invalid host`)
-	}
-	options.Dir = c.Path
-	options.ValueDir = c.Path
-	return options, nil
+// func ParseConfigURL(configURL string) (badger.Options, error) {
+// 	options := badger.DefaultOptions
+// 	c, err := url.Parse(configURL)
+// 	if err != nil {
+// 		return options, err
+// 	}
+// 	if c.Scheme != urlScheme {
+// 		return options, errors.New(`Invalid scheme`)
+// 	}
+// 	if c.Host != "" {
+// 		return options, errors.New(`Invalid host`)
+// 	}
+// 	options.Dir = c.Path
+// 	options.ValueDir = c.Path
+// 	return options, nil
 
-}
+// }
 
 // Open opens a new Event collection stored in BadgerDB
 func Open(db *badger.DB, events ...string) (DB, error) {

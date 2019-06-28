@@ -108,6 +108,31 @@ type TimeRange struct {
 	Step  time.Duration `json:"step"`
 }
 
+func (tr *TimeRange) Truncate(tm time.Time) time.Time {
+	if tr.Step > 0 {
+		return tm.Truncate(tr.Step).In(tm.Location())
+	}
+	if tr.Step == 0 {
+		return time.Time{}
+	}
+	return tm
+}
+
+func (tr *TimeRange) Sequence() []time.Time {
+	if tr.Step <= 0 {
+		return nil
+	}
+
+	start := tr.Truncate(tr.Start)
+	end := tr.Truncate(tr.End)
+	n := end.Sub(start) / tr.Step
+	seq := make([]time.Time, 0, n)
+	for s := start; end.Sub(s) >= 0; s = s.Add(tr.Step) {
+		seq = append(seq, s)
+	}
+	return seq
+}
+
 // QueryRunner runs queries
 type Querier interface {
 	Query(ctx context.Context, q *Query, events ...string) (Results, error)

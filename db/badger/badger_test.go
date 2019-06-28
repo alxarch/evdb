@@ -32,7 +32,7 @@ func TestBadgerEvents(t *testing.T) {
 		t.Fatal("Failed to open badger store", err)
 	}
 	tm := time.Date(2019, time.May, 15, 13, 14, 0, 0, time.UTC)
-	req := meter.StoreRequest{
+	req := meter.Snapshot{
 		Event: "test",
 		Time:  tm,
 		Labels: []string{
@@ -40,7 +40,7 @@ func TestBadgerEvents(t *testing.T) {
 			"host",
 			"method",
 		},
-		Counters: meter.Snapshot{
+		Counters: []meter.Counter{
 			{
 				Values: []string{"USA", "www.example.org", "GET"},
 				Count:  12,
@@ -62,7 +62,7 @@ func TestBadgerEvents(t *testing.T) {
 	if err := events.Store(&req); err != nil {
 		t.Fatal("Failed to store counters", err)
 	}
-	qr := meter.ScanQueryRunner(events)
+	qr := meter.ScanQuerier(events)
 	ctx := context.Background()
 	q := meter.Query{
 		TimeRange: meter.TimeRange{
@@ -74,7 +74,7 @@ func TestBadgerEvents(t *testing.T) {
 			{Label: "country", Value: "USA"},
 		},
 	}
-	results, err := qr.RunQuery(ctx, &q, "test")
+	results, err := qr.Query(ctx, &q, "test")
 	if err != nil {
 		t.Fatal("Query failed", err)
 	}

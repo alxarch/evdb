@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-// StoreRequest is a request to store a snapshot of an Event
+// Snapshot is a snaphot of event counters
 type Snapshot struct {
 	Event    string       `json:"event"`
 	Time     time.Time    `json:"time,omitempty"`
@@ -22,7 +22,7 @@ type Snapshot struct {
 	Counters CounterSlice `json:"counters"`
 }
 
-// EventStore stores events
+// Storer stores events
 type Storer interface {
 	Store(s *Snapshot) error
 }
@@ -253,4 +253,53 @@ func (e *Event) SyncTask(db Storer) func(time.Time) error {
 		return nil
 
 	}
+}
+
+// TeeStore stores to multiple stores
+func TeeStore(stores ...Storer) Storer {
+	return teeStorer(stores)
+}
+
+type teeStorer []Storer
+
+func (tee teeStorer) Store(s *Snapshot) error {
+	if len(tee) == 0 {
+		return nil
+	}
+	errc := make(chan error, len(tee))
+	wg := new(sync.WaitGroup)
+	wg.Add(len(tee))
+	for i := range tee {
+		db := tee[i]
+		go func() {
+			errc <- db.Store(s)
+		}()
+	}
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EventStore multiplexes stores for multiple events
+type EventStore map[string]Storer
+
+// Add adds a store for events
+func (m EventStore) Add(db Storer, events ...string) {
+	for _, event := range events {
+		m[event] = db
+	}
+}
+
+// Store implements storer interface
+func (m EventStore) Store(s *Snapshot) error {
+	db := m[s.Event]
+	if db == nil {
+		return errors.New("Unknown event")
+	}
+	return db.Store(s)
 }
