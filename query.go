@@ -2,10 +2,6 @@ package meter
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"io/ioutil"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -135,88 +131,5 @@ func (tr *TimeRange) Sequence() []time.Time {
 
 // QueryRunner runs queries
 type Querier interface {
-	Query(ctx context.Context, q *Query, events ...string) (Results, error)
-}
-
-// QueryHandler returns an HTTP endpoint for a QueryRunner
-func QueryHandler(qr Querier) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		values := r.URL.Query()
-		events := values["event"]
-		q := Query{}
-		q.SetValues(values)
-		if q.Start.IsZero() {
-			q.Start = time.Unix(0, 0)
-		}
-		if q.End.IsZero() {
-			q.End = time.Now()
-		}
-		typ := ResultTypeFromString(values.Get("results"))
-		if typ == TotalsResult {
-			q.Step = -1
-		}
-		ctx := r.Context()
-		results, err := qr.Query(ctx, &q, events...)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		var x interface{}
-		switch typ {
-		case TotalsResult:
-			x = results.Totals()
-		case FieldSummaryResult:
-			x = results.FieldSummaries()
-		case EventSummaryResult:
-			x = results.EventSummaries(q.EmptyValue)
-		default:
-			x = results
-		}
-		enc := json.NewEncoder(w)
-		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(x)
-	}
-}
-
-// HTTPQueryRunner runs queries over http
-type HTTPQueryRunner struct {
-	URL    string
-	Client *http.Client
-}
-
-// RunQuery implements QueryRunner interface
-func (qr *HTTPQueryRunner) RunQuery(ctx context.Context, q *Query, events ...string) (Results, error) {
-	u, err := q.URL(qr.URL, events...)
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	if ctx != nil {
-		req = req.WithContext(ctx)
-	}
-	c := qr.Client
-	if c == nil {
-		c = http.DefaultClient
-	}
-	res, err := c.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return nil, errors.New(`Invalid response status`)
-	}
-	data, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		return nil, err
-	}
-	var results Results
-	if err := json.Unmarshal(data, &results); err != nil {
-		return nil, err
-	}
-	return results, nil
-
+	Query(ctx context.Context, q Query, events ...string) (Results, error)
 }

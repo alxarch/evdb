@@ -28,12 +28,8 @@ type ScanItem struct {
 type Scanners interface {
 	Scanner(event string) Scanner
 }
-type scanners struct {
-	Scanners
-}
 
-// RunQuery implements QueryRunner interface
-func (s scanners) Query(ctx context.Context, q *Query, events ...string) (Results, error) {
+func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results, error) {
 	errc := make(chan error, len(events))
 	ch := make(chan Results, len(events))
 	wg := new(sync.WaitGroup)
@@ -77,11 +73,7 @@ func (s scanners) Query(ctx context.Context, q *Query, events ...string) (Result
 		results = append(results, r...)
 	}
 	return results, nil
-}
 
-// ScanQueryRunner creates a QueryRunner from a Scanners instance
-func ScanQuerier(s Scanners) Querier {
-	return scanners{s}
 }
 
 func NewScanIterator(ctx context.Context, items <-chan ScanItem, errors <-chan error) ScanIterator {

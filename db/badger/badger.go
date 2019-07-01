@@ -1,7 +1,6 @@
 package badgerdb
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -15,95 +14,57 @@ import (
 )
 
 // DB is a collection of Events stored in BadgerDB
-type DB map[string]*eventDB
-
-// type badgerOpener struct{}
-
-// func (_ badgerOpener) Open(configURL string, events ...string) (meter.DB, error) {
-// 	options, err := ParseConfigURL(configURL)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	db, err := badger.Open(options)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return Open(db, events...)
-// }
-
-// const urlScheme = "badger"
-
-// func init() {
-// 	meter.Register(urlScheme, badgerOpener{})
-// }
-
-// func ParseConfigURL(configURL string) (badger.Options, error) {
-// 	options := badger.DefaultOptions
-// 	c, err := url.Parse(configURL)
-// 	if err != nil {
-// 		return options, err
-// 	}
-// 	if c.Scheme != urlScheme {
-// 		return options, errors.New(`Invalid scheme`)
-// 	}
-// 	if c.Host != "" {
-// 		return options, errors.New(`Invalid host`)
-// 	}
-// 	options.Dir = c.Path
-// 	options.ValueDir = c.Path
-// 	return options, nil
-
-// }
+type DB struct {
+	badger *badger.DB
+	events map[string]*eventDB
+}
 
 // Open opens a new Event collection stored in BadgerDB
-func Open(db *badger.DB, events ...string) (DB, error) {
-	eventIDs, err := loadEventIDs(db, events...)
+func Open(b *badger.DB, events ...string) (*DB, error) {
+	eventIDs, err := loadEventIDs(b, events...)
 	if err != nil {
 		return nil, err
 	}
-	store := make(map[string]*eventDB, len(events))
+	db := DB{
+		badger: b,
+		events: make(map[string]*eventDB, len(events)),
+	}
 
 	for i, event := range events {
 		id := eventIDs[i]
-		store[event] = &eventDB{
-			DB: db,
-			id: eventID(id),
+		db.events[event] = &eventDB{
+			badger: b,
+			id:     eventID(id),
 		}
 	}
 
-	return store, nil
+	return &db, nil
 }
 
-// Store implements Store interface
-func (store DB) Store(s *meter.Snapshot) error {
-	e := store[s.Event]
-	if e == nil {
-		return errMissingEvent(s.Event)
+// Storer implements Storerer interface
+func (db *DB) Storer(event string) meter.Storer {
+	if e, ok := db.events[event]; ok {
+		return e
 	}
-	return e.store(s.Time.Unix(), s.Labels, s.Counters)
+	return nil
 }
 
 // Scanner implements Scanners interface
-func (store DB) Scanner(event string) meter.Scanner {
-	if s, ok := store[event]; ok {
+func (db DB) Scanner(event string) meter.Scanner {
+	if s, ok := db.events[event]; ok {
 		return s
 	}
 	return nil
 }
-func (store DB) Query(ctx context.Context, q *meter.Query, events ...string) (meter.Results, error) {
-	return meter.ScanQuerier(store).Query(ctx, q, events...)
-}
-func (store DB) Close() error {
-	for _, db := range store {
-		return db.DB.Close()
-	}
-	return nil
+
+// Query implements meter.Querier interface
+func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
+	return q.Scan(ctx, db, events...)
 }
 
-type eventDB struct {
-	*badger.DB
-	id     eventID
-	fields FieldCache
+// Close implements meter.DB interface
+func (db *DB) Close() error {
+	return db.badger.Close()
 }
 
 const (
@@ -164,117 +125,9 @@ func seekValue(iter *badger.Iterator, event eventID, id uint64) {
 	iter.Seek(key[:])
 }
 
-func (b *eventDB) Labels() ([]string, error) {
-	return b.fields.Labels(), nil
-}
-
-func (b *eventDB) store(ts int64, labels []string, counters meter.CounterSlice) (err error) {
-	var (
-		cache   = &b.fields
-		index   = newLabelIndex(labels...)
-		scratch [16]byte
-		value   = getBuffer()[:0]
-		buf     = getBuffer()[:0]
-	)
-	for i := range counters {
-		c := &counters[i]
-		buf = index.WriteFields(buf[:0], c.Values)
-		id, ok := cache.RawID(buf)
-		if !ok {
-			id, err = b.loadID(buf)
-			if err != nil {
-				putBuffer(value)
-				putBuffer(buf)
-				return
-			}
-			cache.SetRaw(id, buf)
-		}
-		binary.BigEndian.PutUint64(scratch[:], id)
-		binary.BigEndian.PutUint64(scratch[8:], uint64(c.Count))
-		value = append(value, scratch[:]...)
-	}
-	key := eventKey(b.id, ts)
-
-retry:
-	if err = store(b.DB, key[:], value); err == badger.ErrConflict {
-		goto retry
-	}
-	putBuffer(value)
-	putBuffer(buf)
-	return nil
-}
-
-func (b *eventDB) loadID(data []byte) (id uint64, err error) {
-	h := hashFNVa32(data)
-	id = uint64(h) << 32 // Shift 0000xxxx to xxxx0000
-	update := func(txn *badger.Txn) error {
-		seek := valueKey(b.id, id)
-		// prefix := seek[:12] // 4 byte prefix + 4 bytes reserved + 4/8 bytes of fnv hash
-		n := uint32(0)
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iter.Close()
-		iter.Seek(seek[:])
-		for ; iter.Valid(); iter.Next() {
-			item := iter.Item()
-			vid, ok := parseValueKey(b.id, item.Key())
-			if !ok {
-				break
-			}
-			err := item.Value(func(value []byte) error {
-				if bytes.Equal(value, data) {
-					id = vid
-				}
-				return nil
-			})
-			if err != nil {
-				return err
-			}
-			if id == vid {
-				return nil
-			}
-			n++
-		}
-		id = uint64(h)<<32 | uint64(n)
-		key := valueKey(b.id, id)
-		// Need to make a copy of data
-		val := make([]byte, len(data))
-		copy(val, data)
-		return txn.Set(key[:], val)
-	}
-
-	const maxRetries = 5
-	for i := 0; i < maxRetries; i++ {
-		if err = b.DB.Update(update); err != badger.ErrConflict {
-			return
-		}
-	}
-	return
-}
-
-func store(db *badger.DB, key, value []byte) error {
-	txn := db.NewTransaction(true)
-	defer txn.Discard()
-	item, err := txn.Get(key)
-	switch err {
-	case badger.ErrKeyNotFound:
-	case nil:
-		// ValueCopy appends to b[:0] so it's no good
-		item.Value(func(v []byte) error {
-			value = append(value, v...)
-			return nil
-		})
-	default:
-		return err
-	}
-	if err := txn.Set(key, value); err != nil {
-		return err
-	}
-	return txn.Commit()
-}
-
 // DumpKeys dumps keys from a badger.DB to a writer
-func DumpKeys(db *badger.DB, w io.Writer) error {
-	return db.View(func(txn *badger.Txn) error {
+func (db *DB) DumpKeys(w io.Writer) error {
+	return db.badger.View(func(txn *badger.Txn) error {
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 		var k keyBuffer
@@ -305,309 +158,6 @@ type errMissingEvent string
 
 func (event errMissingEvent) Error() string {
 	return fmt.Sprintf("Missing event %q", string(event))
-}
-
-func (b *eventDB) Fields(id uint64) (meter.Fields, error) {
-	fields := b.fields.Fields(id)
-	if fields != nil {
-		return fields, nil
-	}
-	txn := b.NewTransaction(false)
-	defer txn.Discard()
-	key := valueKey(b.id, id)
-	item, err := txn.Get(key[:])
-	if err != nil {
-		return nil, err
-	}
-	if err := item.Value(fields.UnmarshalBinary); err != nil {
-		return nil, err
-	}
-	b.fields.Set(id, fields)
-	return fields, nil
-}
-
-func (b *eventDB) query(ctx context.Context, q *meter.Query, items chan<- meter.ScanItem) error {
-	var (
-		queryFields = make(map[uint64]meter.Fields, 16)
-		match       = q.Match.Sorted()
-		done        = ctx.Done()
-		minT, maxT  = q.Start.Unix(), q.End.Unix()
-		resolve     = func(id uint64) (meter.Fields, error) {
-			fields, ok := queryFields[id]
-			if ok {
-				return fields, nil
-			}
-			fields, err := b.Fields(id)
-			if err != nil {
-				if err != badger.ErrKeyNotFound {
-					return nil, err
-				}
-				fields = nil
-			} else if fields.MatchSorted(match) {
-				if len(q.Group) > 0 {
-					fields = fields.GroupBy(q.EmptyValue, q.Group)
-				}
-			} else {
-				fields = nil
-			}
-			queryFields[id] = fields
-			return fields, nil
-		}
-		batch     []meter.ScanItem
-		scanValue = func(value []byte) error {
-			var id, n uint64
-			for len(value) >= 16 {
-				id, n, value = binary.BigEndian.Uint64(value), binary.BigEndian.Uint64(value[8:]), value[16:]
-				fields, err := resolve(id)
-				if err != nil {
-					return err
-				}
-				if fields == nil {
-					continue
-				}
-				batch = append(batch, meter.ScanItem{
-					Fields: fields,
-					Count:  int64(n),
-				})
-			}
-			return nil
-		}
-	)
-
-	txn := b.DB.NewTransaction(false)
-	defer txn.Discard()
-	iter := txn.NewIterator(badger.DefaultIteratorOptions)
-	defer iter.Close()
-	seekEvent(iter, b.id, q.Start)
-	for ; iter.Valid(); iter.Next() {
-		item := iter.Item()
-		key := item.Key()
-		ts, ok := parseEventKey(b.id, key)
-		if ok && minT <= ts && ts < maxT {
-			batch = batch[:0]
-			err := item.Value(scanValue)
-			if err != nil {
-				return err
-			}
-			if len(batch) == 0 {
-				continue
-			}
-			for _, item := range batch {
-				item.Time = ts
-				select {
-				case items <- item:
-				case <-done:
-					return nil
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func (b *eventDB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
-	if b == nil {
-		return meter.EmptyScanIterator{}
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	items := make(chan meter.ScanItem)
-	errc := make(chan error, 1)
-	go func() {
-		defer close(errc)
-		defer close(items)
-		errc <- b.query(ctx, q, items)
-	}()
-	return meter.NewScanIterator(ctx, items, errc)
-}
-
-// Compaction merges event snapshot compacting data to hourly batches
-func (store DB) Compaction(now time.Time) error {
-	var (
-		wg   sync.WaitGroup
-		errc = make(chan error, len(store))
-		gc   *badger.DB
-	)
-	wg.Add(len(store))
-	for event := range store {
-		b := store[event]
-		db := b.DB
-		if gc == nil {
-			gc = db
-		}
-		go func() {
-			defer wg.Done()
-			errc <- compactionScan(db, b.id, now)
-		}()
-	}
-	wg.Wait()
-	close(errc)
-	for err := range errc {
-		if err != nil {
-			return err
-		}
-	}
-	if gc == nil {
-		return nil
-	}
-	return gc.RunValueLogGC(0.5)
-}
-
-type compactionEntry struct {
-	id uint64
-	n  int64
-}
-
-type compactionBuffer []compactionEntry
-
-func (cc compactionBuffer) Len() int {
-	return len(cc)
-}
-func (cc compactionBuffer) Swap(i, j int) {
-	cc[i], cc[j] = cc[j], cc[i]
-}
-
-func (cc compactionBuffer) Less(i, j int) bool {
-	return cc[i].id < cc[j].id
-}
-
-func (cc compactionBuffer) Read(value []byte) compactionBuffer {
-	for tail := value; len(tail) >= 16; tail = tail[16:] {
-		id := binary.BigEndian.Uint64(tail)
-		n := int64(binary.BigEndian.Uint64(tail[8:]))
-		cc = append(cc, compactionEntry{id, n})
-	}
-	return cc
-}
-
-var compactionBuffers sync.Pool
-
-func getCompactionBuffer() compactionBuffer {
-	if x := compactionBuffers.Get(); x != nil {
-		return x.(compactionBuffer)
-	}
-	return make([]compactionEntry, 0, 64)
-}
-
-func putCompactionBuffer(cc compactionBuffer) {
-	compactionBuffers.Put(cc[:0])
-}
-
-func (cc compactionBuffer) Compact() compactionBuffer {
-	sort.Sort(cc)
-	var last *compactionEntry
-	j := 0
-	for i := range cc {
-		c := &cc[i]
-		if last != nil && last.id == c.id {
-			last.n += c.n
-			continue
-		}
-		last = c
-		cc[j] = *c
-		j++
-	}
-	return cc[:j]
-}
-
-func (cc compactionBuffer) Reset() compactionBuffer {
-	return cc[:0]
-}
-func (cc compactionBuffer) ToBlob(s meter.Blob) (meter.Blob, error) {
-	for i := range cc {
-		c := &cc[i]
-		s = s.WriteU64BE(c.id)
-		s = s.WriteU64BE(uint64(c.n))
-	}
-	return s, nil
-}
-
-func compactionScan(db *badger.DB, id eventID, now time.Time) error {
-	txn := db.NewTransaction(false)
-	defer txn.Discard()
-	iter := txn.NewIterator(badger.IteratorOptions{})
-	defer iter.Close()
-	seekEvent(iter, id, time.Time{})
-	if !iter.Valid() {
-		return nil
-	}
-	key := iter.Item().Key()
-	ts, ok := parseEventKey(id, key)
-	const step = int64(time.Hour)
-	q := meter.Query{}
-	q.Step = time.Duration(step)
-	ts = q.TruncateTimestamp(ts)
-	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
-	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
-		for ; iter.Valid(); iter.Next() {
-			key = iter.Item().Key()
-			ts, ok = parseEventKey(id, key)
-			if ok && start < ts && ts < end {
-				n++
-			} else if start == ts {
-				continue
-			} else {
-				break
-			}
-		}
-		if n > 0 {
-			err := compactionTask(db, id, start, end)
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-
-}
-
-func compactionTask(db *badger.DB, id eventID, start, end int64) error {
-	txn := db.NewTransaction(true)
-	defer txn.Discard()
-	opt := badger.DefaultIteratorOptions
-	iter := txn.NewIterator(opt)
-	defer iter.Close()
-	seek := eventKey(id, start)
-	cc := getCompactionBuffer()
-	defer putCompactionBuffer(cc)
-
-	for iter.Seek(seek[:]); iter.Valid(); iter.Next() {
-		item := iter.Item()
-		key := item.Key()
-		ts, ok := parseEventKey(id, key)
-		if !ok || ts >= end {
-			break
-		}
-		err := item.Value(func(v []byte) error {
-			cc = cc.Read(v)
-			return nil
-
-		})
-		if err != nil {
-			return err
-		}
-		if ts > start {
-			if err := txn.Delete(key); err != nil {
-				return err
-			}
-		}
-		if ts < start {
-			panic("Invalid seek")
-		}
-	}
-	cc = cc.Compact()
-	if len(cc) > 0 {
-		value := getBuffer()
-		value, _ = cc.ToBlob(value[:0])
-		defer putBuffer(value)
-		if err := txn.Set(seek[:], value); err != nil {
-			return err
-		}
-		return txn.Commit()
-	}
-	return nil
-
 }
 
 func loadEvents(txn *badger.Txn) ([]string, error) {
@@ -798,3 +348,23 @@ func (index labelIndex) WriteFields(dst meter.Blob, values []string) meter.Blob 
 }
 
 var _ meter.DB = (*DB)(nil)
+
+type badgerOpener struct{}
+
+func (_ badgerOpener) Open(configURL string) (meter.DB, error) {
+	options, events, err := parseURL(configURL)
+	if err != nil {
+		return nil, err
+	}
+	db, err := badger.Open(options)
+	if err != nil {
+		return nil, err
+	}
+	return Open(db, events...)
+}
+
+const urlScheme = "badger"
+
+func init() {
+	meter.Register(urlScheme, badgerOpener{})
+}

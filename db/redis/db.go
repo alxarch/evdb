@@ -2,6 +2,7 @@ package redisdb
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,11 +14,45 @@ import (
 )
 
 type DB struct {
-	Event      string
-	Redis      redis.UniversalClient
-	KeyPrefix  string
-	ScanSize   int64
-	Resolution Resolution
+	redis       redis.UniversalClient
+	keyPrefix   string
+	scanSize    int64
+	mu          sync.RWMutex
+	events      map[string]meter.Storer
+	resolutions map[time.Duration]Resolution
+}
+
+var _ meter.DB = (*DB)(nil)
+
+func (db *DB) Storer(event string) meter.Storer {
+	if e, ok := db.events[event]; ok {
+		return e
+	}
+	return nil
+}
+
+type storer struct {
+	db    *DB
+	event string
+	res   Resolution
+}
+
+func (db *DB) AddEvent(event string) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if db.events == nil {
+		db.events = make(map[string]meter.Storer)
+	}
+	storers := make([]meter.Storer, 0, len(db.resolutions))
+	for _, res := range db.resolutions {
+		storers = append(storers, &storer{
+			db:    db,
+			event: event,
+			res:   res,
+		})
+
+	}
+	db.events[event] = meter.TeeStore(storers...)
 }
 
 const (
@@ -28,69 +63,112 @@ const (
 	defaultKeyPrefix      = "meter"
 )
 
-type Event struct {
-	Name        string
-	Resolutions []Resolution
-}
-
-func E(name string, resolutions ...Resolution) Event {
-	return Event{Name: name, Resolutions: resolutions}
-}
-
-func EventStore(rc redis.UniversalClient, scanSize int, keyPrefix string, events ...Event) meter.EventStore {
-	type dbKey struct {
-		Name       string
-		Resolution string
-	}
-	dbs := make(map[dbKey]*DB)
-	stores := make(map[string]meter.Storer, len(events))
-	for i := range events {
-		e := &events[i]
-		tee := []meter.Storer{}
-		for _, r := range e.Resolutions {
-			key := dbKey{e.Name, r.Name()}
-			db := dbs[key]
-			if db == nil {
-				db = &DB{
-					Redis:      rc,
-					Event:      e.Name,
-					ScanSize:   int64(scanSize),
-					KeyPrefix:  keyPrefix,
-					Resolution: r,
-				}
-				dbs[key] = db
-			}
-			tee = append(tee, db)
+func Resolutions(resolutions ...Resolution) (map[time.Duration]Resolution, error) {
+	m := make(map[time.Duration]Resolution, len(resolutions))
+	for _, res := range resolutions {
+		step := res.Step()
+		if _, duplicate := m[step]; duplicate {
+			return nil, fmt.Errorf(`Duplicate resolution %s`, step)
 		}
-		stores[e.Name] = meter.TeeStore(tee...)
+		m[step] = res
 	}
-	return stores
+	return m, nil
+}
+
+func NewDB(rc redis.UniversalClient, scanSize int, keyPrefix string, resolutions ...Resolution) (*DB, error) {
+	byDuration, err := Resolutions(resolutions...)
+	if err != nil {
+		return nil, err
+	}
+	if scanSize <= 0 {
+		scanSize = defaultScanSize
+	}
+	db := DB{
+		redis:       rc,
+		scanSize:    int64(scanSize),
+		keyPrefix:   keyPrefix,
+		events:      make(map[string]meter.Storer),
+		resolutions: byDuration,
+	}
+	return &db, nil
 }
 
 func (db *DB) Close() error {
-	return db.Redis.Close()
-}
-func (db *DB) Scanner(event string) meter.Scanner {
-	if event == db.Event {
-		return db
-	}
-	return nil
-}
-func (db *DB) Query(ctx context.Context, q *meter.Query, events ...string) (meter.Results, error) {
-	return meter.ScanQuerier(db).Query(ctx, q, events...)
+	return db.redis.Close()
 }
 
-func (db *DB) Store(s *meter.Snapshot) error {
+type scanResult struct {
+	Time   int64
+	Count  int64
+	Fields meter.Fields
+	Event  string
+}
+
+func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
+	res, ok := db.resolutions[q.Step]
+	if !ok {
+		return nil, fmt.Errorf("Invalid query step %s", q.Step)
+	}
+	ch := make(chan scanResult)
+	errc := make(chan error, len(events))
+	done := ctx.Done()
+	ts := q.Sequence()
+	wg := new(sync.WaitGroup)
+	results := meter.Results(make([]meter.Result, 0, len(events)))
+	for i := range events {
+		event := events[i]
+		if _, ok := db.events[event]; !ok {
+			continue
+		}
+		s := storer{
+			event: events[i],
+			res:   res,
+			db:    db,
+		}
+		go func() {
+			defer wg.Done()
+			for _, tm := range ts {
+				select {
+				case errc <- s.scan(tm, &q, ch, done):
+				case <-done:
+					return
+				}
+			}
+		}()
+
+	}
+	go func() {
+		defer close(errc)
+		for {
+			select {
+			case r := <-ch:
+				results = results.Add(r.Event, r.Fields, float64(r.Count), r.Time)
+			case <-done:
+				return
+			}
+		}
+	}()
+	wg.Wait()
+	close(ch)
+	for err := range errc {
+		if err != nil {
+			return nil, err
+		}
+	}
+	return results, nil
+}
+
+func (db *storer) Store(s *meter.Snapshot) error {
 	if len(s.Counters) == 0 {
 		return nil
 	}
 	labels := s.Labels
 	sort.Strings(labels)
-	pipeline := db.Redis.Pipeline()
+	pipeline := db.db.redis.Pipeline()
 	defer pipeline.Close()
 	var buf []byte
-	r := db.Resolution
-	key := db.Key(s.Event, s.Time)
+	r := db.res
+	key := db.Key(s.Time)
 	pipeline.Expire(key, r.TTL())
 	for j := range s.Counters {
 		c := &s.Counters[j]
@@ -101,38 +179,30 @@ func (db *DB) Store(s *meter.Snapshot) error {
 	_, err := pipeline.Exec()
 	return err
 }
-func (db *DB) appendKey(data []byte, tm time.Time) []byte {
-	if db.KeyPrefix != "" {
-		data = append(data, db.KeyPrefix...)
+
+func (s *storer) appendKey(data []byte, tm time.Time) []byte {
+	if s.db.keyPrefix != "" {
+		data = append(data, s.db.keyPrefix...)
 		data = append(data, labelSeparator)
 	}
-	r := db.Resolution
-	data = append(data, r.Name()...)
+	data = append(data, s.res.Name()...)
 	data = append(data, labelSeparator)
-	data = append(data, r.MarshalTime(tm)...)
+	data = append(data, s.res.MarshalTime(tm)...)
 	data = append(data, labelSeparator)
-	data = append(data, db.Event...)
+	data = append(data, s.event...)
 	return data
 }
 
-func (db *DB) Key(event string, tm time.Time) string {
-	return string(db.appendKey(nil, tm))
+func (s *storer) Key(tm time.Time) string {
+	return string(s.appendKey(nil, tm))
 }
 
 const defaultScanSize = 1000
 
-func (db *DB) scanSize() int64 {
-	size := int64(db.ScanSize)
-	if size > 0 {
-		return size
-	}
-	return defaultScanSize
-}
-
-func (db *DB) scan(tm time.Time, q *meter.Query, items chan<- meter.ScanItem, done <-chan struct{}) error {
-	key := db.Key(db.Event, tm)
+func (s *storer) scan(tm time.Time, q *meter.Query, items chan<- scanResult, done <-chan struct{}) error {
+	key := s.Key(tm)
 	ts := tm.Unix()
-	scan := db.Redis.HScan(key, 0, "*", db.scanSize()).Iterator()
+	scan := s.db.redis.HScan(key, 0, "*", s.db.scanSize).Iterator()
 	i := 0
 	var fields, grouped meter.Fields
 	match := q.Match.Sorted()
@@ -145,10 +215,15 @@ func (db *DB) scan(tm time.Time, q *meter.Query, items chan<- meter.ScanItem, do
 			if err != nil {
 				return err
 			}
-			grouped = fields.Copy().GroupBy(q.EmptyValue, q.Group)
+			if len(q.Group) > 0 {
+				grouped = fields.GroupBy(q.EmptyValue, q.Group)
+			} else {
+				grouped = fields.Copy()
+			}
 			select {
-			case items <- meter.ScanItem{
+			case items <- scanResult{
 				Time:   ts,
+				Event:  s.event,
 				Fields: grouped,
 				Count:  n,
 			}:
@@ -161,33 +236,33 @@ func (db *DB) scan(tm time.Time, q *meter.Query, items chan<- meter.ScanItem, do
 	return scan.Err()
 }
 
-func (db *DB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
-	items := make(chan meter.ScanItem)
-	errc := make(chan error)
-	go func() {
-		defer close(items)
-		defer close(errc)
-		// TODO: [redis] Handle q.Step <= 0 to Scan for keys before HSCAN
-		ts := q.Sequence()
-		wg := new(sync.WaitGroup)
-		done := ctx.Done()
-		for _, tm := range ts {
-			wg.Add(1)
-			tm := tm
-			go func() {
-				defer wg.Done()
-				select {
-				case errc <- db.scan(tm, q, items, done):
-				case <-done:
-				}
-			}()
+// func (db *DB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
+// 	items := make(chan meter.ScanItem)
+// 	errc := make(chan error)
+// 	go func() {
+// 		defer close(items)
+// 		defer close(errc)
+// 		// TODO: [redis] Handle q.Step <= 0 to Scan for keys before HSCAN
+// 		ts := q.Sequence()
+// 		wg := new(sync.WaitGroup)
+// 		done := ctx.Done()
+// 		for _, tm := range ts {
+// 			wg.Add(1)
+// 			tm := tm
+// 			go func() {
+// 				defer wg.Done()
+// 				select {
+// 				case errc <- db.scan(tm, q, items, done):
+// 				case <-done:
+// 				}
+// 			}()
 
-		}
-		wg.Wait()
-	}()
+// 		}
+// 		wg.Wait()
+// 	}()
 
-	return meter.NewScanIterator(ctx, items, errc)
-}
+// 	return meter.NewScanIterator(ctx, items, errc)
+// }
 
 func parseFields(fields meter.Fields, s string) meter.Fields {
 	pos := strings.IndexByte(s, fieldTerminator)

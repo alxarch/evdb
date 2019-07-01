@@ -1,6 +1,12 @@
 package badgerdb
 
-import "sync"
+import (
+	"errors"
+	"net/url"
+	"sync"
+
+	"github.com/dgraph-io/badger/v2"
+)
 
 const (
 	offset32 = 2166136261
@@ -62,4 +68,32 @@ func getBuffer() []byte {
 
 func putBuffer(buf []byte) {
 	buffers.Put(buf)
+}
+
+func parseURL(optionsURL string) (badger.Options, []string, error) {
+	u, err := url.Parse(optionsURL)
+	if err != nil {
+		return badger.Options{}, nil, err
+	}
+	if u.Scheme != "badger" {
+		return badger.Options{}, nil, errors.New(`Invalid scheme`)
+	}
+	options := badger.DefaultOptions
+	// options.Logger = nil
+	options.Dir = u.Path
+	q := u.Query()
+	options.ValueDir = q.Get("ValueDir")
+	if options.ValueDir == "" {
+		options.ValueDir = options.Dir
+	}
+	_, ok := q["ReadOnly"]
+	if ok {
+		switch q.Get("ReadOnly") {
+		case "FALSE", "false", "off", "no", "0":
+		default:
+			options.ReadOnly = true
+		}
+	}
+
+	return options, q["event"], nil
 }
