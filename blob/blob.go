@@ -1,31 +1,32 @@
-package meter
+package blob
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
-type Blob []byte
-
-type FromBlober interface {
-	FromBlob(Blob) (Blob, error)
+type Shifter interface {
+	ShiftBlob(blob []byte) (tail []byte, err error)
 }
-type ToBlober interface {
-	ToBlob(Blob) (Blob, error)
+type Appender interface {
+	AppendBlob(blob []byte) ([]byte, error)
 }
 
-func (b Blob) WriteU32BE(n uint32) Blob {
+func WriteU32BE(b []byte, n uint32) []byte {
 	return append(b,
 		byte(n>>24),
 		byte(n>>16),
 		byte(n>>8),
 		byte(n))
 }
-func (b Blob) ReadU32BE() (uint32, Blob) {
+
+func ReadU32BE(b []byte) (uint32, []byte) {
 	if len(b) >= 4 {
 		return binary.BigEndian.Uint32(b), b[4:]
 	}
 	return 0, b
 }
 
-func (b Blob) WriteU64BE(n uint64) Blob {
+func WriteU64BE(b []byte, n uint64) []byte {
 	return append(b,
 		byte(n>>56),
 		byte(n>>48),
@@ -37,39 +38,39 @@ func (b Blob) WriteU64BE(n uint64) Blob {
 		byte(n))
 }
 
-func (b Blob) ReadU64BE() (uint64, Blob) {
+func ReadU64BE(b []byte) (uint64, []byte) {
 	if len(b) >= 8 {
 		return binary.BigEndian.Uint64(b), b[8:]
 	}
 	return 0, b
 }
 
-func (b Blob) WriteStrings(values []string) Blob {
-	b = b.WriteU32BE(uint32(len(values)))
+func WriteStrings(b []byte, values []string) []byte {
+	b = WriteU32BE(b, uint32(len(values)))
 	for _, v := range values {
-		b = b.WriteString(v)
+		b = WriteString(b, v)
 	}
 	return b
 }
 
-func (b Blob) ReadStrings() ([]string, Blob) {
+func ReadStrings(b []byte) ([]string, []byte) {
 	var n uint32
-	n, b = b.ReadU32BE()
+	n, b = ReadU32BE(b)
 	values := make([]string, 0, n)
 	for ; len(b) > 0 && n > 0; n-- {
 		var v string
-		v, b = b.ReadString()
+		v, b = ReadString(b)
 		values = append(values, v)
 	}
 	return values, b
 }
 
-func (b Blob) WriteString(v string) Blob {
-	b = b.WriteU32BE(uint32(len(v)))
+func WriteString(b []byte, v string) []byte {
+	b = WriteU32BE(b, uint32(len(v)))
 	return append(b, v...)
 }
 
-func (b Blob) ReadString() (string, []byte) {
+func ReadString(b []byte) (string, []byte) {
 	if len(b) > 4 {
 		var size uint32
 		size, b = binary.BigEndian.Uint32(b[:4]), b[4:]

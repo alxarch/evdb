@@ -11,9 +11,8 @@ import (
 func Test_MemoryStore(t *testing.T) {
 	m := new(meter.MemoryStore)
 	m.Event = "test"
-	r1 := meter.StoreRequest{
+	r1 := meter.Snapshot{
 		Time:   time.Now(),
-		Event:  "test",
 		Labels: []string{"color", "taste"},
 		Counters: []meter.Counter{
 			{
@@ -43,14 +42,12 @@ func Test_MemoryStore(t *testing.T) {
 			{Label: "color", Value: "blue"},
 		},
 	}
-	it := m.Scan(ctx, &q1)
-	var n int64
-	for it.Next() {
-		item := it.Item()
-		n += item.Count
+	results, err := m.Scan(ctx, &q1)
+	if err != nil {
+		t.Fatalf(`Unexpected error %s`, err)
 	}
-	if n != 13 {
-		t.Errorf("Invalid number of items %d", n)
+	if len(results) == 0 {
+		t.Errorf("Invalid number of items %d", len(results))
 	}
 
 }

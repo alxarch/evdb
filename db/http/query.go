@@ -6,6 +6,10 @@ import (
 	"errors"
 	"io/ioutil"
 	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
@@ -22,9 +26,38 @@ type Querier struct {
 	HTTPClient
 }
 
+func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
+	u, err := url.Parse(qr.URL)
+	if err != nil {
+		return "", err
+	}
+	values := url.Values(make(map[string][]string))
+	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
+	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
+	for _, label := range q.Group {
+		values.Add("group", label)
+	}
+	if q.Step != 0 {
+		values.Set("step", q.Step.String())
+	}
+	match := q.Match.Sorted()
+	for _, field := range match {
+		values.Add(`match.`+field.Label, field.Value)
+	}
+	if q.EmptyValue != "" {
+		values.Set("empty", q.EmptyValue)
+	}
+	for _, event := range events {
+		values.Add("event", event)
+	}
+	u.RawQuery = values.Encode()
+	return u.String(), nil
+
+}
+
 // Query implements Querier interface
 func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	u, err := q.URL(qr.URL, events...)
+	u, err := qr.queryURL(&q, events...)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +98,7 @@ func QueryHandler(qr meter.Querier) http.HandlerFunc {
 		values := r.URL.Query()
 		events := values["event"]
 		q := meter.Query{}
-		q.SetValues(values)
+		ParseQuery(&q, values)
 		if q.Start.IsZero() {
 			q.Start = time.Unix(0, 0)
 		}
@@ -97,4 +130,66 @@ func QueryHandler(qr meter.Querier) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		enc.Encode(x)
 	}
+}
+
+// ParseQuery sets query values from a URL query
+func ParseQuery(q *meter.Query, values url.Values) {
+	if step, ok := values["step"]; ok {
+		if len(step) > 0 {
+			q.Step, _ = time.ParseDuration(step[0])
+		} else {
+			q.Step = 0
+		}
+	} else {
+		q.Step = -1
+	}
+	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
+	if start > 0 {
+		q.Start = time.Unix(start, 0).In(time.UTC)
+	}
+	if end, _ := strconv.ParseInt(values.Get("end"), 10, 64); end > 0 {
+		q.End = time.Unix(end, 0).In(time.UTC)
+	}
+
+	match := q.Match[:0]
+	for key, values := range values {
+		if strings.HasPrefix(key, "match.") {
+			label := strings.TrimPrefix(key, "match.")
+			for _, value := range values {
+				match = append(match, meter.Field{
+					Label: label,
+					Value: value,
+				})
+			}
+		}
+	}
+	group, ok := values["group"]
+	if ok && len(group) == 0 {
+		group = make([]string, 0, len(match))
+		for i := range match {
+			m := &match[i]
+			group = appendDistinct(group, m.Label)
+		}
+	}
+	sort.Stable(match)
+	q.Match, q.Group = match, group
+	q.EmptyValue = values.Get("empty")
+}
+
+func indexOf(values []string, s string) int {
+	for i := 0; 0 <= i && i < len(values); i++ {
+		if values[i] == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func appendDistinct(dst []string, src ...string) []string {
+	for i, s := range src {
+		if indexOf(dst, s[:i]) == -1 {
+			dst = append(dst, s)
+		}
+	}
+	return dst
 }

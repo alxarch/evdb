@@ -3,6 +3,9 @@ package meter
 import (
 	"encoding/json"
 	"sort"
+	"sync"
+
+	"github.com/alxarch/go-meter/v2/blob"
 )
 
 // Field is a Label/Value pair
@@ -31,45 +34,6 @@ func (fields Fields) Get(label string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// ToBlob implements ToBlober interface
-func (fields Fields) ToBlob(s Blob) (Blob, error) {
-	s = s.WriteU32BE(uint32(len(fields)))
-	for i := range fields {
-		f := &fields[i]
-		s = s.WriteString(f.Label)
-		s = s.WriteString(f.Value)
-	}
-	return s, nil
-}
-
-// ShiftFrom deserializes Fields from binary data
-func (fields Fields) Read(b Blob) (Fields, Blob) {
-	n, b := b.ReadU32BE()
-	var label, value string
-	for ; len(b) > 0 && n > 0; n-- {
-		label, b = b.ReadString()
-		value, b = b.ReadString()
-		fields = append(fields, Field{Label: label, Value: value})
-	}
-	return fields, b
-}
-
-// UnmarshalBinary implements encoding.BinaryUnmarshaler interfacee
-func (fields *Fields) UnmarshalBinary(data []byte) error {
-	*fields, _ = (*fields).Read(Blob(data))
-	return nil
-}
-func (fields *Fields) FromBlob(s Blob) (Blob, error) {
-	*fields, s = (*fields).Read(s)
-	return s, nil
-}
-
-// MarshalBinary implements encoding.BinaryMarshaler interfacee
-func (fields Fields) MarshalBinary() ([]byte, error) {
-	s, _ := fields.ToBlob(nil)
-	return s, nil
 }
 
 // MarshalJSON implements json.Marshaler interface
@@ -228,4 +192,125 @@ next:
 	}
 	return len(match) == 0
 
+}
+
+// AppendBlob implements blob.Appender interface
+func (fields Fields) AppendBlob(b []byte) ([]byte, error) {
+	b = blob.WriteU32BE(b, uint32(len(fields)))
+	for i := range fields {
+		f := &fields[i]
+		b = blob.WriteString(b, f.Label)
+		b = blob.WriteString(b, f.Value)
+	}
+	return b, nil
+}
+
+// ShiftBlob implements blob.Shifter interface
+func (fields Fields) FromBlob(b []byte) (Fields, []byte) {
+	n, b := blob.ReadU32BE(b)
+	var label, value string
+	for ; len(b) > 0 && n > 0; n-- {
+		label, b = blob.ReadString(b)
+		value, b = blob.ReadString(b)
+		fields = append(fields, Field{
+			Label: label,
+			Value: value,
+		})
+	}
+	return fields, b
+}
+
+// ShiftBlob implements blob.Shifter interface
+func (fields *Fields) ShiftBlob(b []byte) ([]byte, error) {
+	*fields, b = (*fields).FromBlob(b)
+	return b, nil
+}
+
+func (fields *Fields) UnmarshalBinary(b []byte) error {
+	*fields, _ = (*fields).FromBlob(b)
+	return nil
+}
+
+// FieldCache is an in memory cache of field ids
+type FieldCache struct {
+	mu     sync.RWMutex
+	ids    map[string]uint64
+	fields map[uint64]Fields
+}
+
+// Set set a field to an id
+func (c *FieldCache) Set(id uint64, fields Fields) Fields {
+	c.mu.Lock()
+	if fields := c.fields[id]; fields != nil {
+		c.mu.Unlock()
+		return fields
+	}
+	if c.ids == nil {
+		c.ids = make(map[string]uint64)
+	}
+	raw, _ := fields.AppendBlob(nil)
+	c.ids[string(raw)] = id
+	if c.fields == nil {
+		c.fields = make(map[uint64]Fields)
+	}
+	c.fields[id] = fields
+	c.mu.Unlock()
+	return fields
+}
+
+// SetRaw sets a raw field value to an id
+func (c *FieldCache) SetBlob(id uint64, blob []byte) Fields {
+	c.mu.Lock()
+	fields := c.fields[id]
+	if fields != nil {
+		c.mu.Unlock()
+		return fields
+	}
+	if c.ids == nil {
+		c.ids = make(map[string]uint64)
+	}
+	fields, _ = fields.FromBlob(blob)
+	c.ids[string(blob)] = id
+	if c.fields == nil {
+		c.fields = make(map[uint64]Fields)
+	}
+	c.fields[id] = fields
+	c.mu.Unlock()
+	return fields
+}
+
+// ID gets the id of fields
+func (c *FieldCache) ID(fields Fields) (uint64, bool) {
+	raw, _ := fields.AppendBlob(nil)
+	return c.BlobID(raw)
+}
+
+// BlobID returns the id of raw fields
+func (c *FieldCache) BlobID(blob []byte) (id uint64, ok bool) {
+	c.mu.RLock()
+	id, ok = c.ids[string(blob)]
+	c.mu.RUnlock()
+	return
+}
+
+// Fields gets fields by id
+func (c *FieldCache) Fields(id uint64) (fields Fields) {
+	c.mu.RLock()
+	fields = c.fields[id]
+	c.mu.RUnlock()
+	return
+}
+
+// Labels returns the distinct cached labels
+func (c *FieldCache) Labels() (labels []string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, fields := range c.fields {
+		for i := range fields {
+			f := &fields[i]
+			labels = append(labels, f.Label)
+		}
+	}
+	sort.Strings(labels)
+	return distinctSorted(labels)
 }

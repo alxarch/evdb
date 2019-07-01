@@ -12,7 +12,7 @@ import (
 type eventDB struct {
 	badger *badger.DB
 	id     eventID
-	fields FieldCache
+	fields meter.FieldCache
 }
 
 func (e *eventDB) Labels() ([]string, error) {
@@ -35,7 +35,7 @@ func (e *eventDB) store(ts int64, labels []string, counters meter.CounterSlice) 
 	for i := range counters {
 		c := &counters[i]
 		buf = index.WriteFields(buf[:0], c.Values)
-		id, ok := cache.RawID(buf)
+		id, ok := cache.BlobID(buf)
 		if !ok {
 			id, err = e.loadID(buf)
 			if err != nil {
@@ -43,7 +43,7 @@ func (e *eventDB) store(ts int64, labels []string, counters meter.CounterSlice) 
 				putBuffer(buf)
 				return
 			}
-			cache.SetRaw(id, buf)
+			cache.SetBlob(id, buf)
 		}
 		binary.BigEndian.PutUint64(scratch[:], id)
 		binary.BigEndian.PutUint64(scratch[8:], uint64(c.Count))
@@ -147,23 +147,6 @@ func (e *eventDB) Fields(id uint64) (meter.Fields, error) {
 	return fields, nil
 }
 
-func (e *eventDB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
-	if e == nil {
-		return meter.EmptyScanIterator{}
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	items := make(chan meter.ScanItem)
-	errc := make(chan error, 1)
-	go func() {
-		defer close(errc)
-		defer close(items)
-		errc <- e.query(ctx, q, items)
-	}()
-	return meter.NewScanIterator(ctx, items, errc)
-}
-
 type resolver func(uint64) (meter.Fields, error)
 
 func (e *eventDB) resolver(q *meter.Query) resolver {
@@ -194,12 +177,16 @@ func (e *eventDB) resolver(q *meter.Query) resolver {
 
 }
 
-func (e *eventDB) query(ctx context.Context, q *meter.Query, items chan<- meter.ScanItem) error {
+func (e *eventDB) Scan(ctx context.Context, q *meter.Query) (meter.ScanResults, error) {
+	type scanItem struct {
+		meter.Fields
+		V float64
+	}
 	var (
 		resolver   = e.resolver(q)
-		done       = ctx.Done()
+		results    meter.ScanResults
 		minT, maxT = q.Start.Unix(), q.End.Unix()
-		batch      []meter.ScanItem
+		batch      []scanItem
 		scanValue  = func(value []byte) error {
 			var id, n uint64
 			for len(value) >= 16 {
@@ -211,9 +198,9 @@ func (e *eventDB) query(ctx context.Context, q *meter.Query, items chan<- meter.
 				if fields == nil {
 					continue
 				}
-				batch = append(batch, meter.ScanItem{
+				batch = append(batch, scanItem{
 					Fields: fields,
-					Count:  int64(n),
+					V:      float64(n),
 				})
 			}
 			return nil
@@ -233,20 +220,16 @@ func (e *eventDB) query(ctx context.Context, q *meter.Query, items chan<- meter.
 			batch = batch[:0]
 			err := item.Value(scanValue)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if len(batch) == 0 {
 				continue
 			}
-			for _, item := range batch {
-				item.Time = ts
-				select {
-				case items <- item:
-				case <-done:
-					return nil
-				}
+			for i := range batch {
+				item := &batch[i]
+				results = results.Add(item.Fields, ts, item.V)
 			}
 		}
 	}
-	return nil
+	return results, nil
 }

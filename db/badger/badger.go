@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/go-meter/v2/blob"
 	"github.com/dgraph-io/badger/v2"
 )
 
@@ -172,7 +172,7 @@ func loadEvents(txn *badger.Txn) ([]string, error) {
 	}
 	var dbEvents []string
 	if err := itm.Value(func(v []byte) error {
-		dbEvents, _ = meter.Blob(v).ReadStrings()
+		dbEvents, _ = blob.ReadStrings(v)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -202,7 +202,7 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 		// New events have been added
 
 		// Serialize registered event names
-		v := meter.Blob(nil).WriteStrings(dbEvents)
+		v := blob.WriteStrings(nil, dbEvents)
 
 		// Store event names
 		var key keyBuffer
@@ -216,90 +216,6 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 	}
 	return ids, nil
 
-}
-
-// FieldCache is an in memory cache of field ids
-type FieldCache struct {
-	mu     sync.RWMutex
-	ids    map[string]uint64
-	fields map[uint64]meter.Fields
-}
-
-// Set set a field to an id
-func (c *FieldCache) Set(id uint64, fields meter.Fields) meter.Fields {
-	c.mu.Lock()
-	if fields := c.fields[id]; fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	raw, _ := fields.ToBlob(nil)
-	c.ids[string(raw)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]meter.Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-
-// SetRaw sets a raw field value to an id
-func (c *FieldCache) SetRaw(id uint64, raw []byte) meter.Fields {
-	c.mu.Lock()
-	fields := c.fields[id]
-	if fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	fields.UnmarshalBinary(raw)
-	c.ids[string(raw)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]meter.Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-
-// ID gets the id of fields
-func (c *FieldCache) ID(fields meter.Fields) (uint64, bool) {
-	raw, _ := fields.ToBlob(nil)
-	return c.RawID(raw)
-}
-
-// RawID returns the id of raw fields
-func (c *FieldCache) RawID(raw []byte) (id uint64, ok bool) {
-	c.mu.RLock()
-	id, ok = c.ids[string(raw)]
-	c.mu.RUnlock()
-	return
-}
-
-// Fields gets fields by id
-func (c *FieldCache) Fields(id uint64) (fields meter.Fields) {
-	c.mu.RLock()
-	fields = c.fields[id]
-	c.mu.RUnlock()
-	return
-}
-
-// Labels returns the distinct cached labels
-func (c *FieldCache) Labels() (labels []string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, fields := range c.fields {
-		for i := range fields {
-			f := &fields[i]
-			labels = append(labels, f.Label)
-		}
-	}
-	sort.Strings(labels)
-	return distinctSorted(labels)
 }
 
 type iLabel struct {
@@ -333,16 +249,16 @@ func newLabelIndex(labels ...string) labelIndex {
 	return index
 }
 
-func (index labelIndex) WriteFields(dst meter.Blob, values []string) meter.Blob {
-	dst = dst.WriteU32BE(uint32(len(index)))
+func (index labelIndex) WriteFields(dst []byte, values []string) []byte {
+	dst = blob.WriteU32BE(dst, uint32(len(index)))
 	for i := range index {
 		idx := &index[i]
-		dst = dst.WriteString(idx.Label)
+		dst = blob.WriteString(dst, idx.Label)
 		var v string
 		if 0 <= idx.Index && idx.Index < len(values) {
 			v = values[idx.Index]
 		}
-		dst = dst.WriteString(v)
+		dst = blob.WriteString(dst, v)
 	}
 	return dst
 }

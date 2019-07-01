@@ -18,7 +18,7 @@ func Test_Event(t *testing.T) {
 	e.Add(1, "BAR", "BAZ")
 
 	s := e.Flush(nil)
-	AssertEqual(t, s, meter.Snapshot{{
+	AssertEqual(t, s, meter.CounterSlice{{
 		Values: []string{"BAR", "BAZ"},
 		Count:  1,
 	}})

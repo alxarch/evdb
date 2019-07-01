@@ -7,18 +7,21 @@ import (
 
 	meter "github.com/alxarch/go-meter/v2"
 	"github.com/alxarch/go-meter/v2/db/redis"
+	"github.com/go-redis/redis"
 )
 
 func TestDB(t *testing.T) {
-	db, err := redisdb.Open("redis://127.0.0.1:6379/10", redisdb.ResolutionHourly)
+	opts, _ := redis.ParseURL("redis://127.0.0.1:6379/10")
+	rc := redis.NewClient(opts)
+	db, err := redisdb.Open(rc, 1000, "meter", redisdb.ResolutionHourly)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Redis.FlushDB()
+	defer rc.FlushDB()
 	defer db.Close()
+	db.AddEvent("cost")
 	now := time.Now().In(time.UTC)
-	db.Store(meter.Snapshot{
-		Event:  "cost",
+	db.Storer("cost").Store(&meter.Snapshot{
 		Time:   now,
 		Labels: []string{"foo", "bar"},
 		Counters: []meter.Counter{
@@ -31,10 +34,11 @@ func TestDB(t *testing.T) {
 		TimeRange: meter.TimeRange{
 			Start: now,
 			End:   now,
+			Step: time.Hour,
 		},
 		Group: []string{"foo"},
 	}
-	results, err := db.Query(ctx, &q, "cost")
+	results, err := db.Query(ctx, q, "cost")
 	if err != nil {
 		t.Fatal(err)
 	}

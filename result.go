@@ -9,10 +9,8 @@ import (
 
 // Result is a query result
 type Result struct {
-	Event  string      `json:"event"`
-	Fields Fields      `json:"fields,omitempty"`
-	Total  float64     `json:"total"`
-	Data   []DataPoint `json:"data,omitempty"`
+	ScanResult
+	Event string `json:"event"`
 }
 
 // ResultType is a type of result
@@ -40,13 +38,6 @@ func ResultTypeFromString(s string) ResultType {
 	}
 }
 
-// Reset resets a result
-func (r *Result) Reset() {
-	*r = Result{
-		Data: r.Data[:0],
-	}
-}
-
 // Add adds n times at ts time to a result
 func (r *Result) Add(ts int64, n float64) {
 	r.Total += n
@@ -65,7 +56,7 @@ func (r *Result) Add(ts int64, n float64) {
 type Results []Result
 
 // Add adds a result
-func (results Results) Add(event string, fields Fields, n float64, ts int64) Results {
+func (results Results) Add(event string, fields Fields, ts int64, n float64) Results {
 	for i := range results {
 		r := &results[i]
 		if r.Event == event && r.Fields.Equal(fields) {
@@ -74,10 +65,12 @@ func (results Results) Add(event string, fields Fields, n float64, ts int64) Res
 		}
 	}
 	return append(results, Result{
-		Event:  event,
-		Fields: fields,
-		Total:  n,
-		Data:   []DataPoint{{ts, n}},
+		Event: event,
+		ScanResult: ScanResult{
+			Fields: fields,
+			Total:  n,
+			Data:   []DataPoint{{ts, n}},
+		},
 	})
 }
 
@@ -89,6 +82,17 @@ type DataPoint struct {
 
 // DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
+
+func (s DataPoints) Add(t int64, v float64) DataPoints {
+	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
+		d := &s[i]
+		if d.Timestamp == t {
+			d.Value += v
+			return s
+		}
+	}
+	return append(s, DataPoint{Timestamp: t, Value: v})
+}
 
 // Find searches for the count at a specific time
 func (s DataPoints) Find(tm time.Time) (float64, bool) {

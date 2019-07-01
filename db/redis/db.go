@@ -25,7 +25,10 @@ type DB struct {
 var _ meter.DB = (*DB)(nil)
 
 func (db *DB) Storer(event string) meter.Storer {
-	if e, ok := db.events[event]; ok {
+	db.mu.RLock()
+	e, ok := db.events[event]
+	db.mu.RUnlock()
+	if ok {
 		return e
 	}
 	return nil
@@ -50,7 +53,6 @@ func (db *DB) AddEvent(event string) {
 			event: event,
 			res:   res,
 		})
-
 	}
 	db.events[event] = meter.TeeStore(storers...)
 }
@@ -75,7 +77,7 @@ func Resolutions(resolutions ...Resolution) (map[time.Duration]Resolution, error
 	return m, nil
 }
 
-func NewDB(rc redis.UniversalClient, scanSize int, keyPrefix string, resolutions ...Resolution) (*DB, error) {
+func Open(rc redis.UniversalClient, scanSize int, keyPrefix string, resolutions ...Resolution) (*DB, error) {
 	byDuration, err := Resolutions(resolutions...)
 	if err != nil {
 		return nil, err
@@ -109,12 +111,27 @@ func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter
 	if !ok {
 		return nil, fmt.Errorf("Invalid query step %s", q.Step)
 	}
-	ch := make(chan scanResult)
+	ch := make(chan scanResult, len(events))
 	errc := make(chan error, len(events))
 	done := ctx.Done()
 	ts := q.Sequence()
 	wg := new(sync.WaitGroup)
 	results := meter.Results(make([]meter.Result, 0, len(events)))
+	go func() {
+		defer close(errc)
+		for {
+			select {
+			case r, ok := <-ch:
+				if ok {
+					results = results.Add(r.Event, r.Fields, r.Time, float64(r.Count))
+				} else {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
 	for i := range events {
 		event := events[i]
 		if _, ok := db.events[event]; !ok {
@@ -125,29 +142,21 @@ func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter
 			res:   res,
 			db:    db,
 		}
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			var err error
 			for _, tm := range ts {
-				select {
-				case errc <- s.scan(tm, &q, ch, done):
-				case <-done:
-					return
+				err = s.scan(tm, &q, ch, done)
+				if err != nil {
+					break
 				}
+
 			}
+			errc <- err
 		}()
 
 	}
-	go func() {
-		defer close(errc)
-		for {
-			select {
-			case r := <-ch:
-				results = results.Add(r.Event, r.Fields, float64(r.Count), r.Time)
-			case <-done:
-				return
-			}
-		}
-	}()
 	wg.Wait()
 	close(ch)
 	for err := range errc {

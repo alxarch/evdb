@@ -33,8 +33,7 @@ func TestBadgerEvents(t *testing.T) {
 	}
 	tm := time.Date(2019, time.May, 15, 13, 14, 0, 0, time.UTC)
 	req := meter.Snapshot{
-		Event: "test",
-		Time:  tm,
+		Time: tm,
 		Labels: []string{
 			"country",
 			"host",
@@ -59,10 +58,9 @@ func TestBadgerEvents(t *testing.T) {
 			},
 		},
 	}
-	if err := events.Store(&req); err != nil {
+	if err := events.Storer("test").Store(&req); err != nil {
 		t.Fatal("Failed to store counters", err)
 	}
-	qr := meter.ScanQuerier(events)
 	ctx := context.Background()
 	q := meter.Query{
 		TimeRange: meter.TimeRange{
@@ -74,7 +72,7 @@ func TestBadgerEvents(t *testing.T) {
 			{Label: "country", Value: "USA"},
 		},
 	}
-	results, err := qr.Query(ctx, &q, "test")
+	results, err := events.Query(ctx, q, "test")
 	if err != nil {
 		t.Fatal("Query failed", err)
 	}

@@ -1,7 +1,6 @@
 package httpdb
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -42,7 +41,7 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 }
 
 type db struct {
-	q      Querier
+	Querier
 	events map[string]meter.Storer
 }
 
@@ -54,10 +53,6 @@ func (db *db) Storer(event string) meter.Storer {
 }
 func (db *db) Close() error {
 	return nil
-}
-
-func (db *db) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	return db.q.Query(ctx, q, events...)
 }
 
 // DB connects to a remote meter.DB over HTTP
@@ -72,7 +67,7 @@ func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
 		return nil, fmt.Errorf("Invalid scheme %q", u.Scheme)
 	}
 	db := db{
-		q: Querier{
+		Querier: Querier{
 			URL:        baseURL,
 			HTTPClient: client,
 		},
@@ -83,7 +78,7 @@ func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
 		storeURL.Path = path.Join(u.Path, event)
 		storer := Storer{
 			URL:        storeURL.String(),
-			HTTPClient: db.q.HTTPClient,
+			HTTPClient: db.HTTPClient,
 		}
 		db.events[event] = &storer
 	}

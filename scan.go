@@ -7,21 +7,7 @@ import (
 
 // Scanner scans stored data according to a query
 type Scanner interface {
-	Scan(ctx context.Context, q *Query) ScanIterator
-}
-
-// ScanIterator is an iterator over scan results
-type ScanIterator interface {
-	Next() bool
-	Item() ScanItem
-	Close() error
-}
-
-// ScanItem is a result item for a scan
-type ScanItem struct {
-	Time   int64
-	Count  int64
-	Fields Fields
+	Scan(ctx context.Context, q *Query) (ScanResults, error)
 }
 
 // Scanners provides a Scanner for an event
@@ -29,93 +15,92 @@ type Scanners interface {
 	Scanner(event string) Scanner
 }
 
+// Scan executes a query using scanners
 func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := ctx.Done()
 	errc := make(chan error, len(events))
-	ch := make(chan Results, len(events))
+	ch := make(chan Result, len(events))
 	wg := new(sync.WaitGroup)
-	wg.Add(len(events))
+	var agg Results
 	go func() {
 		defer close(errc)
-		defer close(ch)
-		wg.Wait()
+		for r := range ch {
+			agg = append(agg, r)
+		}
 	}()
 	for i := range events {
 		event := events[i]
+		s := s.Scanner(event)
+		if s == nil {
+			continue
+		}
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s := s.Scanner(event)
-			if s == nil {
-				// errc <- errMissingEvent(event)
-				return
-			}
-			iter := s.Scan(ctx, q)
-			var results Results
-			for iter.Next() {
-				item := iter.Item()
-				tm := q.TruncateTimestamp(item.Time)
-				n := float64(item.Count)
-				results = results.Add(event, item.Fields, n, tm)
-			}
-			if err := iter.Close(); err != nil {
+			results, err := s.Scan(ctx, q)
+			if err != nil {
 				errc <- err
 				return
 			}
-			ch <- results
+			for i := range results {
+				select {
+				case ch <- Result{
+					Event:      event,
+					ScanResult: results[i],
+				}:
+				case <-done:
+					errc <- ctx.Err()
+					return
+				}
+			}
 		}()
 	}
-
-	err, _ := <-errc
-	if err != nil {
-		return nil, err
-	}
-	var results Results
-	for r := range ch {
-		results = append(results, r...)
-	}
-	return results, nil
-
-}
-
-func NewScanIterator(ctx context.Context, items <-chan ScanItem, errors <-chan error) ScanIterator {
-	ctx, cancel := context.WithCancel(ctx)
-	iter := scanIterator{
-		cancel: cancel,
-		errc:   errors,
-		items:  items,
-	}
-	return &iter
-}
-
-type scanIterator struct {
-	cancel context.CancelFunc
-	errc   <-chan error
-	items  <-chan ScanItem
-	err    error
-	item   ScanItem
-}
-
-func (it *scanIterator) Next() bool {
-	select {
-	case item, ok := <-it.items:
-		it.item = item
-		return ok
-	case e, ok := <-it.errc:
-		if ok {
-			it.err = e
+	wg.Wait()
+	close(ch)
+	for err := range errc {
+		if err != nil {
+			return nil, err
 		}
-		return false
+	}
+	return agg, nil
+}
+
+type ScanResult struct {
+	Fields Fields     `json:"fields,omitempty"`
+	Total  float64    `json:"total"`
+	Data   DataPoints `json:"data,omitempty"`
+}
+
+// Add ads a
+func (r *ScanResult) Add(t int64, v float64) {
+	r.Total += v
+	r.Data = r.Data.Add(t, v)
+}
+
+type ScanResults []ScanResult
+
+func (results ScanResults) Add(fields Fields, t int64, v float64) ScanResults {
+	for i := range results {
+		r := &results[i]
+		if r.Fields.Equal(fields) {
+			r.Add(t, v)
+			return results
+		}
+	}
+	return append(results, ScanResult{
+		Fields: fields,
+		Total:  v,
+		Data:   []DataPoint{{t, v}},
+	})
+
+}
+
+// Reset resets a result
+func (r *ScanResult) Reset() {
+	*r = ScanResult{
+		Data: r.Data[:0],
 	}
 }
-func (it *scanIterator) Item() ScanItem {
-	return it.item
-}
-func (it *scanIterator) Close() error {
-	it.cancel()
-	return it.err
-}
-
-type EmptyScanIterator struct{}
-
-func (EmptyScanIterator) Item() ScanItem { return ScanItem{} }
-func (EmptyScanIterator) Close() error   { return nil }
-func (EmptyScanIterator) Next() bool     { return false }

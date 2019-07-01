@@ -7,6 +7,7 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/go-meter/v2/blob"
 	"github.com/dgraph-io/badger/v2"
 )
 
@@ -98,11 +99,12 @@ func (cc compactionBuffer) Compact() compactionBuffer {
 func (cc compactionBuffer) Reset() compactionBuffer {
 	return cc[:0]
 }
-func (cc compactionBuffer) ToBlob(s meter.Blob) (meter.Blob, error) {
+
+func (cc compactionBuffer) AppendBlob(s []byte) ([]byte, error) {
 	for i := range cc {
 		c := &cc[i]
-		s = s.WriteU64BE(c.id)
-		s = s.WriteU64BE(uint64(c.n))
+		s = blob.WriteU64BE(s, c.id)
+		s = blob.WriteU64BE(s, uint64(c.n))
 	}
 	return s, nil
 }
@@ -183,7 +185,7 @@ func compactionTask(db *badger.DB, id eventID, start, end int64) error {
 	cc = cc.Compact()
 	if len(cc) > 0 {
 		value := getBuffer()
-		value, _ = cc.ToBlob(value[:0])
+		value, _ = cc.AppendBlob(value[:0])
 		defer putBuffer(value)
 		if err := txn.Set(seek[:], value); err != nil {
 			return err

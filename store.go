@@ -3,14 +3,12 @@ package meter
 import (
 	"context"
 	"errors"
-	"sort"
 	"sync"
 	"time"
 )
 
 // Snapshot is a snaphot of event counters
 type Snapshot struct {
-	Event    string       `json:"event"`
 	Time     time.Time    `json:"time,omitempty"`
 	Labels   []string     `json:"labels"`
 	Counters CounterSlice `json:"counters"`
@@ -38,9 +36,6 @@ func (m *MemoryStore) Last() *Snapshot {
 
 // Store implements EventStore interface
 func (m *MemoryStore) Store(req *Snapshot) error {
-	if req.Event != m.Event {
-		return errors.New("Invalid event")
-	}
 	last := m.Last()
 	if last == nil || req.Time.After(last.Time) {
 		m.data = append(m.data, *req)
@@ -58,56 +53,34 @@ func (m *MemoryStore) Scanner(event string) Scanner {
 }
 
 // Scan implements the Scanner interface
-func (m *MemoryStore) Scan(ctx context.Context, q *Query) ScanIterator {
-	errc := make(chan error)
-	items := make(chan ScanItem)
-	data := m.data
-	ctx, cancel := context.WithCancel(ctx)
-	it := scanIterator{
-		errc:   errc,
-		items:  items,
-		cancel: cancel,
-	}
-	done := ctx.Done()
-	match := q.Match.Sorted()
-	groups := q.Group
-	if len(groups) > 0 {
-		sort.Strings(groups)
-	}
+func (m *MemoryStore) Scan(ctx context.Context, q *Query) (ScanResults, error) {
+	var (
+		match   = q.Match.Sorted()
+		results ScanResults
+	)
 	step := int64(q.Step / time.Second)
 	if step < 1 {
 		step = 1
 	}
-	go func() {
-		defer close(items)
-		defer close(errc)
-		for i := range data {
-			d := &data[i]
-			if d.Time.Before(q.Start) {
-				continue
-			}
-			for j := range d.Counters {
-				c := &d.Counters[j]
-				fields := ZipFields(d.Labels, c.Values)
-				ok := fields.MatchSorted(match)
-				if ok {
-					if len(groups) > 0 {
-						fields = fields.GroupBy(q.EmptyValue, groups)
-					}
-					select {
-					case items <- ScanItem{
-						Fields: fields,
-						Time:   stepTS(d.Time.Unix(), step),
-						Count:  c.Count,
-					}:
-					case <-done:
-						return
-					}
+	for i := range m.data {
+		d := &m.data[i]
+		if d.Time.Before(q.Start) {
+			continue
+		}
+		for j := range d.Counters {
+			c := &d.Counters[j]
+			fields := ZipFields(d.Labels, c.Values)
+			ok := fields.MatchSorted(match)
+			if ok {
+				if len(q.Group) > 0 {
+					fields = fields.GroupBy(q.EmptyValue, q.Group)
 				}
+				tm := stepTS(d.Time.Unix(), step)
+				results = results.Add(fields, tm, float64(c.Count))
 			}
 		}
-	}()
-	return &it
+	}
+	return results, nil
 }
 
 // SyncTask dumps an Event to an EventStore
@@ -119,7 +92,6 @@ func (e *Event) SyncTask(db Storer) func(time.Time) error {
 			return nil
 		}
 		req := Snapshot{
-			Event:    e.Name,
 			Labels:   e.Labels,
 			Time:     tm,
 			Counters: s,
@@ -144,12 +116,16 @@ func (tee teeStorer) Store(s *Snapshot) error {
 	if len(tee) == 0 {
 		return nil
 	}
+	// if len(tee) == 1 {
+	// 	return tee[0].Store(s)
+	// }
 	errc := make(chan error, len(tee))
 	wg := new(sync.WaitGroup)
-	wg.Add(len(tee))
 	for i := range tee {
 		db := tee[i]
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			errc <- db.Store(s)
 		}()
 	}
@@ -161,23 +137,4 @@ func (tee teeStorer) Store(s *Snapshot) error {
 		}
 	}
 	return nil
-}
-
-// EventStore multiplexes stores for multiple events
-type EventStore map[string]Storer
-
-// Add adds a store for events
-func (m EventStore) Add(db Storer, events ...string) {
-	for _, event := range events {
-		m[event] = db
-	}
-}
-
-// Store implements storer interface
-func (m EventStore) Store(s *Snapshot) error {
-	db := m[s.Event]
-	if db == nil {
-		return errors.New("Unknown event")
-	}
-	return db.Store(s)
 }

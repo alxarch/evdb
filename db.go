@@ -18,7 +18,7 @@ type Opener interface {
 
 var (
 	openerMu sync.Mutex
-	openers  map[string]Opener
+	openers  = map[string]Opener{}
 )
 
 func Register(scheme string, op Opener) {
