@@ -2,11 +2,14 @@ package main
 
 import (
 	"flag"
-	"strings"
+	"context"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"strings"
 
 	"github.com/alxarch/go-meter/v2/mdbbadger"
 	"github.com/alxarch/go-meter/v2/mdbhttp"
@@ -14,9 +17,9 @@ import (
 )
 
 var (
-	dir   = flag.String("dir", "data", "Data dir")
-	addr  = flag.String("addr", ":8080", "HTTP listen address")
-	debug = flag.Bool("debug", false, "Debug logs")
+	dir      = flag.String("dir", "/var/lib/meterd", "Data dir")
+	addr     = flag.String("addr", ":8080", "HTTP listen address")
+	debug    = flag.Bool("debug", false, "Debug logs")
 	basePath = flag.String("basepath", "", "Basepath for URLs")
 )
 
@@ -33,9 +36,26 @@ func main() {
 		logs.err.Fatalf(`Failed to open db: %s`, err)
 	}
 	defer db.Close()
+	sigc := make(chan os.Signal)
+	signal.Notify(sigc, syscall.SIGTERM)
+	signal.Notify(sigc, syscall.SIGINT)
+	ctx := context.Background()
+	done := ctx.Done()
+	go func() {
+		select {
+		case <- sigc:
+		case <- done:
+		}
+		logs.Println("Shutting down...")
+		if err := db.Close(); err != nil {
+			logs.err.Printf("Failed to close db: %s\n", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}()
 	mdb, err := mdbbadger.Open(db, events...)
 	if err != nil {
-		logs.err.Fatalf(`Failed to open db: %s`, err)
+		logs.err.Fatalf("Failed to open db: %s\n", err)
 	}
 	srv := http.Server{
 		Addr:     *addr,
@@ -47,7 +67,7 @@ func main() {
 		srv.Handler = http.StripPrefix(prefix, srv.Handler)
 	}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logs.err.Fatalf(`Server failed: %s`, err)
+		logs.err.Printf("Server failed: %s\n", err)
 	}
 
 }
