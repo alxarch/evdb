@@ -68,6 +68,7 @@ func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results
 	return agg, nil
 }
 
+// ScanResult is result of a scan
 type ScanResult struct {
 	Fields Fields     `json:"fields,omitempty"`
 	Data   DataPoints `json:"data,omitempty"`
@@ -78,8 +79,10 @@ func (r *ScanResult) Add(t int64, v float64) {
 	r.Data = r.Data.Add(t, v)
 }
 
+// ScanResults are results from a scan
 type ScanResults []ScanResult
 
+// Add adds a result
 func (results ScanResults) Add(fields Fields, t int64, v float64) ScanResults {
 	for i := range results {
 		r := &results[i]
