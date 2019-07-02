@@ -29,3 +29,8 @@ func AssertNil(t *testing.T, a interface{}) {
 		t.Errorf("a != nil %v", a)
 	}
 }
+func AssertNoError(t *testing.T, err error) {
+	if err != nil {
+		t.Errorf("Unexpected error %s", err)
+	}
+}
