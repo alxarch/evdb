@@ -4,16 +4,15 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
-	"github.com/go-redis/redis"
+	"github.com/gomodule/redigo/redis"
 )
 
 type DB struct {
-	redis       redis.UniversalClient
+	redis       *redis.Pool
 	keyPrefix   string
 	scanSize    int64
 	events      map[string]meter.Storer
@@ -63,11 +62,12 @@ func Open(options Options, events ...string) (*DB, error) {
 	if options.ScanSize <= 0 {
 		options.ScanSize = defaultScanSize
 	}
-	if options.Redis == nil {
-		options.Redis = new(redis.Options)
+	pool, err := redisPool(options.RedisURL)
+	if err != nil {
+		return nil, err
 	}
 	db := DB{
-		redis:       redis.NewClient(options.Redis),
+		redis:       pool,
 		scanSize:    options.ScanSize,
 		keyPrefix:   options.KeyPrefix,
 		events:      make(map[string]meter.Storer),
@@ -114,19 +114,19 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	}
 	labels := s.Labels
 	sort.Strings(labels)
-	pipeline := db.redis.Pipeline()
-	defer pipeline.Close()
+	conn := db.redis.Get()
+	defer conn.Close()
 	var buf []byte
 	key := db.Key(s.Time)
-	pipeline.Expire(key, db.TTL())
+	ttl := db.TTL() / time.Millisecond
+	conn.Send("PEXPIRE", int64(ttl))
 	for j := range s.Counters {
 		c := &s.Counters[j]
 		buf := appendField(buf[:0], s.Labels, c.Values)
 		field := string(buf)
-		pipeline.HIncrBy(key, field, c.Count)
+		conn.Send("HINCRBY", key, field, c.Count)
 	}
-	_, err := pipeline.Exec()
-	return err
+	return conn.Flush()
 }
 
 func (db *storer) appendKey(data []byte, tm time.Time) []byte {
@@ -148,30 +148,49 @@ func (db *storer) Key(tm time.Time) string {
 
 const defaultScanSize = 1000
 
+func (db *storer) readAll(key string) (map[string]int64, error) {
+	conn := db.redis.Get()
+	defer conn.Close()
+	return redis.Int64Map(conn.Do("HGETALL", key))
+}
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
-	tm, end, step := db.Truncate(q.Start), db.Truncate(q.End), db.Step()
-	scan := func(tm time.Time) error {
-		key := db.Key(tm)
-		ts := tm.Unix()
-		scan := db.redis.HScan(key, 0, "*", db.scanSize).Iterator()
-		var fields meter.Fields
-		for i := 0; scan.Next(); i++ {
-			if i%2 == 0 {
-				fields = parseFields(fields[:0], scan.Val())
-				sort.Sort(fields)
-			} else if fields.MatchSorted(match) {
-				n, err := strconv.ParseInt(scan.Val(), 10, 64)
-				if err != nil {
-					return err
-				}
-				results = results.Add(fields, ts, float64(n))
-			}
-		}
-		return scan.Err()
-	}
+	var (
+		key           []byte
+		fields        meter.Fields
+		index         = map[string]*meter.ScanResult{}
+		skip          = &meter.ScanResult{}
+		tm, end, step = db.Truncate(q.Start), db.Truncate(q.End), db.Step()
+	)
 	for ; !tm.After(end); tm = tm.Add(step) {
-		if err := scan(tm); err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		key = db.appendKey(key[:0], tm)
+		reply, err := db.readAll(string(key))
+		if err != nil {
+			return nil, err
+		}
+		ts := tm.Unix()
+		for v, n := range reply {
+			r := index[v]
+			if r == skip {
+				continue
+			}
+			if r == nil {
+				fields = parseFields(fields[:0], v)
+				sort.Sort(fields)
+				if fields.MatchSorted(match) {
+					results = append(results, meter.ScanResult{
+						Fields: fields.Copy(),
+						Data:   meter.DataPoints{{Timestamp: ts, Value: float64(n)}},
+					})
+					index[v] = &results[len(results)-1]
+				} else {
+					index[v] = skip
+				}
+			} else {
+				r.Data = r.Data.Add(ts, float64(n))
+			}
 		}
 	}
 	return
