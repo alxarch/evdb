@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
@@ -17,7 +16,6 @@ type DB struct {
 	redis       redis.UniversalClient
 	keyPrefix   string
 	scanSize    int64
-	mu          sync.RWMutex
 	events      map[string]meter.Storer
 	resolutions map[time.Duration]Resolution
 }
@@ -25,10 +23,7 @@ type DB struct {
 var _ meter.DB = (*DB)(nil)
 
 func (db *DB) Storer(event string) meter.Storer {
-	db.mu.RLock()
-	e, ok := db.events[event]
-	db.mu.RUnlock()
-	if ok {
+	if e, ok := db.events[event]; ok {
 		return e
 	}
 	return nil
@@ -40,12 +35,7 @@ type storer struct {
 	Resolution
 }
 
-func (db *DB) AddEvent(event string) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	if db.events == nil {
-		db.events = make(map[string]meter.Storer)
-	}
+func (db *DB) storer(event string) meter.Storer {
 	storers := make([]meter.Storer, 0, len(db.resolutions))
 	for _, res := range db.resolutions {
 		storers = append(storers, &storer{
@@ -54,7 +44,7 @@ func (db *DB) AddEvent(event string) {
 			Resolution: res,
 		})
 	}
-	db.events[event] = meter.TeeStore(storers...)
+	return meter.TeeStore(storers...)
 }
 
 const (
@@ -65,32 +55,33 @@ const (
 	defaultKeyPrefix      = "meter"
 )
 
-func Resolutions(resolutions ...Resolution) (map[time.Duration]Resolution, error) {
-	m := make(map[time.Duration]Resolution, len(resolutions))
-	for _, res := range resolutions {
-		step := res.Step()
-		if _, duplicate := m[step]; duplicate {
-			return nil, fmt.Errorf(`Duplicate resolution %s`, step)
-		}
-		m[step] = res
-	}
-	return m, nil
+type Options struct {
+	Redis       *redis.Options
+	ScanSize    int64
+	KeyPrefix   string
+	Resolutions []Resolution
 }
 
-func Open(rc redis.UniversalClient, scanSize int, keyPrefix string, resolutions ...Resolution) (*DB, error) {
-	byDuration, err := Resolutions(resolutions...)
+func Open(options Options, events ...string) (*DB, error) {
+	byDuration, err := resolutionsByDuration(options.Resolutions...)
 	if err != nil {
 		return nil, err
 	}
-	if scanSize <= 0 {
-		scanSize = defaultScanSize
+	if options.ScanSize <= 0 {
+		options.ScanSize = defaultScanSize
+	}
+	if options.Redis == nil {
+		options.Redis = new(redis.Options)
 	}
 	db := DB{
-		redis:       rc,
-		scanSize:    int64(scanSize),
-		keyPrefix:   keyPrefix,
+		redis:       redis.NewClient(options.Redis),
+		scanSize:    options.ScanSize,
+		keyPrefix:   options.KeyPrefix,
 		events:      make(map[string]meter.Storer),
 		resolutions: byDuration,
+	}
+	for _, event := range events {
+		db.events[event] = db.storer(event)
 	}
 	return &db, nil
 }
@@ -99,12 +90,6 @@ func (db *DB) Close() error {
 	return db.redis.Close()
 }
 
-type scanResult struct {
-	Time   int64
-	Count  int64
-	Fields meter.Fields
-	Event  string
-}
 type scanners struct {
 	*DB
 	res Resolution

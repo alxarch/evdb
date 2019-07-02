@@ -2,25 +2,26 @@ package mdbredis_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
 	"github.com/alxarch/go-meter/v2/mdbredis"
-	"github.com/go-redis/redis"
 )
 
 func TestDB(t *testing.T) {
-	opts, _ := redis.ParseURL("redis://127.0.0.1:6379/10")
-	rc := redis.NewClient(opts)
-	db, err := mdbredis.Open(rc, 1000, "meter", mdbredis.ResolutionHourly)
+	now := time.Now().In(time.UTC)
+	options := mdbredis.Options{
+		KeyPrefix:   fmt.Sprintf("mdbredis:test:%d", now.UnixNano()),
+		ScanSize:    1000,
+		Resolutions: []mdbredis.Resolution{mdbredis.ResolutionHourly},
+	}
+	db, err := mdbredis.Open(options, "cost")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rc.FlushDB()
 	defer db.Close()
-	db.AddEvent("cost")
-	now := time.Now().In(time.UTC)
 	db.Storer("cost").Store(&meter.Snapshot{
 		Time:   now,
 		Labels: []string{"foo", "bar"},

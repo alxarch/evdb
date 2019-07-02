@@ -1,6 +1,7 @@
 package mdbredis
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/alxarch/go-meter/v2/tcodec"
@@ -98,4 +99,16 @@ func (r Resolution) Step() time.Duration {
 func (r Resolution) WithStep(step time.Duration) Resolution {
 	r.step = step
 	return r
+}
+
+func resolutionsByDuration(resolutions ...Resolution) (map[time.Duration]Resolution, error) {
+	m := make(map[time.Duration]Resolution, len(resolutions))
+	for _, res := range resolutions {
+		step := res.Step()
+		if _, duplicate := m[step]; duplicate {
+			return nil, fmt.Errorf(`Duplicate resolution %s`, step)
+		}
+		m[step] = res
+	}
+	return m, nil
 }
