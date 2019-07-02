@@ -34,3 +34,23 @@ func (tr *TimeRange) Truncate(tm time.Time) time.Time {
 type Querier interface {
 	Query(ctx context.Context, q Query, events ...string) (Results, error)
 }
+
+func (q Query) Between(start, end time.Time) Query {
+	q.Start = start
+	q.End = end
+	return q
+}
+func (q Query) GroupBy(group ...string) Query {
+	q.Group = group
+	return q
+}
+func (q Query) Where(label string, values ...string) Query {
+	for _, v := range values {
+		q.Match = append(q.Match, Field{label, v})
+	}
+	return q
+}
+func (q Query) At(step time.Duration) Query {
+	q.Step = step
+	return q
+}
