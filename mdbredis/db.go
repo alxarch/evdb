@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
@@ -150,9 +149,6 @@ func (db *storer) Key(tm time.Time) string {
 const defaultScanSize = 1000
 
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
-	mu := new(sync.Mutex)
-	wg := new(sync.WaitGroup)
-	var errs []error
 	tm, end, step := db.Truncate(q.Start), db.Truncate(q.End), db.Step()
 	scan := func(tm time.Time) error {
 		key := db.Key(tm)
@@ -168,27 +164,15 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 				if err != nil {
 					return err
 				}
-				mu.Lock()
 				results = results.Add(fields, ts, float64(n))
-				mu.Unlock()
 			}
 		}
 		return scan.Err()
 	}
 	for ; !tm.After(end); tm = tm.Add(step) {
-		wg.Add(1)
-		go func(tm time.Time) {
-			defer wg.Done()
-			if err := scan(tm); err != nil {
-				mu.Lock()
-				errs = append(errs, err)
-				mu.Unlock()
-			}
-		}(tm)
-	}
-	wg.Wait()
-	for _, err = range errs {
-		return
+		if err := scan(tm); err != nil {
+			return nil, err
+		}
 	}
 	return
 }
