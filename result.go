@@ -63,7 +63,7 @@ func (results Results) Add(event string, fields Fields, ts int64, n float64) Res
 	return append(results, Result{
 		Event: event,
 		ScanResult: ScanResult{
-			Fields: fields,
+			Fields: fields.Copy(),
 			Data:   []DataPoint{{ts, n}},
 		},
 	})

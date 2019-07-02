@@ -13,12 +13,6 @@ type Query struct {
 	EmptyValue string   `json:"empty,omitempty"`
 }
 
-// TruncateTimestamp truncates a timestamp to Query.Step
-func (q *Query) TruncateTimestamp(ts int64) int64 {
-	step := int64(q.Step / time.Second)
-	return stepTS(ts, step)
-}
-
 // TimeRange is a range of time with a specific step
 type TimeRange struct {
 	Start time.Time     `json:"start"`
@@ -34,21 +28,6 @@ func (tr *TimeRange) Truncate(tm time.Time) time.Time {
 		return time.Time{}
 	}
 	return tm
-}
-
-func (tr *TimeRange) Sequence() []time.Time {
-	if tr.Step <= 0 {
-		return nil
-	}
-
-	start := tr.Truncate(tr.Start)
-	end := tr.Truncate(tr.End)
-	n := end.Sub(start) / tr.Step
-	seq := make([]time.Time, 0, n)
-	for s := start; end.Sub(s) >= 0; s = s.Add(tr.Step) {
-		seq = append(seq, s)
-	}
-	return seq
 }
 
 // Querier runs queries

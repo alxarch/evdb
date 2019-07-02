@@ -97,7 +97,7 @@ func (results ScanResults) Add(fields Fields, t int64, v float64) ScanResults {
 		}
 	}
 	return append(results, ScanResult{
-		Fields: fields,
+		Fields: fields.Copy(),
 		Data:   []DataPoint{{t, v}},
 	})
 
@@ -126,7 +126,7 @@ func (results ScanResults) Merge(fields Fields, data DataPoints) ScanResults {
 		}
 	}
 	return append(results, ScanResult{
-		Fields: fields,
+		Fields: fields.Copy(),
 		Data:   data,
 	})
 }

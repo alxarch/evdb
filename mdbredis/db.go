@@ -192,39 +192,11 @@ func (db *storer) scan(tm time.Time, match meter.Fields, results meter.ScanResul
 			if err != nil {
 				return results, err
 			}
-			results = results.Add(fields.Copy(), ts, float64(n))
+			results = results.Add(fields, ts, float64(n))
 		}
 	}
 	return results, scan.Err()
 }
-
-// func (db *DB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {
-// 	items := make(chan meter.ScanItem)
-// 	errc := make(chan error)
-// 	go func() {
-// 		defer close(items)
-// 		defer close(errc)
-// 		// TODO: [redis] Handle q.Step <= 0 to Scan for keys before HSCAN
-// 		ts := q.Sequence()
-// 		wg := new(sync.WaitGroup)
-// 		done := ctx.Done()
-// 		for _, tm := range ts {
-// 			wg.Add(1)
-// 			tm := tm
-// 			go func() {
-// 				defer wg.Done()
-// 				select {
-// 				case errc <- db.scan(tm, q, items, done):
-// 				case <-done:
-// 				}
-// 			}()
-
-// 		}
-// 		wg.Wait()
-// 	}()
-
-// 	return meter.NewScanIterator(ctx, items, errc)
-// }
 
 func parseFields(fields meter.Fields, s string) meter.Fields {
 	pos := strings.IndexByte(s, fieldTerminator)

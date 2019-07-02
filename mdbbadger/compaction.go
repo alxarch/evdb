@@ -6,7 +6,6 @@ import (
 	"sync"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
 	"github.com/alxarch/go-meter/v2/blob"
 	"github.com/dgraph-io/badger/v2"
 )
@@ -121,9 +120,9 @@ func compactionScan(db *badger.DB, id eventID, now time.Time) error {
 	key := iter.Item().Key()
 	ts, ok := parseEventKey(id, key)
 	const step = int64(time.Hour)
-	q := meter.Query{}
-	q.Step = time.Duration(step)
-	ts = q.TruncateTimestamp(ts)
+	// Truncate timestamp to step
+	ts -= -ts % step
+
 	max := now.Truncate(time.Hour).Add(-1 * time.Hour).Unix()
 	for start, end, n := ts, ts+step, 0; ok && start < max; start, end, n = end, start+step, 0 {
 		for ; iter.Valid(); iter.Next() {

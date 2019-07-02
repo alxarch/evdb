@@ -173,16 +173,11 @@ func (e *eventDB) resolver(match meter.Fields) resolver {
 
 }
 
-func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fields) (meter.ScanResults, error) {
-	type scanItem struct {
-		meter.Fields
-		V float64
-	}
+func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
 	var (
 		resolver   = e.resolver(match)
-		results    meter.ScanResults
 		minT, maxT = tr.Start.Unix(), tr.End.Unix()
-		batch      []scanItem
+		ts         int64
 		scanValue  = func(value []byte) error {
 			var id, n uint64
 			for len(value) >= 16 {
@@ -194,10 +189,7 @@ func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fiel
 				if fields == nil {
 					continue
 				}
-				batch = append(batch, scanItem{
-					Fields: fields,
-					V:      float64(n),
-				})
+				results = results.Add(fields, ts, float64(int64(n)))
 			}
 			return nil
 		}
@@ -213,19 +205,11 @@ func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fiel
 		key := item.Key()
 		ts, ok := parseEventKey(e.id, key)
 		if ok && minT <= ts && ts < maxT {
-			batch = batch[:0]
-			err := item.Value(scanValue)
+			err = item.Value(scanValue)
 			if err != nil {
 				return nil, err
 			}
-			if len(batch) == 0 {
-				continue
-			}
-			for i := range batch {
-				item := &batch[i]
-				results = results.Add(item.Fields, ts, item.V)
-			}
 		}
 	}
-	return results, nil
+	return
 }
