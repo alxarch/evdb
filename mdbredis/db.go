@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
@@ -55,13 +56,6 @@ const (
 	defaultKeyPrefix      = "meter"
 )
 
-type Options struct {
-	Redis       *redis.Options
-	ScanSize    int64
-	KeyPrefix   string
-	Resolutions []Resolution
-}
-
 func Open(options Options, events ...string) (*DB, error) {
 	byDuration, err := resolutionsByDuration(options.Resolutions...)
 	if err != nil {
@@ -104,6 +98,9 @@ func (s scanners) Scanner(event string) meter.Scanner {
 }
 
 func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
+	if now := time.Now(); q.End.After(now) {
+		q.End = now
+	}
 	res, ok := db.resolutions[q.Step]
 	if !ok {
 		return nil, fmt.Errorf("Invalid query step %s", q.Step)
@@ -153,34 +150,47 @@ func (db *storer) Key(tm time.Time) string {
 const defaultScanSize = 1000
 
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
+	mu := new(sync.Mutex)
+	wg := new(sync.WaitGroup)
+	var errs []error
 	tm, end, step := db.Truncate(q.Start), db.Truncate(q.End), db.Step()
-	for ; !tm.After(end); tm = tm.Add(step) {
-		results, err = db.scan(tm, match, results)
-		if err != nil {
-			return
+	scan := func(tm time.Time) error {
+		key := db.Key(tm)
+		ts := tm.Unix()
+		scan := db.redis.HScan(key, 0, "*", db.scanSize).Iterator()
+		var fields meter.Fields
+		for i := 0; scan.Next(); i++ {
+			if i%2 == 0 {
+				fields = parseFields(fields[:0], scan.Val())
+				sort.Sort(fields)
+			} else if fields.MatchSorted(match) {
+				n, err := strconv.ParseInt(scan.Val(), 10, 64)
+				if err != nil {
+					return err
+				}
+				mu.Lock()
+				results = results.Add(fields, ts, float64(n))
+				mu.Unlock()
+			}
 		}
+		return scan.Err()
+	}
+	for ; !tm.After(end); tm = tm.Add(step) {
+		wg.Add(1)
+		go func(tm time.Time) {
+			defer wg.Done()
+			if err := scan(tm); err != nil {
+				mu.Lock()
+				errs = append(errs, err)
+				mu.Unlock()
+			}
+		}(tm)
+	}
+	wg.Wait()
+	for _, err = range errs {
+		return
 	}
 	return
-}
-
-func (db *storer) scan(tm time.Time, match meter.Fields, results meter.ScanResults) (meter.ScanResults, error) {
-	key := db.Key(tm)
-	ts := tm.Unix()
-	scan := db.redis.HScan(key, 0, "*", db.scanSize).Iterator()
-	var fields meter.Fields
-	for i := 0; scan.Next(); i++ {
-		if i%2 == 0 {
-			fields = parseFields(fields[:0], scan.Val())
-			sort.Sort(fields)
-		} else if fields.MatchSorted(match) {
-			n, err := strconv.ParseInt(scan.Val(), 10, 64)
-			if err != nil {
-				return results, err
-			}
-			results = results.Add(fields, ts, float64(n))
-		}
-	}
-	return results, scan.Err()
 }
 
 func parseFields(fields meter.Fields, s string) meter.Fields {

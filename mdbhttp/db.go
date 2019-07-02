@@ -1,6 +1,7 @@
 package mdbhttp
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,6 +10,12 @@ import (
 
 	"github.com/alxarch/go-meter/v2"
 )
+
+func sendJSON(w http.ResponseWriter, data interface{}) error {
+	enc := json.NewEncoder(w)
+	w.Header().Set("Content-Type", "application/json")
+	return enc.Encode(data)
+}
 
 // Handler creates an HTTP endpoint for a meter.DB
 func Handler(db meter.DB, events ...string) http.HandlerFunc {
@@ -22,8 +29,14 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			queryHandler(w, r)
-			return
+			switch r.URL.Path {
+			case "/":
+				queryHandler(w, r)
+			case "/events":
+				sendJSON(w, map[string]interface{}{
+					"events": events,
+				})
+			}
 		case http.MethodPost:
 			defer r.Body.Close()
 			event := strings.Trim(r.URL.Path, "/")

@@ -26,6 +26,23 @@ type Querier struct {
 	HTTPClient
 }
 
+func ParseTime(v string) (time.Time, error) {
+	if strings.Contains(v, ":") {
+		if strings.Contains(v, ".") {
+			return time.ParseInLocation(time.RFC3339Nano, v, time.UTC)
+		}
+		return time.ParseInLocation(time.RFC3339, v, time.UTC)
+	}
+	if strings.Contains(v, "-") {
+		return time.ParseInLocation("2006-01-02", v, time.UTC)
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(n, 0), nil
+}
+
 func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
 	u, err := url.Parse(qr.URL)
 	if err != nil {
@@ -126,9 +143,7 @@ func QueryHandler(qr meter.Querier) http.HandlerFunc {
 		default:
 			x = results
 		}
-		enc := json.NewEncoder(w)
-		w.Header().Set("Content-Type", "application/json")
-		enc.Encode(x)
+		sendJSON(w, x)
 	}
 }
 
@@ -143,12 +158,13 @@ func ParseQuery(q *meter.Query, values url.Values) {
 	} else {
 		q.Step = -1
 	}
-	start, _ := strconv.ParseInt(values.Get("start"), 10, 64)
-	if start > 0 {
-		q.Start = time.Unix(start, 0).In(time.UTC)
+	start, _ := ParseTime(values.Get("start"))
+	if !start.IsZero() {
+		q.Start = start
 	}
-	if end, _ := strconv.ParseInt(values.Get("end"), 10, 64); end > 0 {
-		q.End = time.Unix(end, 0).In(time.UTC)
+	end, _ := ParseTime(values.Get("end"))
+	if !end.IsZero() {
+		q.End = end
 	}
 
 	match := q.Match[:0]

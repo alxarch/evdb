@@ -103,8 +103,7 @@ func StoreHandler(s meter.Storer) http.HandlerFunc {
 			http.Error(w, http.StatusText(code), code)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"OK"}`))
+		sendJSON(w, json.RawMessage(`{"status":"OK"}`))
 	}
 }
 

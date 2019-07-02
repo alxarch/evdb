@@ -1,39 +1,41 @@
 package main
 
 import (
-	"flag"
 	"context"
+	"flag"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"syscall"
+	"path"
 	"strings"
+	"syscall"
 
+	"github.com/alxarch/go-meter/v2"
 	"github.com/alxarch/go-meter/v2/mdbbadger"
 	"github.com/alxarch/go-meter/v2/mdbhttp"
+	"github.com/alxarch/go-meter/v2/mdbredis"
 	"github.com/dgraph-io/badger/v2"
 )
 
 var (
-	dir      = flag.String("dir", "/var/lib/meterd", "Data dir")
 	addr     = flag.String("addr", ":8080", "HTTP listen address")
 	debug    = flag.Bool("debug", false, "Debug logs")
 	basePath = flag.String("basepath", "", "Basepath for URLs")
+	dbURL    = flag.String("db", "file:///var/lib/meterd", "Data dir")
+	logs     *logger
 )
 
 func main() {
 	flag.Parse()
-	logs := newLogger("[meterd] ", *debug)
+	logs = newLogger("[meterd] ", *debug)
 	events := flag.Args()
-	options := badger.DefaultOptions
-	options.Dir = *dir
-	options.Logger = logs
-	options.ValueDir = *dir
-	db, err := badger.Open(options)
+	db, err := open(*dbURL, events...)
 	if err != nil {
-		logs.err.Fatalf(`Failed to open db: %s`, err)
+		logs.err.Fatal(err)
 	}
 	defer db.Close()
 	sigc := make(chan os.Signal)
@@ -43,8 +45,8 @@ func main() {
 	done := ctx.Done()
 	go func() {
 		select {
-		case <- sigc:
-		case <- done:
+		case <-sigc:
+		case <-done:
 		}
 		logs.Println("Shutting down...")
 		if err := db.Close(); err != nil {
@@ -53,14 +55,10 @@ func main() {
 		}
 		os.Exit(0)
 	}()
-	mdb, err := mdbbadger.Open(db, events...)
-	if err != nil {
-		logs.err.Fatalf("Failed to open db: %s\n", err)
-	}
 	srv := http.Server{
 		Addr:     *addr,
 		ErrorLog: logs.err,
-		Handler:  mdbhttp.Handler(mdb, events...),
+		Handler:  mdbhttp.Handler(db, events...),
 	}
 	if prefix := *basePath; prefix != "" {
 		prefix = "/" + strings.Trim(prefix, "/")
@@ -101,4 +99,40 @@ func (log *logger) Warningf(format string, args ...interface{}) {
 }
 func (log *logger) Infof(format string, args ...interface{}) {
 	log.Logger.Printf(format, args...)
+}
+
+func open(dbURL string, events ...string) (meter.DB, error) {
+	u, err := url.Parse(dbURL)
+	if err != nil {
+		return nil, err
+	}
+	switch u.Scheme {
+	case "redis":
+		opts, err := mdbredis.ParseURL(dbURL)
+		if err != nil {
+			return nil, err
+		}
+		db, err := mdbredis.Open(opts, events...)
+		if err != nil {
+			return nil, err
+		}
+		return db, nil
+	case "file", "badger":
+		options := badger.DefaultOptions
+		options.Dir = path.Join(u.Host, u.Path)
+		options.Logger = logs
+		options.ValueDir = options.Dir
+		b, err := badger.Open(options)
+		if err != nil {
+			logs.err.Fatalf(`Failed to open db: %s`, err)
+		}
+		db, err := mdbbadger.Open(b, events...)
+		if err != nil {
+			logs.err.Fatalf("Failed to open db: %s\n", err)
+		}
+		return db, nil
+	default:
+		return nil, fmt.Errorf(`Invalid db URL: %s`, dbURL)
+	}
+
 }
