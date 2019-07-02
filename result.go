@@ -2,16 +2,28 @@ package meter
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"strconv"
-	"time"
 )
 
 // Result is a query result
 type Result struct {
 	ScanResult
-	Event string `json:"event"`
+	Event string `json:"event,omitempty"`
 }
+
+// Results is a slice of results
+type Results []Result
+
+// DataPoint is a time/count pair
+type DataPoint struct {
+	Timestamp int64
+	Value     float64
+}
+
+// DataPoints is a collection of DataPoints
+type DataPoints []DataPoint
 
 // ResultType is a type of result
 type ResultType int
@@ -38,25 +50,9 @@ func ResultTypeFromString(s string) ResultType {
 	}
 }
 
-// Add adds n times at ts time to a result
-func (r *Result) Add(ts int64, n float64) {
-	r.Total += n
-	for i := len(r.Data) - 1; 0 <= i && i < len(r.Data); i-- {
-		d := &r.Data[i]
-		if d.Timestamp == ts {
-			d.Value += n
-			return
-		}
-	}
-	r.Data = append(r.Data, DataPoint{Timestamp: ts, Value: n})
-	return
-}
-
-// Results is a slice of results
-type Results []Result
-
 // Add adds a result
 func (results Results) Add(event string, fields Fields, ts int64, n float64) Results {
+
 	for i := range results {
 		r := &results[i]
 		if r.Event == event && r.Fields.Equal(fields) {
@@ -68,21 +64,12 @@ func (results Results) Add(event string, fields Fields, ts int64, n float64) Res
 		Event: event,
 		ScanResult: ScanResult{
 			Fields: fields,
-			Total:  n,
 			Data:   []DataPoint{{ts, n}},
 		},
 	})
 }
 
-// DataPoint is a time/count pair
-type DataPoint struct {
-	Timestamp int64
-	Value     float64
-}
-
-// DataPoints is a collection of DataPoints
-type DataPoints []DataPoint
-
+// Add adds a datapoint
 func (s DataPoints) Add(t int64, v float64) DataPoints {
 	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
 		d := &s[i]
@@ -94,17 +81,18 @@ func (s DataPoints) Add(t int64, v float64) DataPoints {
 	return append(s, DataPoint{Timestamp: t, Value: v})
 }
 
-// Find searches for the count at a specific time
-func (s DataPoints) Find(tm time.Time) (float64, bool) {
-	if i := s.IndexOf(tm); 0 <= i && i < len(s) {
-		return s[i].Value, true
+// ValueAt searches for the value at a specific time
+func (s DataPoints) ValueAt(ts int64) float64 {
+	for i := range s {
+		if d := &s[i]; d.Timestamp == ts {
+			return d.Value
+		}
 	}
-	return 0, false
+	return math.NaN()
 }
 
 // IndexOf returns the index of tm in the collection of data points
-func (s DataPoints) IndexOf(tm time.Time) int {
-	ts := tm.Unix()
+func (s DataPoints) IndexOf(ts int64) int {
 	for i := range s {
 		if d := &s[i]; d.Timestamp == ts {
 			return i
@@ -113,32 +101,45 @@ func (s DataPoints) IndexOf(tm time.Time) int {
 	return -1
 }
 
-// Sort sorts a slice of data points in place
-func (s DataPoints) Sort() {
-	sort.Sort(s)
+func (s DataPoints) Avg() float64 {
+	return s.Sum() / float64(len(s))
 }
 
+func (s DataPoints) Sum() (sum float64) {
+	for i := range s {
+		d := &s[i]
+		sum += d.Value
+	}
+	return
+}
+
+// Len implements sort.Interface
 func (s DataPoints) Len() int {
 	return len(s)
 }
 
+// Swap implements sort.Interface
 func (s DataPoints) Swap(i, j int) {
 	s[i], s[j] = s[j], s[i]
 }
 
+// Less implements sort.Interface
 func (s DataPoints) Less(i, j int) bool {
 	return s[i].Timestamp < s[j].Timestamp
 }
 
-// MarshalJSON implements json.Marshaler interface
-func (p DataPoint) MarshalJSON() (data []byte, err error) {
-	data = make([]byte, 0, 64)
+func (p DataPoint) appendJSON(data []byte) ([]byte, error) {
 	data = append(data, '[')
 	data = strconv.AppendInt(data, p.Timestamp, 10)
 	data = append(data, ',')
 	data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
 	data = append(data, ']')
 	return data, nil
+}
+
+// MarshalJSON implements json.Marshaler interface
+func (p DataPoint) MarshalJSON() ([]byte, error) {
+	return p.appendJSON(make([]byte, 0, 64))
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface
@@ -172,11 +173,7 @@ func (s DataPoints) MarshalJSON() (data []byte, err error) {
 			data = append(data, ',')
 
 		}
-		data = append(data, '[')
-		data = strconv.AppendInt(data, p.Timestamp, 10)
-		data = append(data, ',')
-		data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
-		data = append(data, ']')
+		data, _ = p.appendJSON(data)
 	}
 	data = append(data, ']')
 	return data, nil
@@ -197,17 +194,30 @@ func (s *FieldSummary) Add(value string, n float64) {
 	s.Values[value] += n
 }
 
-// FieldSummaries is a slice of FieldSummary results
-type FieldSummaries []FieldSummary
+type Total struct {
+	Event  string  `json:"event"`
+	Fields Fields  `json:"fields,omitempty"`
+	Total  float64 `json:"total"`
+}
+
+type Totals []Total
 
 // Totals returns a totals-only Results slice
-func (results Results) Totals() Results {
+func (results Results) Totals() (totals Totals) {
+	totals = make([]Total, len(results))
 	for i := range results {
 		r := &results[i]
-		r.Data = r.Data[:0]
+		totals[i] = Total{
+			Event:  r.Event,
+			Fields: r.Fields,
+			Total:  r.Data.Sum(),
+		}
 	}
-	return results
+	return
 }
+
+// FieldSummaries is a slice of FieldSummary results
+type FieldSummaries []FieldSummary
 
 // FieldSummaries converts a series of results to a slice of FieldSummary results
 func (results Results) FieldSummaries() (s FieldSummaries) {
@@ -215,7 +225,7 @@ func (results Results) FieldSummaries() (s FieldSummaries) {
 		r := &results[i]
 		for j := range r.Fields {
 			f := &r.Fields[j]
-			s = s.append(r.Event, f.Label, f.Value, r.Total)
+			s = s.append(r.Event, f.Label, f.Value, r.Data.Sum())
 		}
 	}
 	return s
@@ -265,11 +275,12 @@ func (results Results) EventSummaries(empty string) *EventSummaries {
 	sort.Strings(s.Events)
 	for i := range results {
 		r := &results[i]
-		if r.Total == 0 {
+		n := r.Data.Sum()
+		if n == 0 {
 			continue
 		}
 		values = r.Fields.AppendValues(values[:0], empty, s.Labels...)
-		s.add(r.Event, values, r.Total)
+		s.add(r.Event, values, n)
 	}
 
 	return s

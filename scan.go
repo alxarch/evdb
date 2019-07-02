@@ -70,13 +70,11 @@ func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results
 
 type ScanResult struct {
 	Fields Fields     `json:"fields,omitempty"`
-	Total  float64    `json:"total"`
 	Data   DataPoints `json:"data,omitempty"`
 }
 
 // Add ads a
 func (r *ScanResult) Add(t int64, v float64) {
-	r.Total += v
 	r.Data = r.Data.Add(t, v)
 }
 
@@ -92,7 +90,6 @@ func (results ScanResults) Add(fields Fields, t int64, v float64) ScanResults {
 	}
 	return append(results, ScanResult{
 		Fields: fields,
-		Total:  v,
 		Data:   []DataPoint{{t, v}},
 	})
 
