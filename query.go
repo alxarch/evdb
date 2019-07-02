@@ -51,7 +51,7 @@ func (tr *TimeRange) Sequence() []time.Time {
 	return seq
 }
 
-// QueryRunner runs queries
+// Querier runs queries
 type Querier interface {
 	Query(ctx context.Context, q Query, events ...string) (Results, error)
 }
