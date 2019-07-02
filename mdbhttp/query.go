@@ -1,4 +1,4 @@
-package httpdb
+package mdbhttp
 
 import (
 	"context"

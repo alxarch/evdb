@@ -1,4 +1,4 @@
-package redisdb_test
+package mdbredis_test
 
 import (
 	"context"
@@ -6,14 +6,14 @@ import (
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/go-meter/v2/db/redis"
+	"github.com/alxarch/go-meter/v2/mdbredis"
 	"github.com/go-redis/redis"
 )
 
 func TestDB(t *testing.T) {
 	opts, _ := redis.ParseURL("redis://127.0.0.1:6379/10")
 	rc := redis.NewClient(opts)
-	db, err := redisdb.Open(rc, 1000, "meter", redisdb.ResolutionHourly)
+	db, err := mdbredis.Open(rc, 1000, "meter", mdbredis.ResolutionHourly)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestDB(t *testing.T) {
 		TimeRange: meter.TimeRange{
 			Start: now,
 			End:   now,
-			Step: time.Hour,
+			Step:  time.Hour,
 		},
 		Group: []string{"foo"},
 	}

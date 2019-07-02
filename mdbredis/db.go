@@ -1,4 +1,4 @@
-package redisdb
+package mdbredis
 
 import (
 	"context"
