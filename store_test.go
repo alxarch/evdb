@@ -42,7 +42,7 @@ func Test_MemoryStore(t *testing.T) {
 			{Label: "color", Value: "blue"},
 		},
 	}
-	results, err := m.Scan(ctx, &q1)
+	results, err := m.Scan(ctx, q1.TimeRange, q1.Match)
 	if err != nil {
 		t.Fatalf(`Unexpected error %s`, err)
 	}

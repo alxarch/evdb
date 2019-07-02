@@ -53,18 +53,14 @@ func (m *MemoryStore) Scanner(event string) Scanner {
 }
 
 // Scan implements the Scanner interface
-func (m *MemoryStore) Scan(ctx context.Context, q *Query) (ScanResults, error) {
-	var (
-		match   = q.Match.Sorted()
-		results ScanResults
-	)
-	step := int64(q.Step / time.Second)
+func (m *MemoryStore) Scan(ctx context.Context, span TimeRange, match Fields) (results ScanResults, err error) {
+	step := int64(span.Step / time.Second)
 	if step < 1 {
 		step = 1
 	}
 	for i := range m.data {
 		d := &m.data[i]
-		if d.Time.Before(q.Start) {
+		if d.Time.Before(span.Start) {
 			continue
 		}
 		for j := range d.Counters {
@@ -72,15 +68,12 @@ func (m *MemoryStore) Scan(ctx context.Context, q *Query) (ScanResults, error) {
 			fields := ZipFields(d.Labels, c.Values)
 			ok := fields.MatchSorted(match)
 			if ok {
-				if len(q.Group) > 0 {
-					fields = fields.GroupBy(q.EmptyValue, q.Group)
-				}
 				tm := stepTS(d.Time.Unix(), step)
 				results = results.Add(fields, tm, float64(c.Count))
 			}
 		}
 	}
-	return results, nil
+	return
 }
 
 // SyncTask dumps an Event to an EventStore

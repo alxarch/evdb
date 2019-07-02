@@ -149,9 +149,8 @@ func (e *eventDB) Fields(id uint64) (meter.Fields, error) {
 
 type resolver func(uint64) (meter.Fields, error)
 
-func (e *eventDB) resolver(q *meter.Query) resolver {
+func (e *eventDB) resolver(match meter.Fields) resolver {
 	cache := make(map[uint64]meter.Fields)
-	match := q.Match.Sorted()
 	return func(id uint64) (meter.Fields, error) {
 		fields, ok := cache[id]
 		if ok {
@@ -164,9 +163,6 @@ func (e *eventDB) resolver(q *meter.Query) resolver {
 			}
 			fields = nil
 		} else if fields.MatchSorted(match) {
-			if len(q.Group) > 0 {
-				fields = fields.GroupBy(q.EmptyValue, q.Group)
-			}
 		} else {
 			fields = nil
 		}
@@ -177,15 +173,15 @@ func (e *eventDB) resolver(q *meter.Query) resolver {
 
 }
 
-func (e *eventDB) Scan(ctx context.Context, q *meter.Query) (meter.ScanResults, error) {
+func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fields) (meter.ScanResults, error) {
 	type scanItem struct {
 		meter.Fields
 		V float64
 	}
 	var (
-		resolver   = e.resolver(q)
+		resolver   = e.resolver(match)
 		results    meter.ScanResults
-		minT, maxT = q.Start.Unix(), q.End.Unix()
+		minT, maxT = tr.Start.Unix(), tr.End.Unix()
 		batch      []scanItem
 		scanValue  = func(value []byte) error {
 			var id, n uint64
@@ -211,7 +207,7 @@ func (e *eventDB) Scan(ctx context.Context, q *meter.Query) (meter.ScanResults, 
 	defer txn.Discard()
 	iter := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer iter.Close()
-	seekEvent(iter, e.id, q.Start)
+	seekEvent(iter, e.id, tr.Start)
 	for ; iter.Valid(); iter.Next() {
 		item := iter.Item()
 		key := item.Key()

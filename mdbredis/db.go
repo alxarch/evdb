@@ -35,9 +35,9 @@ func (db *DB) Storer(event string) meter.Storer {
 }
 
 type storer struct {
-	db    *DB
+	*DB
 	event string
-	res   Resolution
+	Resolution
 }
 
 func (db *DB) AddEvent(event string) {
@@ -49,9 +49,9 @@ func (db *DB) AddEvent(event string) {
 	storers := make([]meter.Storer, 0, len(db.resolutions))
 	for _, res := range db.resolutions {
 		storers = append(storers, &storer{
-			db:    db,
-			event: event,
-			res:   res,
+			DB:         db,
+			event:      event,
+			Resolution: res,
 		})
 	}
 	db.events[event] = meter.TeeStore(storers...)
@@ -105,66 +105,26 @@ type scanResult struct {
 	Fields meter.Fields
 	Event  string
 }
+type scanners struct {
+	*DB
+	res Resolution
+}
+
+func (s scanners) Scanner(event string) meter.Scanner {
+	return &storer{
+		DB:         s.DB,
+		event:      event,
+		Resolution: s.res,
+	}
+}
 
 func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
 	res, ok := db.resolutions[q.Step]
 	if !ok {
 		return nil, fmt.Errorf("Invalid query step %s", q.Step)
 	}
-	ch := make(chan scanResult, len(events))
-	errc := make(chan error, len(events))
-	done := ctx.Done()
-	ts := q.Sequence()
-	wg := new(sync.WaitGroup)
-	results := meter.Results(make([]meter.Result, 0, len(events)))
-	go func() {
-		defer close(errc)
-		for {
-			select {
-			case r, ok := <-ch:
-				if ok {
-					results = results.Add(r.Event, r.Fields, r.Time, float64(r.Count))
-				} else {
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
-	for i := range events {
-		event := events[i]
-		if _, ok := db.events[event]; !ok {
-			continue
-		}
-		s := storer{
-			event: events[i],
-			res:   res,
-			db:    db,
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var err error
-			for _, tm := range ts {
-				err = s.scan(tm, &q, ch, done)
-				if err != nil {
-					break
-				}
-
-			}
-			errc <- err
-		}()
-
-	}
-	wg.Wait()
-	close(ch)
-	for err := range errc {
-		if err != nil {
-			return nil, err
-		}
-	}
-	return results, nil
+	s := scanners{db, res}
+	return q.Scan(ctx, s, events...)
 }
 
 func (db *storer) Store(s *meter.Snapshot) error {
@@ -173,12 +133,11 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	}
 	labels := s.Labels
 	sort.Strings(labels)
-	pipeline := db.db.redis.Pipeline()
+	pipeline := db.redis.Pipeline()
 	defer pipeline.Close()
 	var buf []byte
-	r := db.res
 	key := db.Key(s.Time)
-	pipeline.Expire(key, r.TTL())
+	pipeline.Expire(key, db.TTL())
 	for j := range s.Counters {
 		c := &s.Counters[j]
 		buf := appendField(buf[:0], s.Labels, c.Values)
@@ -189,60 +148,54 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	return err
 }
 
-func (s *storer) appendKey(data []byte, tm time.Time) []byte {
-	if s.db.keyPrefix != "" {
-		data = append(data, s.db.keyPrefix...)
+func (db *storer) appendKey(data []byte, tm time.Time) []byte {
+	if db.keyPrefix != "" {
+		data = append(data, db.keyPrefix...)
 		data = append(data, labelSeparator)
 	}
-	data = append(data, s.res.Name()...)
+	data = append(data, db.Resolution.Name()...)
 	data = append(data, labelSeparator)
-	data = append(data, s.res.MarshalTime(tm)...)
+	data = append(data, db.MarshalTime(tm)...)
 	data = append(data, labelSeparator)
-	data = append(data, s.event...)
+	data = append(data, db.event...)
 	return data
 }
 
-func (s *storer) Key(tm time.Time) string {
-	return string(s.appendKey(nil, tm))
+func (db *storer) Key(tm time.Time) string {
+	return string(db.appendKey(nil, tm))
 }
 
 const defaultScanSize = 1000
 
-func (s *storer) scan(tm time.Time, q *meter.Query, items chan<- scanResult, done <-chan struct{}) error {
-	key := s.Key(tm)
+func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
+	tm, end, step := db.Truncate(q.Start), db.Truncate(q.End), db.Step()
+	for ; !tm.After(end); tm = tm.Add(step) {
+		results, err = db.scan(tm, match, results)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (db *storer) scan(tm time.Time, match meter.Fields, results meter.ScanResults) (meter.ScanResults, error) {
+	key := db.Key(tm)
 	ts := tm.Unix()
-	scan := s.db.redis.HScan(key, 0, "*", s.db.scanSize).Iterator()
-	i := 0
-	var fields, grouped meter.Fields
-	match := q.Match.Sorted()
-	for scan.Next() {
+	scan := db.redis.HScan(key, 0, "*", db.scanSize).Iterator()
+	var fields meter.Fields
+	for i := 0; scan.Next(); i++ {
 		if i%2 == 0 {
 			fields = parseFields(fields[:0], scan.Val())
 			sort.Sort(fields)
 		} else if fields.MatchSorted(match) {
 			n, err := strconv.ParseInt(scan.Val(), 10, 64)
 			if err != nil {
-				return err
+				return results, err
 			}
-			if len(q.Group) > 0 {
-				grouped = fields.GroupBy(q.EmptyValue, q.Group)
-			} else {
-				grouped = fields.Copy()
-			}
-			select {
-			case items <- scanResult{
-				Time:   ts,
-				Event:  s.event,
-				Fields: grouped,
-				Count:  n,
-			}:
-			case <-done:
-				return nil
-			}
+			results = results.Add(fields.Copy(), ts, float64(n))
 		}
-		i++
 	}
-	return scan.Err()
+	return results, scan.Err()
 }
 
 // func (db *DB) Scan(ctx context.Context, q *meter.Query) meter.ScanIterator {

@@ -73,7 +73,7 @@ func (r Resolution) WithCodec(codec tcodec.TimeCodec) Resolution {
 	return r
 }
 
-func (r Resolution) Round(t time.Time) time.Time {
+func (r Resolution) Truncate(t time.Time) time.Time {
 	return t.Truncate(r.step).In(t.Location())
 }
 func (r Resolution) AddSteps(t time.Time, n int) time.Time {

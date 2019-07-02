@@ -7,7 +7,7 @@ import (
 
 // Scanner scans stored data according to a query
 type Scanner interface {
-	Scan(ctx context.Context, q *Query) (ScanResults, error)
+	Scan(ctx context.Context, span TimeRange, match Fields) (ScanResults, error)
 }
 
 // Scanners provides a Scanner for an event
@@ -23,6 +23,7 @@ func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results
 	done := ctx.Done()
 	errc := make(chan error, len(events))
 	ch := make(chan Result, len(events))
+	match := q.Match.Sorted()
 	wg := new(sync.WaitGroup)
 	var agg Results
 	go func() {
@@ -40,16 +41,20 @@ func (q *Query) Scan(ctx context.Context, s Scanners, events ...string) (Results
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, err := s.Scan(ctx, q)
+			results, err := s.Scan(ctx, q.TimeRange, match)
 			if err != nil {
 				errc <- err
 				return
 			}
-			for i := range results {
+			if len(q.Group) > 0 {
+				results = results.GroupBy(q.Group, q.EmptyValue)
+			}
+
+			for _, r := range results {
 				select {
 				case ch <- Result{
 					Event:      event,
-					ScanResult: results[i],
+					ScanResult: r,
 				}:
 				case <-done:
 					errc <- ctx.Err()
@@ -103,4 +108,34 @@ func (r *ScanResult) Reset() {
 	*r = ScanResult{
 		Data: r.Data[:0],
 	}
+}
+
+func (s DataPoints) Merge(data DataPoints) DataPoints {
+	for i := range data {
+		d := &data[i]
+		s.Add(d.Timestamp, d.Value)
+	}
+	return s
+}
+func (results ScanResults) Merge(fields Fields, data DataPoints) ScanResults {
+	for i := range results {
+		r := &results[i]
+		if r.Fields.Equal(fields) {
+			r.Data = r.Data.Merge(data)
+			return results
+		}
+	}
+	return append(results, ScanResult{
+		Fields: fields,
+		Data:   data,
+	})
+}
+
+func (results ScanResults) GroupBy(labels []string, empty string) (grouped ScanResults) {
+	for i := range results {
+		r := &results[i]
+		fields := r.Fields.GroupBy(empty, labels)
+		grouped = grouped.Merge(fields, r.Data)
+	}
+	return
 }
