@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	redis "github.com/alxarch/fastredis"
+	"github.com/alxarch/fastredis/resp"
 	meter "github.com/alxarch/go-meter/v2"
-	"github.com/gomodule/redigo/redis"
 )
 
 type DB struct {
@@ -62,12 +64,8 @@ func Open(options Options, events ...string) (*DB, error) {
 	if options.ScanSize <= 0 {
 		options.ScanSize = defaultScanSize
 	}
-	pool, err := redisPool(options.RedisURL)
-	if err != nil {
-		return nil, err
-	}
 	db := DB{
-		redis:       pool,
+		redis:       redis.NewPool(&options.Redis),
 		scanSize:    options.ScanSize,
 		keyPrefix:   options.KeyPrefix,
 		events:      make(map[string]meter.Storer),
@@ -80,7 +78,8 @@ func Open(options Options, events ...string) (*DB, error) {
 }
 
 func (db *DB) Close() error {
-	return db.redis.Close()
+	// return db.redis.Close()
+	return nil
 }
 
 type scanners struct {
@@ -114,19 +113,18 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	}
 	labels := s.Labels
 	sort.Strings(labels)
-	conn := db.redis.Get()
-	defer conn.Close()
+	p := redis.BlankPipeline()
+	defer p.Close()
 	var buf []byte
 	key := db.Key(s.Time)
-	ttl := db.TTL() / time.Millisecond
-	conn.Send("PEXPIRE", int64(ttl))
+	p.Expire(key, db.TTL())
 	for j := range s.Counters {
 		c := &s.Counters[j]
 		buf := appendField(buf[:0], s.Labels, c.Values)
 		field := string(buf)
-		conn.Send("HINCRBY", key, field, c.Count)
+		p.HIncrBy(key, field, c.Count)
 	}
-	return conn.Flush()
+	return db.redis.Do(p, nil)
 }
 
 func (db *storer) appendKey(data []byte, tm time.Time) []byte {
@@ -148,49 +146,64 @@ func (db *storer) Key(tm time.Time) string {
 
 const defaultScanSize = 1000
 
-func (db *storer) readAll(key string) (map[string]int64, error) {
-	conn := db.redis.Get()
-	defer conn.Close()
-	return redis.Int64Map(conn.Do("HGETALL", key))
-}
+// func (db *storer) readAll(key string) (map[string]int64, error) {
+// 	p := redis.Get()
+// 	conn := db.redis.Get()
+// 	defer conn.Close()
+// 	return redis.Int64Map(conn.Do("HGETALL", key))
+// }
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
 	var (
+		p             = redis.BlankPipeline()
 		key           []byte
 		fields        meter.Fields
+		ts            int64
 		index         = map[string]*meter.ScanResult{}
 		skip          = &meter.ScanResult{}
 		tm, end, step = db.Truncate(q.Start), db.Truncate(q.End), db.Step()
-	)
-	for ; !tm.After(end); tm = tm.Add(step) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		key = db.appendKey(key[:0], tm)
-		reply, err := db.readAll(string(key))
-		if err != nil {
-			return nil, err
-		}
-		ts := tm.Unix()
-		for v, n := range reply {
-			r := index[v]
+		scan          = func(v resp.Value, k []byte) error {
+			r := index[string(k)]
 			if r == skip {
-				continue
+				return nil
 			}
 			if r == nil {
-				fields = parseFields(fields[:0], v)
+				fields = parseFields(fields[:0], string(k))
 				sort.Sort(fields)
-				if fields.MatchSorted(match) {
-					results = append(results, meter.ScanResult{
-						Fields: fields.Copy(),
-						Data:   meter.DataPoints{{Timestamp: ts, Value: float64(n)}},
-					})
-					index[v] = &results[len(results)-1]
-				} else {
-					index[v] = skip
+				if !fields.MatchSorted(match) {
+					index[string(k)] = skip
+					return nil
 				}
-			} else {
-				r.Data = r.Data.Add(ts, float64(n))
+
+				results = append(results, meter.ScanResult{
+					Fields: fields.Copy(),
+					Data:   meter.DataPoints{{Timestamp: ts, Value: 0}},
+				})
+				r = &results[len(results)-1]
+				index[string(k)] = r
 			}
+			n, err := strconv.ParseFloat(string(v.Bytes()), 64)
+			if err != nil {
+				return err
+			}
+			r.Data = r.Data.Add(ts, n)
+			return nil
+		}
+	)
+	defer p.Close()
+	conn, err := db.redis.Get(time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	for ; !tm.After(end); tm = tm.Add(step) {
+		key = db.appendKey(key[:0], tm)
+		iter := redis.HScan(string(key), "", db.scanSize)
+		ts = tm.Unix()
+		if err := iter.Each(conn, scan); err != nil {
+			return nil, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 	}
 	return
