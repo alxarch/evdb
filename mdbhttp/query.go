@@ -145,8 +145,11 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
 		events := values["event"]
-		q := meter.Query{}
-		ParseQuery(&q, values)
+		q, err := ParseQuery(values)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if q.Start.IsZero() {
 			q.Start = time.Unix(0, 0)
 		}
@@ -172,6 +175,7 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 		results, err := querier.Query(r.Context(), q, events...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		var x interface{}
 		switch typ {
@@ -189,7 +193,7 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 }
 
 // ParseQuery sets query values from a URL query
-func ParseQuery(q *meter.Query, values url.Values) {
+func ParseQuery(values url.Values) (q meter.Query, err error) {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
 			q.Step, _ = time.ParseDuration(step[0])
@@ -199,11 +203,17 @@ func ParseQuery(q *meter.Query, values url.Values) {
 	} else {
 		q.Step = -1
 	}
-	start, _ := ParseTime(values.Get("start"))
+	start, err := ParseTime(values.Get("start"))
+	if err != nil {
+		return
+	}
 	if !start.IsZero() {
 		q.Start = start
 	}
-	end, _ := ParseTime(values.Get("end"))
+	end, err := ParseTime(values.Get("end"))
+	if err != nil {
+		return
+	}
 	if !end.IsZero() {
 		q.End = end
 	}
@@ -231,6 +241,7 @@ func ParseQuery(q *meter.Query, values url.Values) {
 	sort.Stable(match)
 	q.Match, q.Group = match, group
 	q.EmptyValue = values.Get("empty")
+	return
 }
 
 func indexOf(values []string, s string) int {
