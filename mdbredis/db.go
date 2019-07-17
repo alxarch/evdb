@@ -117,7 +117,7 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	}
 	labels := s.Labels
 	sort.Strings(labels)
-	p := redis.BlankPipeline()
+	p := db.redis.Pipeline()
 	defer redis.ReleasePipeline(p)
 	var buf []byte
 	key := db.Key(s.Time)
@@ -159,7 +159,6 @@ const defaultScanSize = 1000
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
 	var (
 		sum           = meter.MergeSum{}
-		p             = redis.BlankPipeline()
 		key           []byte
 		fields        meter.Fields
 		ts            int64
@@ -194,7 +193,6 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 			return nil
 		}
 	)
-	defer redis.ReleasePipeline(p)
 	conn, err := db.redis.Get()
 	if err != nil {
 		return nil, err
