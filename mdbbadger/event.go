@@ -173,6 +173,8 @@ func (e *eventDB) resolver(match meter.Fields) resolver {
 
 }
 
+var merger = meter.MergeSum{}
+
 func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
 	var (
 		resolver   = e.resolver(match)

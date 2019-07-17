@@ -170,8 +170,8 @@ func TestFieldsJSON(t *testing.T) {
 	}{
 		{"nil", nil, `null`},
 		{"blank", meter.Fields{}, `{}`},
-		{"some", meter.Fields{{"a", "b"}}, `{"a":"b"}`},
-		{"more", meter.Fields{{"a", "b"}, {"foo", "bar"}}, `{"a":"b","foo":"bar"}`},
+		{"some", meter.Fields{{"a", "b"}}, `{"a":["b"]}`},
+		{"more", meter.Fields{{"a", "b"}, {"foo", "bar"}}, `{"a":["b"],"foo":["bar"]}`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

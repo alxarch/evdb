@@ -64,8 +64,12 @@ func Open(options Options, events ...string) (*DB, error) {
 	if options.ScanSize <= 0 {
 		options.ScanSize = defaultScanSize
 	}
+	pool := new(redis.Pool)
+	if err := pool.ParseURL(options.Redis); err != nil {
+		return nil, err
+	}
 	db := DB{
-		redis:       redis.NewPool(&options.Redis),
+		redis:       pool,
 		scanSize:    options.ScanSize,
 		keyPrefix:   options.KeyPrefix,
 		events:      make(map[string]meter.Storer),
@@ -114,7 +118,7 @@ func (db *storer) Store(s *meter.Snapshot) error {
 	labels := s.Labels
 	sort.Strings(labels)
 	p := redis.BlankPipeline()
-	defer p.Close()
+	defer redis.ReleasePipeline(p)
 	var buf []byte
 	key := db.Key(s.Time)
 	p.Expire(key, db.TTL())
@@ -154,6 +158,7 @@ const defaultScanSize = 1000
 // }
 func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
 	var (
+		sum           = meter.MergeSum{}
 		p             = redis.BlankPipeline()
 		key           []byte
 		fields        meter.Fields
@@ -161,7 +166,7 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 		index         = map[string]*meter.ScanResult{}
 		skip          = &meter.ScanResult{}
 		tm, end, step = db.Truncate(q.Start), db.Truncate(q.End), db.Step()
-		scan          = func(v resp.Value, k []byte) error {
+		scan          = func(k []byte, v resp.Value) error {
 			r := index[string(k)]
 			if r == skip {
 				return nil
@@ -185,16 +190,16 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 			if err != nil {
 				return err
 			}
-			r.Data = r.Data.Add(ts, n)
+			r.Data = r.Data.MergePoint(sum, ts, n)
 			return nil
 		}
 	)
-	defer p.Close()
-	conn, err := db.redis.Get(time.Time{})
+	defer redis.ReleasePipeline(p)
+	conn, err := db.redis.Get()
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
+	defer db.redis.Put(conn)
 	for ; !tm.After(end); tm = tm.Add(step) {
 		key = db.appendKey(key[:0], tm)
 		iter := redis.HScan(string(key), "", db.scanSize)

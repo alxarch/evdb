@@ -1,10 +1,7 @@
 package meter
 
 import (
-	"encoding/json"
-	"math"
 	"sort"
-	"strconv"
 )
 
 // Result is a query result
@@ -16,17 +13,28 @@ type Result struct {
 // Results is a slice of results
 type Results []Result
 
-// DataPoint is a time/count pair
-type DataPoint struct {
-	Timestamp int64
-	Value     float64
-}
-
-// DataPoints is a collection of DataPoints
-type DataPoints []DataPoint
-
 // ResultType is a type of result
 type ResultType int
+
+func (results Results) ByEvent() map[string]ScanResult {
+	byEvent := make(map[string]ScanResult)
+	for i := range results {
+		r := &results[i]
+		s := byEvent[r.Event]
+		data := s.Data.Merge(mergeSum, r.Data...)
+		fields := s.Fields.Merge(r.Fields...)
+		byEvent[r.Event] = ScanResult{
+			Fields: fields,
+			Data:   data,
+		}
+	}
+	for event, r := range byEvent {
+		sort.Sort(r.Data)
+		sort.Sort(r.Fields)
+		byEvent[event] = r
+	}
+	return byEvent
+}
 
 // Result types
 const (
@@ -56,127 +64,17 @@ func (results Results) Add(event string, fields Fields, ts int64, n float64) Res
 	for i := range results {
 		r := &results[i]
 		if r.Event == event && r.Fields.Equal(fields) {
-			r.Add(ts, n)
+			r.Data = r.Data.MergePoint(mergeSum, ts, n)
 			return results
 		}
 	}
 	return append(results, Result{
 		Event: event,
 		ScanResult: ScanResult{
-			Fields: fields.Copy(),
+			Fields: fields.Copy(), // Do not keep a reference to Fields
 			Data:   []DataPoint{{ts, n}},
 		},
 	})
-}
-
-// Add adds a datapoint
-func (s DataPoints) Add(t int64, v float64) DataPoints {
-	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
-		d := &s[i]
-		if d.Timestamp == t {
-			d.Value += v
-			return s
-		}
-	}
-	return append(s, DataPoint{Timestamp: t, Value: v})
-}
-
-// ValueAt searches for the value at a specific time
-func (s DataPoints) ValueAt(ts int64) float64 {
-	for i := range s {
-		if d := &s[i]; d.Timestamp == ts {
-			return d.Value
-		}
-	}
-	return math.NaN()
-}
-
-// IndexOf returns the index of tm in the collection of data points
-func (s DataPoints) IndexOf(ts int64) int {
-	for i := range s {
-		if d := &s[i]; d.Timestamp == ts {
-			return i
-		}
-	}
-	return -1
-}
-
-func (s DataPoints) Avg() float64 {
-	return s.Sum() / float64(len(s))
-}
-
-func (s DataPoints) Sum() (sum float64) {
-	for i := range s {
-		d := &s[i]
-		sum += d.Value
-	}
-	return
-}
-
-// Len implements sort.Interface
-func (s DataPoints) Len() int {
-	return len(s)
-}
-
-// Swap implements sort.Interface
-func (s DataPoints) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-// Less implements sort.Interface
-func (s DataPoints) Less(i, j int) bool {
-	return s[i].Timestamp < s[j].Timestamp
-}
-
-func (p DataPoint) appendJSON(data []byte) ([]byte, error) {
-	data = append(data, '[')
-	data = strconv.AppendInt(data, p.Timestamp, 10)
-	data = append(data, ',')
-	data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
-	data = append(data, ']')
-	return data, nil
-}
-
-// MarshalJSON implements json.Marshaler interface
-func (p DataPoint) MarshalJSON() ([]byte, error) {
-	return p.appendJSON(make([]byte, 0, 64))
-}
-
-// UnmarshalJSON implements json.Unmarshaler interface
-func (p *DataPoint) UnmarshalJSON(data []byte) error {
-	value := [2]json.Number{}
-	err := json.Unmarshal(data, &value)
-	if err != nil {
-		return err
-	}
-	p.Timestamp, err = value[0].Int64()
-	if err != nil {
-		return err
-	}
-	p.Value, err = value[1].Float64()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-// MarshalJSON implements json.Marshal interface
-func (s DataPoints) MarshalJSON() (data []byte, err error) {
-	if s == nil {
-		return nil, nil
-	}
-	data = make([]byte, 1, len(s)*64+2)
-	data[0] = '['
-	for i := range s {
-		p := &s[i]
-		if i != 0 {
-			data = append(data, ',')
-
-		}
-		data, _ = p.appendJSON(data)
-	}
-	data = append(data, ']')
-	return data, nil
 }
 
 // FieldSummary is a query result presented as a summary of field values

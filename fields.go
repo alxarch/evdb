@@ -43,13 +43,18 @@ func (fields Fields) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Marshaler interface
 func (fields *Fields) UnmarshalJSON(data []byte) error {
-	values := make(map[string]string)
+	values := make(map[string][]string)
 	if err := json.Unmarshal(data, &values); err != nil {
 		return err
 	}
 	fs := (*fields)[:0]
 	for label := range values {
-		fs = append(fs, Field{Label: label, Value: values[label]})
+		for _, v := range values[label] {
+			fs = fs.Add(Field{
+				Label: label,
+				Value: v,
+			})
+		}
 	}
 	*fields = fs
 	return nil
@@ -113,16 +118,33 @@ func (fields Fields) Less(i, j int) bool {
 }
 
 // Map converts a Fields collection to a map
-func (fields Fields) Map() map[string]string {
+func (fields Fields) Map() map[string][]string {
 	if fields == nil {
 		return nil
 	}
-	m := make(map[string]string, len(fields))
+	m := make(map[string][]string, len(fields))
 	for i := range fields {
 		f := &fields[i]
-		m[f.Label] = f.Value
+		m[f.Label] = append(m[f.Label], f.Value)
 	}
 	return m
+}
+
+func (fields Fields) Merge(other ...Field) Fields {
+	for _, o := range other {
+		fields = fields.Add(o)
+	}
+	return fields
+}
+
+func (fields Fields) Add(field Field) Fields {
+	for i := range fields {
+		f := &fields[i]
+		if f.Label == field.Label && f.Value == field.Value {
+			return fields
+		}
+	}
+	return append(fields, field)
 }
 
 // Copy clones a collection of fields

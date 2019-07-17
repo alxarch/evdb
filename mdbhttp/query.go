@@ -43,27 +43,25 @@ func ParseTime(v string) (time.Time, error) {
 	return time.Unix(n, 0), nil
 }
 
+func (qr *Querier) evalURL(q *meter.Query, exp ...string) (string, error) {
+	u, err := url.Parse(qr.URL)
+	if err != nil {
+		return "", err
+	}
+	values := QueryValues(q)
+	for _, e := range exp {
+		values.Add("eval", e)
+	}
+	u.RawQuery = values.Encode()
+	return u.String(), nil
+}
+
 func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
 	u, err := url.Parse(qr.URL)
 	if err != nil {
 		return "", err
 	}
-	values := url.Values(make(map[string][]string))
-	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
-	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
-	for _, label := range q.Group {
-		values.Add("group", label)
-	}
-	if q.Step != 0 {
-		values.Set("step", q.Step.String())
-	}
-	match := q.Match.Sorted()
-	for _, field := range match {
-		values.Add(`match.`+field.Label, field.Value)
-	}
-	if q.EmptyValue != "" {
-		values.Set("empty", q.EmptyValue)
-	}
+	values := QueryValues(q)
 	for _, event := range events {
 		values.Add("event", event)
 	}
@@ -72,12 +70,16 @@ func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
 
 }
 
-// Query implements Querier interface
-func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	u, err := qr.queryURL(&q, events...)
+// Eval implements meter.Evaler interface
+func (qr *Querier) Eval(ctx context.Context, q *meter.Query, exp ...string) (meter.Results, error) {
+	u, err := qr.evalURL(q, exp...)
 	if err != nil {
 		return nil, err
 	}
+	return qr.send(ctx, u)
+}
+
+func (qr *Querier) send(ctx context.Context, u string) (meter.Results, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -106,11 +108,40 @@ func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (
 		return nil, err
 	}
 	return results, nil
+}
 
+// Query implements Querier interface
+func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
+	u, err := qr.queryURL(&q, events...)
+	if err != nil {
+		return nil, err
+	}
+	return qr.send(ctx, u)
+
+}
+func QueryValues(q *meter.Query) url.Values {
+	values := url.Values(make(map[string][]string))
+	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
+	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
+	for _, label := range q.Group {
+		values.Add("group", label)
+	}
+	if q.Step != 0 {
+		values.Set("step", q.Step.String())
+	}
+	match := q.Match.Sorted()
+	for _, field := range match {
+		values.Add(`match.`+field.Label, field.Value)
+	}
+	if q.EmptyValue != "" {
+		values.Set("empty", q.EmptyValue)
+	}
+	return values
 }
 
 // QueryHandler returns an HTTP endpoint for a QueryRunner
-func QueryHandler(qr meter.Querier) http.HandlerFunc {
+func QueryHandler(querier meter.Querier) http.HandlerFunc {
+	evaler := meter.QueryEvaler(querier)
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
 		events := values["event"]
@@ -122,15 +153,25 @@ func QueryHandler(qr meter.Querier) http.HandlerFunc {
 		if q.End.IsZero() {
 			q.End = time.Now()
 		}
+
+		if eval := values["eval"]; len(eval) > 0 {
+			// eval = append(eval, events...) // eval single events also
+			results, err := evaler.Eval(r.Context(), q, eval...)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			sendJSON(w, results)
+			return
+		}
+
 		typ := meter.ResultTypeFromString(values.Get("results"))
 		if typ == meter.TotalsResult {
 			q.Step = -1
 		}
-		ctx := r.Context()
-		results, err := qr.Query(ctx, q, events...)
+		results, err := querier.Query(r.Context(), q, events...)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
 		var x interface{}
 		switch typ {

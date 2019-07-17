@@ -13,6 +13,7 @@ import (
 func TestDB(t *testing.T) {
 	now := time.Now().In(time.UTC)
 	options := mdbredis.Options{
+		Redis:       "",
 		KeyPrefix:   fmt.Sprintf("mdbredis:test:%d", now.UnixNano()),
 		ScanSize:    1000,
 		Resolutions: []mdbredis.Resolution{mdbredis.ResolutionHourly},
