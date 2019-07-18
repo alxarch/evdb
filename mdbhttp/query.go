@@ -3,7 +3,6 @@ package mdbhttp
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io/ioutil"
 	"net/http"
 	"net/url"
@@ -12,13 +11,11 @@ import (
 	"strings"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
-)
+	errors "golang.org/x/xerrors"
 
-// HTTPClient does HTTP requests
-type HTTPClient interface {
-	Do(req *http.Request) (*http.Response, error)
-}
+	meter "github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/httperr"
+)
 
 // Querier runs queries over http
 type Querier struct {
@@ -26,6 +23,12 @@ type Querier struct {
 	HTTPClient
 }
 
+// HTTPClient does HTTP requests
+type HTTPClient interface {
+	Do(req *http.Request) (*http.Response, error)
+}
+
+// ParseTime parses time in various formats
 func ParseTime(v string) (time.Time, error) {
 	if strings.Contains(v, ":") {
 		if strings.Contains(v, ".") {
@@ -71,8 +74,8 @@ func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
 }
 
 // Eval implements meter.Evaler interface
-func (qr *Querier) Eval(ctx context.Context, q *meter.Query, exp ...string) (meter.Results, error) {
-	u, err := qr.evalURL(q, exp...)
+func (qr *Querier) Eval(ctx context.Context, q meter.Query, exp ...string) (meter.Results, error) {
+	u, err := qr.evalURL(&q, exp...)
 	if err != nil {
 		return nil, err
 	}
@@ -95,17 +98,17 @@ func (qr *Querier) send(ctx context.Context, u string) (meter.Results, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return nil, errors.New(`Invalid response status`)
+	if httperr.IsError(res.StatusCode) {
+		return nil, httperr.FromResponse(res)
 	}
+	defer res.Body.Close()
 	data, err := ioutil.ReadAll(res.Body)
 	if err != nil {
-		return nil, err
+		return nil, errors.Errorf(`Failed to read response: %s`, err)
 	}
 	var results meter.Results
 	if err := json.Unmarshal(data, &results); err != nil {
-		return nil, err
+		return nil, errors.Errorf(`Failed to parse response: %s`, err)
 	}
 	return results, nil
 }
@@ -119,6 +122,8 @@ func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (
 	return qr.send(ctx, u)
 
 }
+
+// QueryValues converts a meter.Query to url.Values
 func QueryValues(q *meter.Query) url.Values {
 	values := url.Values(make(map[string][]string))
 	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
@@ -144,10 +149,9 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 	evaler := meter.QueryEvaler(querier)
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
-		events := values["event"]
 		q, err := ParseQuery(values)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			httperr.RespondJSON(w, httperr.BadRequest(err))
 			return
 		}
 		if q.Start.IsZero() {
@@ -161,34 +165,37 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 			// eval = append(eval, events...) // eval single events also
 			results, err := evaler.Eval(r.Context(), q, eval...)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				httperr.RespondJSON(w, err)
 				return
 			}
-			sendJSON(w, results)
+			httperr.RespondJSON(w, results)
 			return
 		}
-
-		typ := meter.ResultTypeFromString(values.Get("results"))
-		if typ == meter.TotalsResult {
-			q.Step = -1
-		}
-		results, err := querier.Query(r.Context(), q, events...)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+		if events := values["event"]; len(events) > 0 {
+			typ := meter.ResultTypeFromString(values.Get("results"))
+			if typ == meter.TotalsResult {
+				q.Step = -1
+			}
+			results, err := querier.Query(r.Context(), q, events...)
+			if err != nil {
+				httperr.RespondJSON(w, err)
+				return
+			}
+			var x interface{}
+			switch typ {
+			case meter.TotalsResult:
+				x = results.Totals()
+			case meter.FieldSummaryResult:
+				x = results.FieldSummaries()
+			case meter.EventSummaryResult:
+				x = results.EventSummaries(q.EmptyValue)
+			default:
+				x = results
+			}
+			httperr.RespondJSON(w, x)
 			return
 		}
-		var x interface{}
-		switch typ {
-		case meter.TotalsResult:
-			x = results.Totals()
-		case meter.FieldSummaryResult:
-			x = results.FieldSummaries()
-		case meter.EventSummaryResult:
-			x = results.EventSummaries(q.EmptyValue)
-		default:
-			x = results
-		}
-		sendJSON(w, x)
+		httperr.RespondJSON(w, httperr.BadRequest(errors.New("Missing query.eval|query.event")))
 	}
 }
 

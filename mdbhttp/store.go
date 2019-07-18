@@ -5,12 +5,12 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
 	meter "github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/httperr"
 )
 
 // Storer is a remote Storer over HTTP
@@ -42,10 +42,10 @@ func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	if err != nil {
 		return
 	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		err = fmt.Errorf("Invalid HTTP status: [%d] %s", res.StatusCode, res.Status)
+	if httperr.IsError(res.StatusCode) {
+		return httperr.FromResponse(res)
 	}
+	defer res.Body.Close()
 	return
 }
 
@@ -91,19 +91,17 @@ func StoreHandler(s meter.Storer) http.HandlerFunc {
 		req := meter.Snapshot{}
 		dec := json.NewDecoder(r.Body)
 		if err := dec.Decode(&req); err != nil {
-			code := http.StatusBadRequest
-			http.Error(w, http.StatusText(code), code)
+			httperr.RespondJSON(w, httperr.BadRequest(err))
 			return
 		}
 		if req.Time.IsZero() {
 			req.Time = time.Now()
 		}
 		if err := s.Store(&req); err != nil {
-			code := http.StatusInternalServerError
-			http.Error(w, http.StatusText(code), code)
+			httperr.RespondJSON(w, err)
 			return
 		}
-		sendJSON(w, json.RawMessage(`{"status":"OK"}`))
+		httperr.RespondJSON(w, json.RawMessage(`{"statusCode":200,"message":"OK"}`))
 	}
 }
 

@@ -1,7 +1,6 @@
 package mdbhttp
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -9,13 +8,9 @@ import (
 	"strings"
 
 	"github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/httperr"
+	errors "golang.org/x/xerrors"
 )
-
-func sendJSON(w http.ResponseWriter, data interface{}) error {
-	enc := json.NewEncoder(w)
-	w.Header().Set("Content-Type", "application/json")
-	return enc.Encode(data)
-}
 
 // Handler creates an HTTP endpoint for a meter.DB
 func Handler(db meter.DB, events ...string) http.HandlerFunc {
@@ -33,23 +28,24 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 			case "/", "":
 				queryHandler(w, r)
 			case "/events":
-				sendJSON(w, map[string]interface{}{
+				httperr.RespondJSON(w, map[string]interface{}{
 					"events": events,
 				})
 			default:
-				http.NotFound(w, r)
+				httperr.RespondJSON(w, httperr.NotFound(nil))
 			}
 		case http.MethodPost:
 			defer r.Body.Close()
 			event := strings.Trim(r.URL.Path, "/")
 			storer := storeHandlers[event]
 			if storer == nil {
-				http.NotFound(w, r)
+				err := errors.Errorf("Unknown event %q", event)
+				httperr.RespondJSON(w, httperr.NotFound(err))
 				return
 			}
 			storer.ServeHTTP(w, r)
 		default:
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+			httperr.RespondJSON(w, httperr.MethodNotAllowed(nil))
 		}
 	}
 
