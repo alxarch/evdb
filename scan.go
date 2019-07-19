@@ -111,13 +111,6 @@ func (results ScanResults) Add(fields Fields, t int64, v float64) ScanResults {
 
 }
 
-// Reset resets a result
-func (r *ScanResult) Reset() {
-	*r = ScanResult{
-		Data: r.Data[:0],
-	}
-}
-
 func (results ScanResults) Merge(fields Fields, data ...DataPoint) ScanResults {
 	for i := range results {
 		r := &results[i]

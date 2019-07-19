@@ -25,14 +25,12 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 		switch r.Method {
 		case http.MethodGet:
 			switch r.URL.Path {
-			case "/", "":
-				queryHandler(w, r)
-			case "/events":
+			case "/info":
 				httperr.RespondJSON(w, map[string]interface{}{
 					"events": events,
 				})
 			default:
-				httperr.RespondJSON(w, httperr.NotFound(nil))
+				queryHandler(w, r)
 			}
 		case http.MethodPost:
 			defer r.Body.Close()

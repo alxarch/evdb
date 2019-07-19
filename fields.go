@@ -25,6 +25,19 @@ func (fields Fields) Reset() Fields {
 	return fields[:0]
 }
 
+// Labels returns all fields labels
+func (fields Fields) Labels() []string {
+	if fields == nil {
+		return nil
+	}
+	labels := make([]string, 0, len(fields))
+	for i := range fields {
+		f := &fields[i]
+		labels = appendDistinct(labels, f.Label)
+	}
+	return labels
+}
+
 // Get returns the value of label
 func (fields Fields) Get(label string) (string, bool) {
 	for i := range fields {

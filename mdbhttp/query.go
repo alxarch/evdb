@@ -160,29 +160,40 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 		if q.End.IsZero() {
 			q.End = time.Now()
 		}
-
-		if eval := values["eval"]; len(eval) > 0 {
-			// eval = append(eval, events...) // eval single events also
+		if q.Group == nil {
+			q.Group = q.Match.Labels()
+		}
+		switch mode := strings.Trim(r.URL.Path, "/"); mode {
+		case "eval":
+			eval := values["eval"]
+			if len(eval) == 0 {
+				err := errors.New("Missing query.eval")
+				httperr.RespondJSON(w, httperr.BadRequest(err))
+			}
 			results, err := evaler.Eval(r.Context(), q, eval...)
 			if err != nil {
-				httperr.RespondJSON(w, err)
+				httperr.RespondJSON(w, errors.Errorf("Query evaluation failed: %s", err))
 				return
 			}
 			httperr.RespondJSON(w, results)
-			return
-		}
-		if events := values["event"]; len(events) > 0 {
-			typ := meter.ResultTypeFromString(values.Get("results"))
-			if typ == meter.TotalsResult {
-				q.Step = -1
+		case "totals":
+			q.Step = -1
+			fallthrough
+		case "events", "fields", "raw":
+			events := values["event"]
+			if len(events) == 0 {
+				err := errors.New("Missing query.event")
+				httperr.RespondJSON(w, httperr.BadRequest(err))
+				return
 			}
 			results, err := querier.Query(r.Context(), q, events...)
 			if err != nil {
+				err := errors.Errorf("Query failed: %s", err)
 				httperr.RespondJSON(w, err)
 				return
 			}
 			var x interface{}
-			switch typ {
+			switch meter.ResultTypeFromString(mode) {
 			case meter.TotalsResult:
 				x = results.Totals()
 			case meter.FieldSummaryResult:
@@ -193,9 +204,9 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 				x = results
 			}
 			httperr.RespondJSON(w, x)
-			return
+		default:
+			httperr.RespondJSON(w, httperr.NotFound(nil))
 		}
-		httperr.RespondJSON(w, httperr.BadRequest(errors.New("Missing query.eval|query.event")))
 	}
 }
 
