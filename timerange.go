@@ -31,14 +31,6 @@ func (tr *TimeRange) Truncate(tm time.Time) time.Time {
 	}
 	return tm
 }
-func (tr *TimeRange) ZeroData() (s DataPoints) {
-	tr.Each(func(tm time.Time, i int) {
-		s = append(s, DataPoint{
-			Timestamp: tm.Unix(),
-		})
-	})
-	return
-}
 
 func (tr *TimeRange) Each(fn func(time.Time, int)) {
 	start := tr.Start.Truncate(tr.Step)

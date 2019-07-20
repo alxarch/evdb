@@ -82,11 +82,35 @@ type ScanExpr struct {
 	results Results
 }
 
+func makeData(src DataPoints, start, end, step int64) (data DataPoints) {
+	if step < 1 {
+		step = 1
+	}
+	n := (end - start) / step
+	if n < 0 {
+		return
+	}
+	src = src.Slice(start, end)
+	if len(src) == 0 {
+		return
+	}
+	data = make([]DataPoint, n)
+	for i := range data {
+		ts := start + int64(i)*step
+		v := src.ValueAt(ts)
+		data[i] = DataPoint{
+			Timestamp: ts,
+			Value:     v,
+		}
+	}
+	return
+}
+
 func (s *ScanExpr) Results(results Results) Results {
 	if s.results != nil {
 		return s.results
 	}
-	start, end := s.Start.Unix(), s.End.Unix()
+	start, end, step := s.Start.Unix(), s.End.Unix(), int64(s.Step/time.Second)
 	for i := range results {
 		r := &results[i]
 
@@ -96,16 +120,19 @@ func (s *ScanExpr) Results(results Results) Results {
 		if !s.Match.Includes(r.Fields) {
 			continue
 		}
-		var data DataPoints
-		if data = r.Data.SeekLeft(start); data == nil {
+		data := makeData(r.Data, start, end, step)
+		if data == nil {
 			continue
 		}
-		if data = r.Data.SeekRight(end); data == nil {
-			continue
+		var fields Fields
+		if len(s.Group) > 0 {
+			fields = r.Fields.GroupBy("", s.Group)
+		} else {
+			fields = r.Fields.Copy()
 		}
 		s.results = append(s.results, Result{
 			Event:  s.Event,
-			Fields: r.Fields.GroupBy("", s.Group),
+			Fields: fields,
 			Data:   data,
 		})
 	}

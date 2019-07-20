@@ -262,3 +262,30 @@ func (s DataPoints) Aggregate(m Merger, data ...DataPoint) DataPoints {
 	}
 	return s
 }
+
+func (s DataPoints) Pick(data DataPoints) DataPoints {
+	for i := range data {
+		d := &data[i]
+		for j := range s {
+			p := &s[j]
+			if p.Timestamp == d.Timestamp {
+				p.Value = d.Value
+			}
+		}
+	}
+	return s
+}
+
+func (s DataPoints) Slice(start, end int64) DataPoints {
+	if s == nil {
+		return nil
+	}
+	if s = s.SeekLeft(start); s == nil {
+		return nil
+	}
+	if s = s.SeekRight(end); s == nil {
+		return nil
+	}
+	return s
+
+}
