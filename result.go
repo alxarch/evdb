@@ -1,13 +1,16 @@
 package meter
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 )
 
 // Result is a query result
 type Result struct {
-	ScanResult
-	Event string `json:"event,omitempty"`
+	Event  string     `json:"event,omitempty"`
+	Fields Fields     `json:"fields,omitempty"`
+	Data   DataPoints `json:"data,omitempty"`
 }
 
 // Results is a slice of results
@@ -16,24 +19,77 @@ type Results []Result
 // ResultType is a type of result
 type ResultType int
 
-func (results Results) ByEvent() map[string]ScanResult {
-	byEvent := make(map[string]ScanResult)
+// Merge implements Value interface
+func (r *Result) Merge(m Merger, x interface{}, rev bool) (interface{}, error) {
+	if r == nil {
+		return nil, nil
+	}
+	switch x := x.(type) {
+	case []interface{}:
+		var v []interface{}
+		for _, x := range x {
+			y, err := r.Merge(m, x, rev)
+			if err != nil {
+				return nil, err
+			}
+			v = append(v, y)
+		}
+		return v, nil
+	case *Result:
+		if x == nil {
+			return nil, nil
+		}
+		var v Result
+		var err error
+		if rev {
+			v.Event = x.Event
+			v.Fields = x.Fields
+			v.Data = x.Data.Copy()
+			err = v.Data.MergeVector(m, r.Data)
+		} else {
+			v.Event = r.Event
+			v.Fields = r.Fields
+			v.Data = r.Data.Copy()
+			err = v.Data.MergeVector(m, x.Data)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &v, nil
+	case float64:
+		var v Result
+		v.Event = r.Event
+		v.Fields = r.Fields
+		if rev {
+			v.Data = r.Data.Copy().MergeValue(m, x)
+		} else {
+			v.Data = r.Data.Copy().MergeValueR(m, x)
+		}
+		return &m, nil
+	default:
+		return nil, fmt.Errorf("Unsupported operand %q", reflect.TypeOf(x))
+	}
+}
+
+// Add adds a result
+func (results Results) Add(event string, fields Fields, t int64, v float64) Results {
 	for i := range results {
 		r := &results[i]
-		s := byEvent[r.Event]
-		data := s.Data.Merge(mergeSum, r.Data...)
-		fields := s.Fields.Merge(r.Fields...)
-		byEvent[r.Event] = ScanResult{
-			Fields: fields,
-			Data:   data,
+		if r.Event != event {
+			continue
 		}
+		if !r.Fields.Equal(fields) {
+			continue
+		}
+		r.Data = r.Data.MergePoint(mergeSum, t, v)
+		return results
 	}
-	for event, r := range byEvent {
-		sort.Sort(r.Data)
-		sort.Sort(r.Fields)
-		byEvent[event] = r
-	}
-	return byEvent
+	return append(results, Result{
+		Event:  event,
+		Fields: fields.Copy(),
+		Data:   []DataPoint{{t, v}},
+	})
+
 }
 
 // Result types
@@ -56,25 +112,6 @@ func ResultTypeFromString(s string) ResultType {
 	default:
 		return ArrayResult
 	}
-}
-
-// Add adds a result
-func (results Results) Add(event string, fields Fields, ts int64, n float64) Results {
-
-	for i := range results {
-		r := &results[i]
-		if r.Event == event && r.Fields.Equal(fields) {
-			r.Data = r.Data.MergePoint(mergeSum, ts, n)
-			return results
-		}
-	}
-	return append(results, Result{
-		Event: event,
-		ScanResult: ScanResult{
-			Fields: fields.Copy(), // Do not keep a reference to Fields
-			Data:   []DataPoint{{ts, n}},
-		},
-	})
 }
 
 // FieldSummary is a query result presented as a summary of field values
@@ -232,3 +269,17 @@ type Table struct {
 	Columns []interface{}   `json:"cols"`
 	Data    [][]interface{} `json:"data"`
 }
+
+// func (r Results) Merge(fields Fields, data ...DataPoint) Results {
+// 	for i := range r {
+// 		rr := &results[i]
+// 		if rr.Fields.Equal(fields) {
+// 			r.Data = r.Data.Aggregate(mergeSum, data...)
+// 			return results
+// 		}
+// 	}
+// 	return append(results, Result{
+// 		Fields: fields.Copy(),
+// 		Data:   data,
+// 	})
+// }

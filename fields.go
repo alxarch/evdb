@@ -118,6 +118,24 @@ func (fields Fields) Equal(other Fields) bool {
 	return false
 }
 
+// Includes checks if fields includes a set of fields
+func (fields Fields) Includes(other Fields) bool {
+	n := 0
+iloop:
+	for i := range other {
+		o := &other[i]
+		for j := range fields {
+			f := &fields[j]
+			if f.Label == o.Label && f.Value == o.Value {
+				n++
+				continue iloop
+			}
+		}
+		return false
+	}
+	return n == len(other) && n > 0
+}
+
 func (fields Fields) Len() int {
 	return len(fields)
 }

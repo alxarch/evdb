@@ -2,6 +2,7 @@ package meter
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"strconv"
 )
@@ -69,6 +70,47 @@ func (s DataPoints) Get(i int) *DataPoint {
 		return &s[i]
 	}
 	return nil
+}
+
+func (s DataPoints) SeekRight(ts int64) DataPoints {
+	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
+		if d := &s[i]; d.Timestamp <= ts {
+			return s[:i]
+		}
+	}
+	return nil
+
+}
+func (s DataPoints) SeekLeft(ts int64) DataPoints {
+	for i := range s {
+		if d := &s[i]; d.Timestamp >= ts {
+			return s[i:]
+		}
+	}
+	return nil
+}
+
+func (s DataPoints) MergeVectorR(m Merger, v DataPoints) error {
+	if len(v) == len(s) {
+		v = v[:len(s)]
+		for i := range s {
+			p0, p1 := &s[i], &v[i]
+			p0.Value = m.Merge(p1.Value, p0.Value)
+		}
+		return nil
+	}
+	return errors.New("Invalid operand size")
+}
+func (s DataPoints) MergeVector(m Merger, v DataPoints) error {
+	if len(v) == len(s) {
+		v = v[:len(s)]
+		for i := range s {
+			p0, p1 := &s[i], &v[i]
+			p0.Value = m.Merge(p0.Value, p1.Value)
+		}
+		return nil
+	}
+	return errors.New("Invalid operand size")
 }
 
 // Last returns a pointer to the last point
@@ -170,8 +212,8 @@ func (s DataPoints) MarshalJSON() ([]byte, error) {
 	return s.AppendJSON(make([]byte, 0, size)), nil
 }
 
-// MergeScalar merges a value to all datapoints using m
-func (s DataPoints) MergeScalar(m Merger, v float64) DataPoints {
+// MergeValue merges a value to all datapoints using s as base
+func (s DataPoints) MergeValue(m Merger, v float64) DataPoints {
 	for i := range s {
 		d := &s[i]
 		d.Value = m.Merge(d.Value, v)
@@ -179,11 +221,11 @@ func (s DataPoints) MergeScalar(m Merger, v float64) DataPoints {
 	return s
 }
 
-// Merge merges other datapoints using m
-func (s DataPoints) Merge(m Merger, data ...DataPoint) DataPoints {
-	for i := range data {
-		d := &data[i]
-		s = s.MergePoint(m, d.Timestamp, d.Value)
+// MergeValueR merges a value to all datapoints using v as base
+func (s DataPoints) MergeValueR(m Merger, v float64) DataPoints {
+	for i := range s {
+		d := &s[i]
+		d.Value = m.Merge(v, d.Value)
 	}
 	return s
 }
@@ -211,108 +253,12 @@ func (s DataPoints) MergeConsecutiveDuplicates(m Merger) DataPoints {
 
 }
 
-// Merger provides a method to merge values
-type Merger interface {
-	Merge(a, b float64) float64
-}
-
-// MergeFunc is a closure Merger
-type MergeFunc func(a, b float64) float64
-
-// Merge implements Merger
-func (f MergeFunc) Merge(a, b float64) float64 {
-	return f(a, b)
-}
-
-// MergeSum adds values
-type MergeSum struct{}
-
-// Merge implements Merger
-func (MergeSum) Merge(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return b
-	}
-	if math.IsNaN(b) {
-		return a
-	}
-	return a + b
-}
-
-// MergeDiff subtracts values
-type MergeDiff struct{}
-
-// Merge implements Merger
-func (MergeDiff) Merge(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return -b
-	}
-	if math.IsNaN(b) {
-		return a
-	}
-	return a - b
-}
-
-// MergeDiv divides values
-type MergeDiv struct{}
-
-// Merge implements Merger
-func (MergeDiv) Merge(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return 0
-	}
-	return a / b
-}
-
-// MergeMul multiplies values
-type MergeMul struct{}
-
-// Merge implements Merger
-func (MergeMul) Merge(a, b float64) float64 {
-	if math.IsNaN(a) {
-		return 0
-	}
-	if math.IsNaN(b) {
-		return 0
-	}
-	return a * b
-}
-
-// MergeMax keeps max value
-type MergeMax struct{}
-
-// Merge implements Merger
-func (MergeMax) Merge(a, b float64) float64 {
-	if a > 0 {
-		return a
-	}
-	return b
-}
-
-// MergeMin keeps min value
-type MergeMin struct{}
-
-// Merge implements Merger
-func (MergeMin) Merge(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-
-}
-
-// MergeAvg merges values to their average
-type MergeAvg struct {
-	n     int
-	total float64
-}
-
-// Merge implements Merger
-func (avg *MergeAvg) Merge(_, b float64) float64 {
-	avg.n++
-	if !math.IsNaN(b) {
-		avg.total += b
-	}
-	return avg.total / float64(avg.n)
-}
-
 var mergeSum = MergeSum{}
+
+func (s DataPoints) Aggregate(m Merger, data ...DataPoint) DataPoints {
+	for i := range data {
+		d := &data[i]
+		s = s.MergePoint(m, d.Timestamp, d.Value)
+	}
+	return s
+}

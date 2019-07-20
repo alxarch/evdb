@@ -21,9 +21,9 @@ type Storer interface {
 
 // MemoryStore is an in-memory EventStore for debugging
 type MemoryStore struct {
-	data  []Snapshot
-	Event string
+	data []Snapshot
 }
+type MemoryScanner map[string]MemoryStore
 
 // Last retuns the last posted StoreRequest
 func (m *MemoryStore) Last() *Snapshot {
@@ -44,36 +44,35 @@ func (m *MemoryStore) Store(req *Snapshot) error {
 	return errors.New("Invalid time")
 }
 
-// Scanner implements the EventScanner interface
-func (m *MemoryStore) Scanner(event string) Scanner {
-	if event == m.Event {
-		return m
-	}
-	return nil
-}
-
 // Scan implements the Scanner interface
-func (m *MemoryStore) Scan(ctx context.Context, span TimeRange, match Fields) (results ScanResults, err error) {
-	step := int64(span.Step / time.Second)
-	if step < 1 {
-		step = 1
-	}
-	for i := range m.data {
-		d := &m.data[i]
-		if d.Time.Before(span.Start) {
+func (m MemoryScanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
+	var results Results
+	for _, q := range queries {
+		store, ok := m[q.Event]
+		if !ok {
 			continue
 		}
-		for j := range d.Counters {
-			c := &d.Counters[j]
-			fields := ZipFields(d.Labels, c.Values)
-			ok := fields.MatchSorted(match)
-			if ok {
-				tm := stepTS(d.Time.Unix(), step)
-				results = results.Add(fields, tm, float64(c.Count))
+		step := int64(q.Step / time.Second)
+		if step < 1 {
+			step = 1
+		}
+		for i := range store.data {
+			d := &store.data[i]
+			if d.Time.Before(q.Start) {
+				continue
+			}
+			for j := range d.Counters {
+				c := &d.Counters[j]
+				fields := ZipFields(d.Labels, c.Values)
+				ok := fields.MatchSorted(q.Match)
+				if ok {
+					tm := stepTS(d.Time.Unix(), step)
+					results = results.Add(q.Event, fields, tm, float64(c.Count))
+				}
 			}
 		}
 	}
-	return
+	return results, nil
 }
 
 // SyncTask dumps an Event to an EventStore

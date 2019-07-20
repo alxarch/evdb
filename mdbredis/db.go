@@ -164,7 +164,8 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 		ts            int64
 		index         = map[string]*meter.ScanResult{}
 		skip          = &meter.ScanResult{}
-		tm, end, step = db.Truncate(q.Start), db.Truncate(q.End), db.Step()
+		start         = db.Truncate(q.Start)
+		tm, end, step = start, db.Truncate(q.End), db.Step()
 		scan          = func(k []byte, v resp.Value) error {
 			r := index[string(k)]
 			if r == skip {
@@ -180,7 +181,7 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 
 				results = append(results, meter.ScanResult{
 					Fields: fields.Copy(),
-					Data:   meter.DataPoints{{Timestamp: ts, Value: 0}},
+					Data:   meter.ZeroData(start, end, step),
 				})
 				r = &results[len(results)-1]
 				index[string(k)] = r

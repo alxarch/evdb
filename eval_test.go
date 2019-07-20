@@ -2,17 +2,12 @@ package meter
 
 import (
 	"context"
-	"fmt"
 	"go/ast"
 	"go/parser"
-	"go/token"
-	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	errors "golang.org/x/xerrors"
 )
 
 func Test_Eval(t *testing.T) {
@@ -160,56 +155,6 @@ func Test_EvalQuery(t *testing.T) {
 
 }
 
-type ScanExpr struct {
-	Match Fields
-	TimeRange
-	Event string
-	Group []string
-}
-
-type QueryPlan struct {
-	TimeRange
-	Match  Fields
-	Events []string
-	ScanResults
-}
-
-func (tr TimeRange) NumSteps() int {
-	start := tr.Start.Truncate(tr.Step)
-	end := tr.End.Truncate(tr.Step)
-	return int(end.Sub(start) / tr.Step)
-}
-func (tr TimeRange) Match(other TimeRange) bool {
-	return tr.Step == other.Step && tr.NumSteps() == other.NumSteps()
-}
-
-type QueryPlans []QueryPlan
-
-func (q *QueryPlanner) Scan(s *ScanExpr) *QueryPlan {
-	for i := range q.plans {
-		p := &q.plans[i]
-		if p.TimeRange.Match(s.TimeRange) && p.Match.Equal(s.Match) {
-			p.Events = appendDistinct(p.Events, s.Event)
-			return p
-		}
-	}
-	q.plans = append(q.plans, QueryPlan{
-		TimeRange: s.TimeRange,
-		Match:     s.Match.Copy(),
-		Events:    []string{s.Event},
-	})
-	return &q.plans[len(q.plans)-1]
-}
-
-type QueryPlanner struct {
-	fset  *token.FileSet
-	group []string
-	src   ast.Expr
-	index map[ast.Expr]*QueryPlan
-	plans QueryPlans
-	eval  ast.Expr
-}
-
 func (s DataPoints) Reset() DataPoints {
 	for i := range s {
 		s[i] = DataPoint{}
@@ -231,37 +176,6 @@ func (results ScanResults) Reset() ScanResults {
 		r.Reset()
 	}
 	return results[:0]
-}
-
-func (p *QueryPlan) Reset() {
-	*p = QueryPlan{
-		Match:       p.Match.Reset(),
-		Events:      p.Events[:0],
-		ScanResults: p.ScanResults.Reset(),
-	}
-}
-
-func (plans QueryPlans) Reset() QueryPlans {
-	for i := range plans {
-		p := &plans[i]
-		p.Reset()
-	}
-	return plans[:0]
-}
-
-func (q *QueryPlanner) Reset(src string) error {
-	q.fset = token.NewFileSet()
-	q.index = make(map[ast.Expr]*QueryPlan)
-	q.plans = q.plans.Reset()
-	root, err := parser.ParseExpr(src)
-	if err != nil {
-		return err
-	}
-	if err := q.parseRoot(root); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (s *ScanExpr) String() string {
@@ -309,84 +223,13 @@ func (s *ScanExpr) String() string {
 	return w.String()
 }
 
-func normalizeQuery(s string) string {
-	// Join lines
-	s = strings.ReplaceAll(s, "\n", " ")
-	// Wrap in eval() call to allow comma separating
-	s = fmt.Sprintf("eval(%s)", s)
-	return s
-}
-
-// ParseTime parses time in various formats
-func ParseTime(v string) (time.Time, error) {
-	if strings.Contains(v, ":") {
-		if strings.Contains(v, ".") {
-			return time.ParseInLocation(time.RFC3339Nano, v, time.UTC)
-		}
-		return time.ParseInLocation(time.RFC3339, v, time.UTC)
-	}
-	if strings.Contains(v, "-") {
-		return time.ParseInLocation("2006-01-02", v, time.UTC)
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return time.Unix(n, 0), nil
-}
-
-func (q *QueryPlanner) parseMatchValue(values []string, v ast.Expr) []string {
-	switch v := v.(type) {
-	case *ast.BinaryExpr:
-		if v.Op != token.OR {
-			q.Fatalf(v, "Invalid match expression concat %s", v.Op)
-		}
-		values = q.parseMatchValue(values, v.X)
-		values = q.parseMatchValue(values, v.Y)
-		return values
-	default:
-		s, err := q.string(v)
-		if err != nil {
-			q.Fatal(v, err)
-		}
-		return append(values, s)
-	}
-}
-
-func (q *QueryPlanner) Errorf(exp ast.Expr, msg string, args ...interface{}) error {
-	return q.Error(exp, errors.Errorf(msg, args...))
-}
-
-func (q *QueryPlanner) Fatal(exp ast.Expr, err error) error {
-	panic(q.Error(exp, err))
-}
-
-func (q *QueryPlanner) Fatalf(exp ast.Expr, msg string, args ...interface{}) {
-	panic(q.Errorf(exp, msg, args...))
-}
-
-func (q *QueryPlanner) parseMatch(match Fields, exp ast.Expr) Fields {
-	kv, ok := exp.(*ast.KeyValueExpr)
-	if !ok {
-		q.Fatalf(exp, "Invalid match expression %s", exp)
-	}
-	key, err := q.string(kv.Key)
-	if err != nil {
-		q.Fatal(kv.Key, err)
-	}
-	values := q.parseMatchValue(nil, kv.Value)
-	for _, v := range values {
-		match = match.Add(Field{
-			Label: key,
-			Value: v,
-		})
-	}
-	return match
-}
-func (q *QueryPlanner) Error(exp ast.Expr, err error) error {
-	pos := q.fset.Position(exp.Pos())
-	return errors.Errorf(`Parse error at position %s: %s`, pos, err)
-}
+// func normalizeQuery(s string) string {
+// 	// Join lines
+// 	s = strings.ReplaceAll(s, "\n", " ")
+// 	// Wrap in eval() call to allow comma separating
+// 	s = fmt.Sprintf("eval(%s)", s)
+// 	return s
+// }
 
 func firstExp(exp ...ast.Expr) ast.Expr {
 	if len(exp) == 1 {
@@ -396,86 +239,17 @@ func firstExp(exp ...ast.Expr) ast.Expr {
 
 }
 
-func (q *QueryPlanner) duration(exp ast.Expr) (time.Duration, error) {
-	lit, ok := exp.(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return 0, errors.New("Invalid duration expression")
-	}
-	v, err := strconv.Unquote(lit.Value)
-	if err != nil {
-		return 0, errors.Errorf("Invalid duration string: %s", err)
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, errors.Errorf("Failed to parse duration: %s", err)
-	}
-	return d, nil
-}
-
-func (q *QueryPlanner) Now() time.Time {
-	return time.Now()
-}
-
-func (q *QueryPlanner) time(exp ast.Expr) (time.Time, error) {
-	switch exp := exp.(type) {
-	case *ast.BasicLit:
-		switch lit := exp; lit.Kind {
-		case token.STRING:
-			v, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return time.Time{}, q.Errorf(exp, "Invalid time string: %s", err)
-			}
-			if strings.ToLower(v) == "now" {
-				return q.Now(), nil
-			}
-			return ParseTime(v)
-		case token.INT:
-			n, err := strconv.ParseInt(lit.Value, 10, 64)
-			if err != nil {
-				return time.Time{}, errors.Errorf("Invalid time value: %s", err)
-			}
-			return time.Unix(n, 0), nil
-		default:
-			return time.Time{}, errors.Errorf("Invalid time literal %s", exp)
-		}
-	case *ast.Ident:
-		switch strings.ToLower(exp.Name) {
-		case "now":
-			return q.Now(), nil
-		default:
-			return time.Time{}, errors.Errorf("Invalid time ident %s", exp.Name)
-		}
-	}
-	return time.Time{}, errors.Errorf("Invalid time expr %s", exp)
-}
-
-func (q *QueryPlanner) string(exp ast.Expr) (string, error) {
-	switch exp := exp.(type) {
-	case *ast.Ident:
-		return exp.Name, nil
-	case *ast.BasicLit:
-		switch exp.Kind {
-		case token.STRING:
-			return strconv.Unquote(exp.Value)
-		default:
-			return exp.Value, nil
-		}
-	default:
-		return "", errors.Errorf("Invalid string expression %s", exp)
-	}
-}
-
-func (q *QueryPlanner) callid(exp ast.Expr) (string, []ast.Expr, error) {
-	call, ok := exp.(*ast.CallExpr)
-	if !ok {
-		return "", nil, errors.Errorf("Invalid call expression %s", exp)
-	}
-	id, ok := call.Fun.(*ast.Ident)
-	if !ok {
-		return "", nil, errors.Errorf("Invalid call expression %s", call.Fun)
-	}
-	return id.Name, call.Args, nil
-}
+// func (q *QueryPlanner) callid(exp ast.Expr) (string, []ast.Expr, error) {
+// 	call, ok := exp.(*ast.CallExpr)
+// 	if !ok {
+// 		return "", nil, errors.Errorf("Invalid call expression %s", exp)
+// 	}
+// 	id, ok := call.Fun.(*ast.Ident)
+// 	if !ok {
+// 		return "", nil, errors.Errorf("Invalid call expression %s", call.Fun)
+// 	}
+// 	return id.Name, call.Args, nil
+// }
 
 // func (e *Eval2) parseRoot(exp ast.Expr) error {
 // 	switch exp := exp.(type) {
@@ -520,222 +294,9 @@ func (q *QueryPlanner) callid(exp ast.Expr) (string, []ast.Expr, error) {
 //
 //
 //
-func (q *QueryPlanner) parseRoot(root ast.Expr) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			if e, ok := p.(error); ok {
-				err = e
-			}
-			err = errors.Errorf("Parse panic: %v", p)
-		}
-	}()
-	_, err = q.parse(ScanExpr{}, root)
-	return
-}
 
 type parseContext struct {
 	Unary bool
-}
-
-func (q *QueryPlanner) strings(dst []string, exp ...ast.Expr) ([]string, error) {
-	for _, exp := range exp {
-		s, err := q.string(exp)
-		if err != nil {
-			return dst, nil
-		}
-		dst = append(dst, s)
-	}
-	return dst, nil
-}
-
-func (q *QueryPlanner) parseScan(scan ScanExpr, exp ast.Expr) (*ScanExpr, error) {
-	switch exp := exp.(type) {
-	case *ast.SliceExpr:
-		tr, x, err := q.timerange(scan.TimeRange, exp)
-		if err != nil {
-			return nil, q.Error(x, err)
-		}
-		scan.TimeRange = tr
-		return q.parseScan(scan, exp.X)
-	case *ast.IndexExpr:
-		step, err := q.duration(exp)
-		if err != nil {
-			return nil, err
-		}
-		scan.Step = step
-		return q.parseScan(scan, exp.X)
-	case *ast.CompositeLit:
-		scan := scan
-		match := scan.Match.Copy()
-		for _, el := range exp.Elts {
-			match = q.parseMatch(match, el)
-		}
-		sort.Sort(match)
-		scan.Match = match
-		return q.parseScan(scan, exp.Type)
-	case *ast.Ident:
-		scan := scan
-		scan.Event = exp.Name
-		return &scan, nil
-	default:
-		return nil, q.Errorf(exp, "Invalid scan expression")
-	}
-
-}
-func (q *QueryPlanner) parseCall(scan ScanExpr, call *ast.CallExpr) (ScanExpr, error) {
-	var (
-		s   *ScanExpr
-		err error
-	)
-	switch fn := call.Fun.(type) {
-	case *ast.SelectorExpr:
-		// .foo(...)
-		switch strings.ToLower(fn.Sel.Name) {
-		case "by":
-			group, err := q.strings(nil, call.Args...)
-			if err != nil {
-				return scan, err
-			}
-			scan.Group = group
-			// postfix op
-			_, err = q.parse(scan, fn.X)
-			return scan, err
-
-		default:
-			return scan, q.Errorf(fn.Sel, "Invalid postfix op: %q", fn.Sel.Name)
-		}
-	case *ast.SliceExpr:
-		// foo[a:b](...)
-		s, err = q.parseScan(scan, fn)
-	case *ast.IndexExpr:
-		// foo[a](...)
-		s, err = q.parseScan(scan, fn)
-	case *ast.Ident:
-		// foo(...)
-		s, err = q.parseScan(scan, fn)
-	case *ast.CompositeLit:
-		// foo{}(...)
-		s, err = q.parseScan(scan, fn)
-	default:
-		return scan, q.Errorf(fn, "Invalid call expression")
-	}
-	if err != nil {
-		return scan, err
-	}
-	if s != nil {
-		scan = *s
-	}
-	for _, arg := range call.Args {
-		_, err := q.parse(scan, arg)
-		if err != nil {
-			return scan, err
-		}
-	}
-	return scan, nil
-}
-
-func (q *QueryPlanner) parse(scan ScanExpr, e ast.Expr) (ScanExpr, error) {
-	_ = `
-	&scan{
-		foo: bar,
-	}[a:b:c](
-		win{
-			bar: baz,
-		},
-
-	).by(
-
-	)
-	event1{label: v1|v2}[start:end:step].by(foo)
-	|
-	event2{label: v1|v2}[start:end:step].by(foo)
-
-	`
-
-	switch exp := e.(type) {
-	case *ast.UnaryExpr:
-		if exp.Op != token.AND {
-			return scan, q.Errorf(exp, "Invalid root expression")
-		}
-		call, ok := exp.X.(*ast.CallExpr)
-		if !ok {
-			return scan, q.Errorf(exp, "Invalid root expression")
-		}
-		scan, err := q.parseCall(scan, call)
-		if err != nil {
-			return scan, err
-		}
-		if scan.Event != "scan" {
-			return scan, q.Errorf(exp, "Invalid root expression")
-		}
-		scan.Event = ""
-		return scan, nil
-	case *ast.CallExpr:
-		return q.parseCall(scan, exp)
-	case *ast.Ident:
-		s := scan
-		s.Event = exp.Name
-		q.index[e] = q.Scan(&s)
-		return scan, nil
-	case *ast.ParenExpr:
-		return q.parse(scan, exp.X)
-	case *ast.BinaryExpr:
-		if m := mergeOp(exp.Op); m == nil {
-			return scan, q.Errorf(exp, "Invalid operator %s", exp.Op)
-		}
-		var err error
-		scanX, err := q.parse(scan, exp.X)
-		if err != nil {
-			return scan, err
-		}
-		scanY, err := q.parse(scan, exp.Y)
-		if err != nil {
-			return scan, err
-		}
-		_, _ = scanX, scanY
-		return scan, nil
-	default:
-		return scan, errors.Errorf("Invalid exp %s", exp)
-
-	}
-}
-
-func (q *QueryPlanner) timerange(tr TimeRange, exp ast.Expr) (TimeRange, ast.Expr, error) {
-	switch exp := exp.(type) {
-	case *ast.SliceExpr:
-		slice := exp
-		if low := slice.Low; low != nil {
-			tm, err := q.time(low)
-			if err != nil {
-				return TimeRange{}, low, err
-			}
-			tr.Start = tm
-		}
-		if hi := slice.High; hi != nil {
-			tm, err := q.time(hi)
-			if err != nil {
-				return TimeRange{}, hi, err
-			}
-			tr.End = tm
-		}
-		if max := slice.Max; max != nil {
-			step, err := q.duration(max)
-			if err != nil {
-				return TimeRange{}, max, err
-			}
-			tr.Step = step
-		}
-		return tr, exp.X, nil
-	case *ast.IndexExpr:
-		d, err := q.duration(exp.Index)
-		if err != nil {
-			return TimeRange{}, exp.Index, err
-		}
-		tr.Step = d
-		return tr, exp.X, nil
-	default:
-		return TimeRange{}, exp, errors.New("Invalid timerange expression")
-	}
 }
 
 func ParseQuery(src string) (*QueryPlanner, error) {
