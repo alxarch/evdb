@@ -1,227 +1,49 @@
 package meter
 
 import (
-	"context"
 	"go/ast"
 	"go/parser"
-	"strconv"
-	"strings"
 	"testing"
-	"time"
 )
 
-func Test_Eval(t *testing.T) {
-	e, err := ParseEval("a + (b + c)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	events := e.Events()
-	if len(events) != 3 {
-		t.Errorf("Invalid events %v", events)
-		return
+// func Test_Eval(t *testing.T) {
+// 	e, err := ParseEval("a + (b + c)")
+// 	if err != nil {
+// 		t.Fatal(err)
+// 	}
+// 	events := e.Events()
+// 	if len(events) != 3 {
+// 		t.Errorf("Invalid events %v", events)
+// 		return
 
-	}
-	if events[0] != "a" {
-		t.Errorf("Invalid events %v", events)
-	}
-	if events[1] != "b" {
-		t.Errorf("Invalid events %v", events)
-	}
-	if events[2] != "c" {
-		t.Errorf("Invalid events %v", events)
-	}
+// 	}
+// 	if events[0] != "a" {
+// 		t.Errorf("Invalid events %v", events)
+// 	}
+// 	if events[1] != "b" {
+// 		t.Errorf("Invalid events %v", events)
+// 	}
+// 	if events[2] != "c" {
+// 		t.Errorf("Invalid events %v", events)
+// 	}
 
-}
-func Test_EvalQuery(t *testing.T) {
-	var (
-		now       = time.Now()
-		labels    = []string{"color", "taste"}
-		snapshots = []Snapshot{
-			{
-				Time:   now.Add(-1 * time.Minute),
-				Labels: labels,
-				Counters: CounterSlice{
-					{
-						Values: []string{"red", "bitter"},
-						Count:  42,
-					},
-					{
-						Values: []string{"yellow", "bitter"},
-						Count:  8,
-					},
-					{
-						Values: []string{"red", "sweet"},
-						Count:  64,
-					},
-				},
-			},
-			{
-				Time:   now.Add(-1 * time.Second),
-				Labels: labels,
-				Counters: CounterSlice{
-					{
-						Values: []string{"red", "bitter"},
-						Count:  42,
-					},
-					{
-						Values: []string{"yellow", "bitter"},
-						Count:  8,
-					},
-					{
-						Values: []string{"yellow", "sour"},
-						Count:  9,
-					},
-				},
-			},
-			{
-				Time:   now,
-				Labels: labels,
-				Counters: CounterSlice{
-					{
-						Values: []string{"red", "bitter"},
-						Count:  24,
-					},
-					{
-						Values: []string{"yellow", "bitter"},
-						Count:  11,
-					},
-					{
-						Values: []string{"yellow", "sour"},
-						Count:  100,
-					},
-					{
-						Values: []string{"green", "sweet"},
-						Count:  2,
-					},
-				},
-			},
-		}
-		fooStore = new(MemoryStore)
-		barStore = new(MemoryStore)
-		store    = TeeStore(fooStore, barStore)
-		scanners = ScannerIndex{
-			"foo": fooStore,
-			"bar": barStore,
-		}
-		querier = ScanQuerier(scanners)
-		evaler  = QueryEvaler(querier)
-		ctx     = context.Background()
-		q       = Query{
-			TimeRange: TimeRange{
-				Start: now.Add(-1 * time.Hour),
-				End:   now,
-				Step:  time.Minute,
-			},
-			Match: Fields{
-				{
-					Label: "color",
-					Value: "red",
-				},
-			},
-		}
-	)
-	for i := range snapshots {
-		s := &snapshots[i]
-		if err := store.Store(s); err != nil {
-			t.Fatalf("Unexpected error: %s", err)
-		}
-	}
-	{
-		results, err := querier.Query(ctx, q, "foo", "bar")
-		if err != nil {
-			t.Fatalf("Unexpected error: %s", err)
-		}
-		if len(results) != 4 {
-			t.Errorf("Invalid results size %d != 4", len(results))
-		}
-		if len(results[0].Data) != 2 {
-			t.Error(results[0].Data)
-		}
+// }
 
-	}
-	{
-		results, err := evaler.Eval(ctx, q, "foo / bar")
-		if err != nil {
-			t.Fatalf("Unexpected error: %s", err)
-		}
-		if len(results) != 1 {
-			t.Error(results)
-		}
-		if len(results[0].Data) != 2 {
-			t.Errorf("Invalid results size %d != 2", len(results))
-		}
+// // Reset resets a result
+// func (r *ScanResult) Reset() {
+// 	*r = ScanResult{
+// 		Fields: r.Fields.Reset(),
+// 		Data:   r.Data.Reset(),
+// 	}
+// }
 
-	}
-
-}
-
-func (s DataPoints) Reset() DataPoints {
-	for i := range s {
-		s[i] = DataPoint{}
-	}
-	return s[:0]
-}
-
-// Reset resets a result
-func (r *ScanResult) Reset() {
-	*r = ScanResult{
-		Fields: r.Fields.Reset(),
-		Data:   r.Data.Reset(),
-	}
-}
-
-func (results ScanResults) Reset() ScanResults {
-	for i := range results {
-		r := &results[i]
-		r.Reset()
-	}
-	return results[:0]
-}
-
-func (s *ScanExpr) String() string {
-	var (
-		scratch []byte
-		w       = new(strings.Builder)
-	)
-	scratch = strconv.AppendQuote(scratch[:0], s.Event)
-	w.Write(scratch)
-	if len(s.Match) > 0 {
-		w.WriteByte('{')
-		for i := range s.Match {
-			if i > 0 {
-				w.WriteByte(',')
-			}
-			f := &s.Match[i]
-			scratch = strconv.AppendQuote(scratch[:0], f.Label)
-			w.Write(scratch)
-			w.WriteByte(':')
-			scratch = strconv.AppendQuote(scratch[:0], f.Value)
-			w.Write(scratch)
-		}
-		w.WriteByte('}')
-	}
-	w.WriteByte('[')
-	scratch = s.Start.AppendFormat(scratch[:0], time.RFC3339Nano)
-	w.Write(scratch)
-	w.WriteByte(':')
-	scratch = s.End.AppendFormat(scratch[:0], time.RFC3339Nano)
-	w.Write(scratch)
-	w.WriteByte(':')
-	w.WriteString(s.Step.String())
-	w.WriteByte(']')
-	if len(s.Group) > 0 {
-		w.WriteString(".by(")
-		for i, g := range s.Group {
-			if i > 0 {
-				w.WriteByte(',')
-			}
-			scratch = strconv.AppendQuote(scratch[:0], g)
-			w.Write(scratch)
-		}
-		w.WriteByte(')')
-	}
-	return w.String()
-}
+// func (results ScanResults) Reset() ScanResults {
+// 	for i := range results {
+// 		r := &results[i]
+// 		r.Reset()
+// 	}
+// 	return results[:0]
+// }
 
 // func normalizeQuery(s string) string {
 // 	// Join lines
@@ -231,13 +53,13 @@ func (s *ScanExpr) String() string {
 // 	return s
 // }
 
-func firstExp(exp ...ast.Expr) ast.Expr {
-	if len(exp) == 1 {
-		return exp[0]
-	}
-	return nil
+// func firstExp(exp ...ast.Expr) ast.Expr {
+// 	if len(exp) == 1 {
+// 		return exp[0]
+// 	}
+// 	return nil
 
-}
+// }
 
 // func (q *QueryPlanner) callid(exp ast.Expr) (string, []ast.Expr, error) {
 // 	call, ok := exp.(*ast.CallExpr)
@@ -295,17 +117,13 @@ func firstExp(exp ...ast.Expr) ast.Expr {
 //
 //
 
-type parseContext struct {
-	Unary bool
-}
-
-func ParseQuery(src string) (*QueryPlanner, error) {
-	q := new(QueryPlanner)
-	if err := q.Reset(src); err != nil {
-		return nil, err
-	}
-	return q, nil
-}
+// func ParseQuery(src string) (*QueryPlanner, error) {
+// 	q := new(QueryPlanner)
+// 	if err := q.Reset(src); err != nil {
+// 		return nil, err
+// 	}
+// 	return q, nil
+// }
 
 func Test_Syntax(t *testing.T) {
 	src := `
@@ -335,25 +153,25 @@ func Test_Syntax(t *testing.T) {
 
 }
 
-func Test_Parser(t *testing.T) {
-	src := `
-	&scan{
-		bar: "baz" | "bar" | "baz",
-	}[now:now:"1s"](
-		foo / bar,
-	)
-	`
-	q, err := ParseQuery(src)
-	if err != nil {
-		t.Fatalf("Parse failed %s", err)
+// func Test_Parser(t *testing.T) {
+// 	src := `
+// 	&scan{
+// 		bar: "baz" | "bar" | "baz",
+// 	}[now:now:"1s"](
+// 		foo / bar,
+// 	)
+// 	`
+// 	q, err := ParseQuery(src)
+// 	if err != nil {
+// 		t.Fatalf("Parse failed %s", err)
 
-	}
-	if len(q.index) != 2 {
-		t.Errorf("Invalid queries size %d", len(q.index))
-	}
-	t.Error(q)
+// 	}
+// 	if len(q.index) != 2 {
+// 		t.Errorf("Invalid queries size %d", len(q.index))
+// 	}
+// 	t.Error(q)
 
-}
+// }
 
 // func (e *Eval2) parseDuration(exp ast.Expr) (time.Duration, error) {
 // 	const (

@@ -45,7 +45,8 @@ func (tr *TimeRange) NumSteps() int {
 	end := tr.End.Truncate(tr.Step)
 	return int(end.Sub(start) / tr.Step)
 }
-func (tr *TimeRange) Match(other *TimeRange) bool {
+
+func (tr *TimeRange) SameShape(other *TimeRange) bool {
 	return tr.Step == other.Step && tr.NumSteps() == other.NumSteps()
 }
 
@@ -89,4 +90,9 @@ func (tr *TimeRange) Rel(other *TimeRange) TimeRel {
 	}
 	// tmaxB <= tmaxA
 	return TimeRelBetween
+}
+
+func (tr TimeRange) Offset(d time.Duration) TimeRange {
+	tr.Start, tr.End = tr.Start.Add(d), tr.End.Add(d)
+	return tr
 }

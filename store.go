@@ -23,7 +23,8 @@ type Storer interface {
 type MemoryStore struct {
 	data []Snapshot
 }
-type MemoryScanner map[string]MemoryStore
+
+type MemoryScanner map[string]*MemoryStore
 
 // Last retuns the last posted StoreRequest
 func (m *MemoryStore) Last() *Snapshot {

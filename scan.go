@@ -5,7 +5,7 @@ import (
 )
 
 type Scanner interface {
-	Scan(ctx context.Context, queries ...ScanQuery) ([]Result, error)
+	Scan(ctx context.Context, queries ...ScanQuery) (Results, error)
 }
 
 // type PartialScanner interface {

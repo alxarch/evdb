@@ -10,7 +10,6 @@ import (
 
 func Test_MemoryStore(t *testing.T) {
 	m := new(meter.MemoryStore)
-	m.Event = "test"
 	r1 := meter.Snapshot{
 		Time:   time.Now(),
 		Labels: []string{"color", "taste"},
@@ -33,7 +32,8 @@ func Test_MemoryStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	q1 := meter.Query{
+	q1 := meter.ScanQuery{
+		Event: "foo",
 		TimeRange: meter.TimeRange{
 			Start: time.Now().Add(-1 * time.Hour),
 			End:   time.Now().Add(time.Hour),
@@ -42,7 +42,9 @@ func Test_MemoryStore(t *testing.T) {
 			{Label: "color", Value: "blue"},
 		},
 	}
-	results, err := m.Scan(ctx, q1.TimeRange, q1.Match)
+
+	s := meter.MemoryScanner{"foo": m}
+	results, err := s.Scan(ctx, q1)
 	if err != nil {
 		t.Fatalf(`Unexpected error %s`, err)
 	}

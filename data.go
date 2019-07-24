@@ -49,6 +49,10 @@ func (p *DataPoint) UnmarshalJSON(data []byte) error {
 // DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
 
+func (p *DataPoint) Merge(m Merger, v float64) {
+	p.Value = m.Merge(p.Value, v)
+}
+
 // Copy creates a copy of s
 func (s DataPoints) Copy() DataPoints {
 	if s == nil {
@@ -121,18 +125,18 @@ func (s DataPoints) Last() *DataPoint {
 	return nil
 }
 
-// MergePoint adds a point using Merger
-func (s DataPoints) MergePoint(m Merger, t int64, v float64) DataPoints {
+// Add adds a point
+func (s DataPoints) Add(t int64, v float64) DataPoints {
 	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
 		d := &s[i]
 		if d.Timestamp == t {
-			d.Value = m.Merge(d.Value, v)
+			d.Value += v
 			return s
 		}
 	}
 	return append(s, DataPoint{
 		Timestamp: t,
-		Value:     m.Merge(math.NaN(), v),
+		Value:     v,
 	})
 }
 
@@ -255,14 +259,6 @@ func (s DataPoints) MergeConsecutiveDuplicates(m Merger) DataPoints {
 
 var mergeSum = MergeSum{}
 
-func (s DataPoints) Aggregate(m Merger, data ...DataPoint) DataPoints {
-	for i := range data {
-		d := &data[i]
-		s = s.MergePoint(m, d.Timestamp, d.Value)
-	}
-	return s
-}
-
 func (s DataPoints) Pick(data DataPoints) DataPoints {
 	for i := range data {
 		d := &data[i]
@@ -288,4 +284,26 @@ func (s DataPoints) Slice(start, end int64) DataPoints {
 	}
 	return s
 
+}
+
+func (s DataPoints) Reset() DataPoints {
+	for i := range s {
+		s[i] = DataPoint{}
+	}
+	return s[:0]
+}
+
+func (s DataPoints) Fill(v float64) {
+	for i := range s {
+		d := &s[i]
+		d.Value = v
+	}
+}
+func (s DataPoints) Aggregate(agg Aggregator) float64 {
+	v := agg.Zero()
+	for i := range s {
+		d := &s[i]
+		v = agg.Aggregate(v, d.Value)
+	}
+	return v
 }

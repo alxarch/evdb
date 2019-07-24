@@ -8,6 +8,7 @@ import (
 
 // Result is a query result
 type Result struct {
+	TimeRange
 	Event  string     `json:"event,omitempty"`
 	Fields Fields     `json:"fields,omitempty"`
 	Data   DataPoints `json:"data,omitempty"`
@@ -81,7 +82,7 @@ func (results Results) Add(event string, fields Fields, t int64, v float64) Resu
 		if !r.Fields.Equal(fields) {
 			continue
 		}
-		r.Data = r.Data.MergePoint(mergeSum, t, v)
+		// r.Data = r.Data.Add(t, v)
 		return results
 	}
 	return append(results, Result{
