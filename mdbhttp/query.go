@@ -46,12 +46,12 @@ func ParseTime(v string) (time.Time, error) {
 	return time.Unix(n, 0), nil
 }
 
-func (qr *Querier) evalURL(q *meter.Query, exp ...string) (string, error) {
+func (qr *Querier) evalURL(q *meter.ScanQuery, exp ...string) (string, error) {
 	u, err := url.Parse(qr.URL)
 	if err != nil {
 		return "", err
 	}
-	values := QueryValues(q)
+	values := QueryValues(q.TimeRange)
 	for _, e := range exp {
 		values.Add("eval", e)
 	}
@@ -59,34 +59,36 @@ func (qr *Querier) evalURL(q *meter.Query, exp ...string) (string, error) {
 	return u.String(), nil
 }
 
-func (qr *Querier) queryURL(q *meter.Query, events ...string) (string, error) {
+func (qr *Querier) queryURL(r meter.TimeRange) (string, error) {
 	u, err := url.Parse(qr.URL)
 	if err != nil {
 		return "", err
 	}
-	values := QueryValues(q)
-	for _, event := range events {
-		values.Add("event", event)
-	}
+	values := QueryValues(r)
+	// // for _, event := range events {
+	// values.Add("event", q.Event)
+	// // }
 	u.RawQuery = values.Encode()
 	return u.String(), nil
 
 }
 
 // Eval implements meter.Evaler interface
-func (qr *Querier) Eval(ctx context.Context, q meter.Query, exp ...string) (meter.Results, error) {
-	u, err := qr.evalURL(&q, exp...)
+func (qr *Querier) Query(ctx context.Context, r meter.TimeRange, q string) ([]interface{}, error) {
+	body := strings.NewReader(q)
+	u, err := qr.queryURL(r)
+	if err != nil {
+		return nil, err
+
+	}
+	req, err := http.NewRequest(http.MethodPost, u, body)
 	if err != nil {
 		return nil, err
 	}
-	return qr.send(ctx, u)
+	return qr.send(ctx, req)
 }
 
-func (qr *Querier) send(ctx context.Context, u string) (meter.Results, error) {
-	req, err := http.NewRequest(http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
+func (qr *Querier) send(ctx context.Context, req *http.Request) ([]interface{}, error) {
 	if ctx != nil {
 		req = req.WithContext(ctx)
 	}
@@ -106,51 +108,49 @@ func (qr *Querier) send(ctx context.Context, u string) (meter.Results, error) {
 	if err != nil {
 		return nil, errors.Errorf(`Failed to read response: %s`, err)
 	}
-	var results meter.Results
+	var results []interface{}
 	if err := json.Unmarshal(data, &results); err != nil {
 		return nil, errors.Errorf(`Failed to parse response: %s`, err)
 	}
 	return results, nil
 }
 
-// Query implements Querier interface
-func (qr *Querier) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	u, err := qr.queryURL(&q, events...)
+func (qr *Querier) get(ctx context.Context, u string) ([]interface{}, error) {
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	return qr.send(ctx, u)
-
+	return qr.send(ctx, req)
 }
 
 // QueryValues converts a meter.Query to url.Values
-func QueryValues(q *meter.Query) url.Values {
+func QueryValues(r meter.TimeRange) url.Values {
 	values := url.Values(make(map[string][]string))
-	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
-	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
-	for _, label := range q.Group {
-		values.Add("group", label)
-	}
-	if q.Step != 0 {
-		values.Set("step", q.Step.String())
-	}
-	match := q.Match.Sorted()
-	for _, field := range match {
-		values.Add(`match.`+field.Label, field.Value)
-	}
-	if q.EmptyValue != "" {
-		values.Set("empty", q.EmptyValue)
-	}
+	values.Set("start", strconv.FormatInt(r.Start.Unix(), 10))
+	values.Set("end", strconv.FormatInt(r.End.Unix(), 10))
+	values.Set("step", r.Step.String())
+	// for _, label := range q.Group {
+	// 	values.Add("group", label)
+	// }
+	// if q.Step != 0 {
+	// 	values.Set("step", q.Step.String())
+	// }
+	// match := q.Match.Sorted()
+	// for _, field := range match {
+	// 	values.Add(`match.`+field.Label, field.Value)
+	// }
+	// if q.EmptyValue != "" {
+	// 	values.Set("empty", q.EmptyValue)
+	// }
 	return values
 }
 
 // QueryHandler returns an HTTP endpoint for a QueryRunner
 func QueryHandler(querier meter.Querier) http.HandlerFunc {
-	evaler := meter.QueryEvaler(querier)
 	return func(w http.ResponseWriter, r *http.Request) {
 		values := r.URL.Query()
-		q, err := ParseQuery(values)
-		if err != nil {
+		var q meter.TimeRange
+		if err := ParseQueryTimeRange(&q, values); err != nil {
 			httperr.RespondJSON(w, httperr.BadRequest(err))
 			return
 		}
@@ -160,82 +160,48 @@ func QueryHandler(querier meter.Querier) http.HandlerFunc {
 		if q.End.IsZero() {
 			q.End = time.Now()
 		}
-		if q.Group == nil {
-			q.Group = q.Match.Labels()
+		results, err := querier.Query(r.Context(), q, values.Get("query"))
+		if err != nil {
+			httperr.RespondJSON(w, errors.Errorf("Query evaluation failed: %s", err))
+			return
 		}
-		switch mode := strings.Trim(r.URL.Path, "/"); mode {
-		case "eval":
-			eval := values["eval"]
-			if len(eval) == 0 {
-				err := errors.New("Missing query.eval")
-				httperr.RespondJSON(w, httperr.BadRequest(err))
-			}
-			results, err := evaler.Eval(r.Context(), q, eval...)
-			if err != nil {
-				httperr.RespondJSON(w, errors.Errorf("Query evaluation failed: %s", err))
-				return
-			}
-			httperr.RespondJSON(w, results)
-		case "totals":
-			q.Step = -1
-			fallthrough
-		case "events", "fields", "raw":
-			events := values["event"]
-			if len(events) == 0 {
-				err := errors.New("Missing query.event")
-				httperr.RespondJSON(w, httperr.BadRequest(err))
-				return
-			}
-			results, err := querier.Query(r.Context(), q, events...)
-			if err != nil {
-				err := errors.Errorf("Query failed: %s", err)
-				httperr.RespondJSON(w, err)
-				return
-			}
-			var x interface{}
-			switch meter.ResultTypeFromString(mode) {
-			case meter.TotalsResult:
-				x = results.Totals()
-			case meter.FieldSummaryResult:
-				x = results.FieldSummaries()
-			case meter.EventSummaryResult:
-				x = results.EventSummaries(q.EmptyValue)
-			default:
-				x = results
-			}
-			httperr.RespondJSON(w, x)
-		default:
-			httperr.RespondJSON(w, httperr.NotFound(nil))
-		}
+		httperr.RespondJSON(w, results)
 	}
 }
 
-// ParseQuery sets query values from a URL query
-func ParseQuery(values url.Values) (q meter.Query, err error) {
+func ParseQueryTimeRange(tr *meter.TimeRange, values url.Values) error {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
-			q.Step, _ = time.ParseDuration(step[0])
+			tr.Step, _ = time.ParseDuration(step[0])
 		} else {
-			q.Step = 0
+			tr.Step = 0
 		}
 	} else {
-		q.Step = -1
+		tr.Step = -1
 	}
 	start, err := ParseTime(values.Get("start"))
 	if err != nil {
-		return
+		return err
 	}
 	if !start.IsZero() {
-		q.Start = start
+		tr.Start = start
 	}
 	end, err := ParseTime(values.Get("end"))
 	if err != nil {
-		return
+		return err
 	}
 	if !end.IsZero() {
-		q.End = end
+		tr.End = end
 	}
+	return nil
 
+}
+
+// ParseQuery sets query values from a URL query
+func ParseQuery(values url.Values) (q meter.ScanQuery, err error) {
+	if err = ParseQueryTimeRange(&q.TimeRange, values); err != nil {
+		return
+	}
 	match := q.Match[:0]
 	for key, values := range values {
 		if strings.HasPrefix(key, "match.") {
@@ -257,8 +223,9 @@ func ParseQuery(values url.Values) (q meter.Query, err error) {
 		}
 	}
 	sort.Stable(match)
-	q.Match, q.Group = match, group
-	q.EmptyValue = values.Get("empty")
+	// q.Match, q.Group = match, group
+	q.Match = match
+	// q.EmptyValue = values.Get("empty")
 	return
 }
 
@@ -278,4 +245,45 @@ func appendDistinct(dst []string, src ...string) []string {
 		}
 	}
 	return dst
+}
+
+func parseQuery(start, end, step, query string) (*Query, error) {
+	q := Query{
+		Query: query,
+	}
+	tmin, err := ParseTime(start)
+	if err != nil {
+		return nil, errors.Errorf("Invalid start: %s", err)
+	}
+	q.Start = tmin
+	tmax, err := ParseTime(end)
+	if err != nil {
+		return nil, errors.Errorf("Invalid end: %s", err)
+	}
+	q.End = tmax
+	d, err := time.ParseDuration(step)
+	if err != nil {
+		return nil, errors.Errorf("Invalid step: %s", err)
+	}
+	q.Step = d
+	return &q, nil
+}
+func ParseJSONQuery(data []byte) (*Query, error) {
+	q := struct {
+		Query string `json:"query"`
+		Start string `json:"start"`
+		End   string `json:"end"`
+		Step  string `json:"step"`
+	}{}
+	if err := json.Unmarshal(data, &q); err != nil {
+		return nil, errors.Errorf("Invalid JSON body: %s", err)
+	}
+	return parseQuery(q.Start, q.End, q.Step, q.Query)
+}
+func ParseFormQuery(data string) (*Query, error) {
+	values, err := url.ParseQuery(data)
+	if err != nil {
+		return nil, errors.Errorf("Invalid querystring: %s", err)
+	}
+	return parseQuery(values.Get("start"), values.Get("end"), values.Get("step"), values.Get("query"))
 }

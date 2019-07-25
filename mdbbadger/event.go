@@ -175,10 +175,10 @@ func (e *eventDB) resolver(match meter.Fields) resolver {
 
 var merger = meter.MergeSum{}
 
-func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
+func (e *eventDB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (results meter.Results, err error) {
 	var (
-		resolver   = e.resolver(match)
-		minT, maxT = tr.Start.Unix(), tr.End.Unix()
+		resolver   = e.resolver(q.Match)
+		minT, maxT = q.Start.Unix(), q.End.Unix()
 		ts         int64
 		scanValue  = func(value []byte) error {
 			var id, n uint64
@@ -191,7 +191,7 @@ func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fiel
 				if fields == nil {
 					continue
 				}
-				results = results.Add(fields, ts, float64(int64(n)))
+				results = results.Add(q.Event, fields, ts, float64(int64(n)))
 			}
 			return nil
 		}
@@ -201,7 +201,7 @@ func (e *eventDB) Scan(ctx context.Context, tr meter.TimeRange, match meter.Fiel
 	defer txn.Discard()
 	iter := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer iter.Close()
-	seekEvent(iter, e.id, tr.Start)
+	seekEvent(iter, e.id, q.Start)
 	for ; iter.Valid(); iter.Next() {
 		item := iter.Item()
 		key := item.Key()

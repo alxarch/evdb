@@ -18,7 +18,11 @@ func (p DataPoint) AppendJSON(data []byte) []byte {
 	data = append(data, '[')
 	data = strconv.AppendInt(data, p.Timestamp, 10)
 	data = append(data, ',')
-	data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
+	if math.IsNaN(p.Value) {
+		data = append(data, "null"...)
+	} else {
+		data = strconv.AppendFloat(data, p.Value, 'f', -1, 64)
+	}
 	data = append(data, ']')
 	return data
 }

@@ -6,6 +6,79 @@ import (
 	"math"
 )
 
+type Aggregator interface {
+	Aggregate(acc, v float64) float64
+	Zero() float64
+}
+
+type aggMin struct{}
+
+func (aggMin) Zero() float64 {
+	return math.Inf(1)
+}
+func (aggMin) Aggregate(acc, v float64) float64 {
+	if acc < v {
+		return acc
+	}
+	return v
+}
+
+type aggMax struct{}
+
+func (aggMax) Zero() float64 {
+	return math.Inf(-1)
+}
+func (aggMax) Aggregate(acc, v float64) float64 {
+	if acc > v {
+		return acc
+	}
+	return v
+}
+
+type aggSum struct{}
+
+func (aggSum) Zero() float64 {
+	return 0
+}
+func (aggSum) Aggregate(acc, v float64) float64 {
+	if math.IsNaN(v) {
+		return acc
+	}
+	return acc + v
+}
+
+type aggCount struct{}
+
+func (aggCount) Zero() float64 {
+	return 0
+}
+func (aggCount) Aggregate(acc, _ float64) float64 {
+	return acc + 1
+}
+
+type aggAvg struct {
+	sum, count float64
+}
+
+func (*aggAvg) Zero() float64 {
+	return math.NaN()
+}
+
+func (a *aggAvg) Aggregate(acc, v float64) float64 {
+	if math.IsNaN(acc) {
+		*a = aggAvg{
+			sum:   v,
+			count: 1,
+		}
+		return v
+	}
+	a.count++
+	if !math.IsNaN(v) {
+		a.sum += v
+	}
+	return a.sum / a.count
+}
+
 // Merger provides a method to merge values
 type Merger interface {
 	Merge(a, b float64) float64
@@ -160,5 +233,21 @@ func mergeOp(op token.Token) Merger {
 	default:
 		return nil
 	}
+
+}
+
+type aggDebug struct{}
+
+func (aggDebug) Reset() {}
+func (aggDebug) Aggregate(_ float64) float64 {
+	return math.NaN()
+
+}
+
+type aggRaw struct{}
+
+func (aggRaw) Reset() {}
+func (aggRaw) Aggregate(_ float64) float64 {
+	return math.NaN()
 
 }

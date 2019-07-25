@@ -2,7 +2,6 @@ package mdbredis
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,10 +10,12 @@ import (
 	redis "github.com/alxarch/fastredis"
 	"github.com/alxarch/fastredis/resp"
 	meter "github.com/alxarch/go-meter/v2"
+	errors "golang.org/x/xerrors"
 )
 
 type DB struct {
-	redis       *redis.Pool
+	redis *redis.Pool
+	meter.Scanner
 	keyPrefix   string
 	scanSize    int64
 	events      map[string]meter.Storer
@@ -78,6 +79,7 @@ func Open(options Options, events ...string) (*DB, error) {
 	for _, event := range events {
 		db.events[event] = db.storer(event)
 	}
+	db.Scanner = meter.NewScanner(&db)
 	return &db, nil
 }
 
@@ -86,29 +88,17 @@ func (db *DB) Close() error {
 	return nil
 }
 
-type scanners struct {
-	*DB
-	res Resolution
-}
-
-func (s scanners) Scanner(event string) meter.Scanner {
-	return &storer{
-		DB:         s.DB,
-		event:      event,
-		Resolution: s.res,
-	}
-}
-
-func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	if now := time.Now(); q.End.After(now) {
-		q.End = now
-	}
+func (db *DB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
 	res, ok := db.resolutions[q.Step]
 	if !ok {
-		return nil, fmt.Errorf("Invalid query step %s", q.Step)
+		return nil, errors.Errorf("Invalid query step: %s", q.Step)
 	}
-	s := scanners{db, res}
-	return q.Scan(ctx, s, events...)
+	s := storer{
+		DB:         db,
+		event:      q.Event,
+		Resolution: res,
+	}
+	return s.Scan(ctx, q.TimeRange, q.Match)
 }
 
 func (db *storer) Store(s *meter.Snapshot) error {
@@ -156,14 +146,13 @@ const defaultScanSize = 1000
 // 	defer conn.Close()
 // 	return redis.Int64Map(conn.Do("HGETALL", key))
 // }
-func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.ScanResults, err error) {
+func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.Results, err error) {
 	var (
-		sum           = meter.MergeSum{}
 		key           []byte
 		fields        meter.Fields
 		ts            int64
-		index         = map[string]*meter.ScanResult{}
-		skip          = &meter.ScanResult{}
+		index         = map[string]*meter.Result{}
+		skip          = &meter.Result{}
 		start         = db.Truncate(q.Start)
 		tm, end, step = start, db.Truncate(q.End), db.Step()
 		scan          = func(k []byte, v resp.Value) error {
@@ -179,9 +168,11 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 					return nil
 				}
 
-				results = append(results, meter.ScanResult{
-					Fields: fields.Copy(),
-					Data:   meter.ZeroData(start, end, step),
+				results = append(results, meter.Result{
+					TimeRange: q,
+					Event:     db.event,
+					Fields:    fields.Copy(),
+					Data:      q.BlankData(0),
 				})
 				r = &results[len(results)-1]
 				index[string(k)] = r
@@ -190,7 +181,7 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 			if err != nil {
 				return err
 			}
-			r.Data = r.Data.MergePoint(sum, ts, n)
+			r.Data = r.Data.Add(ts, n)
 			return nil
 		}
 	)

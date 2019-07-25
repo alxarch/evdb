@@ -7,7 +7,7 @@ import (
 )
 
 type DB interface {
-	Scanner
+	ScanQuerier
 	Storer(event string) Storer
 	Close() error
 }

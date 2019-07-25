@@ -1,10 +1,8 @@
 package meter
 
 import (
-	"go/ast"
-	"go/token"
 	"math"
-	"strconv"
+	"time"
 )
 
 var _ = `
@@ -23,98 +21,148 @@ type noder interface {
 
 type evalNode interface {
 	noder
-	Eval([]interface{}, Results) []interface{}
+	Eval([]interface{}, *TimeRange, Results) []interface{}
 }
 
-type resultNode interface {
+type rawResult interface {
 	noder
-	Result(Results) Result
+	Results(Results, TimeRange) Results
+}
+
+type aggResult interface {
+	noder
+	Aggregate(r Results, t *TimeRange, agg Aggregator) Result
 }
 
 type groupNode struct {
-	scanNode
-	Nodes  []resultNode
+	Nodes  []aggResult
 	Group  []string
 	Empty  string
-	groups []groupedResult
+	Agg    Aggregator
+	groups []resultGroup
 }
 
 func (*groupNode) node() {}
 
 func (g *groupNode) reset(results Results) {
 	g.groups = nil
+	scratch := Fields(make([]Field, 0, len(g.Group)))
 	for i := range results {
 		r := &results[i]
-		g.add(r)
+		scratch = r.Fields.AppendGrouped(scratch[:0], g.Empty, g.Group)
+		g.add(scratch, r)
 	}
 }
-func (g *groupNode) add(r *Result) {
+func (g *groupNode) add(fields Fields, r *Result) {
 	for i := range g.groups {
 		group := &g.groups[i]
-		if r.Fields.Includes(group.Fields) {
+		if group.Fields.Equal(fields) {
 			group.results = append(group.results, *r)
 			return
 		}
 	}
-	g.groups = append(g.groups, groupedResult{
-		Fields:  r.Fields.GroupBy(g.Empty, g.Group),
+	g.groups = append(g.groups, resultGroup{
+		Fields:  fields.Copy(),
 		results: Results{*r},
 	})
 }
 
-type groupedResult struct {
+type resultGroup struct {
 	Fields  Fields
 	results Results
 }
 
-func (g *groupNode) evalGroup(out []interface{}, group *groupedResult) []interface{} {
+func (g *groupNode) Aggregator() Aggregator {
+	if g.Agg == nil {
+		return aggSum{}
+	}
+	return g.Agg
+}
+
+func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *TimeRange) []interface{} {
+	agg := g.Aggregator()
 	for _, n := range g.Nodes {
-		r := n.Result(group.results)
+		r := n.Aggregate(group.results, tr, agg)
 		r.Fields = group.Fields
 		out = append(out, &r)
 	}
 	return out
 }
 
-func (g *groupNode) Eval(out []interface{}, raw Results) []interface{} {
-	g.reset(raw)
+func (g *groupNode) Eval(out []interface{}, tr *TimeRange, results Results) []interface{} {
+	g.reset(results)
 	for i := range g.groups {
 		group := &g.groups[i]
-		out = g.evalGroup(out, group)
+		out = g.evalGroup(out, group, tr)
 	}
 	return out
 }
 
-type scanNode struct {
-	TimeRange
-	Agg   Aggregator
-	Match Fields
-}
-
-func (*scanNode) node() {}
-func (s *scanNode) Result(event string) scanResultNode {
-	return scanResultNode{
-		ScanQuery: s.Query(event),
-		Agg:       s.Agg,
-	}
-}
-
 type scanResultNode struct {
-	ScanQuery
-	Agg Aggregator
+	Offset time.Duration
+	Event  string
+	Match  Fields
 }
 
 func (*scanResultNode) node() {}
 
-func (s *scanResultNode) Result(results Results) Result {
-	data := s.BlankData(s.Agg.Zero())
-	agg := blankAgg(s.Agg)
-	raw := s.MatchResults(results)
+func (s *scanResultNode) Query(tr TimeRange) ScanQuery {
+	return ScanQuery{
+		TimeRange: tr.Offset(s.Offset),
+		Event:     s.Event,
+		Match:     s.Match,
+	}
+}
+
+type scanEvalNode struct {
+	*scanResultNode
+}
+
+func (*scanEvalNode) node() {}
+func (s *scanEvalNode) Eval(out []interface{}, t *TimeRange, r Results) []interface{} {
+	r = s.Results(r, *t)
+	for i := range r {
+		out = append(out, &r[i])
+	}
+	return out
+}
+func (s *scanResultNode) Results(results Results, tr TimeRange) Results {
+	tr = tr.Offset(s.Offset)
+	start, end := tr.Start.Unix(), tr.End.Unix()
+	out := Results{}
+	m := s.Match.Map()
+	for i := range results {
+		r := &results[i]
+		if r.Event == s.Event && r.Fields.MatchValues(m) {
+			switch rel := r.TimeRange.Rel(&tr); rel {
+			case TimeRelEqual, TimeRelBetween:
+				out = append(out, *r)
+			case TimeRelAround:
+				s := *r
+				s.Data = r.Data.Slice(start, end)
+				if len(s.Data) > 0 {
+					out = append(out, s)
+				}
+			default:
+			}
+		}
+	}
+	return out
+}
+
+type scanAggNode struct {
+	*scanResultNode
+}
+
+func (s *scanAggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+	t := *tr
+	data := tr.BlankData(agg.Zero())
+	results = s.Results(results, t)
 	for i := range data {
 		d := &data[i]
 		v := agg.Zero()
-		for j := range raw {
-			r := &raw[j]
+		for j := range results {
+			r := &results[j]
 			if 0 <= i && i < len(r.Data) {
 				p := r.Data[i]
 				v = agg.Aggregate(v, p.Value)
@@ -125,88 +173,87 @@ func (s *scanResultNode) Result(results Results) Result {
 		d.Value = v
 	}
 	return Result{
-		Fields: s.Match,
-		Data:   data,
+		TimeRange: t,
+		Event:     s.Event,
+		Fields:    s.Match,
+		Data:      data,
 	}
 }
 
 type valueNode struct {
-	TimeRange
-	Value float64
+	Offset time.Duration
+	Value  float64
 }
 
 func (*valueNode) node() {}
-func (v *valueNode) Result(_ Results) Result {
+func (v *valueNode) Aggregate(_ Results, t *TimeRange, _ Aggregator) Result {
+	if v.Offset > 0 {
+		tt := t.Offset(v.Offset)
+		t = &tt
+	}
 	return Result{
-		Data: v.BlankData(v.Value),
+		Data: t.BlankData(v.Value),
 	}
 }
 
 type aggNode struct {
-	TimeRange
-	Agg   Aggregator
-	Nodes []resultNode
+	Offset time.Duration
+	Agg    Aggregator
+	Nodes  []aggResult
 }
 
 func (*aggNode) node() {}
 
-func (r *Result) Rel(other *Result) TimeRel {
-	if r.Event == other.Event && r.Fields.Equal(other.Fields) {
-		return r.TimeRange.Rel(&other.TimeRange)
+func (n *aggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+	if n.Offset != 0 {
+		t := tr.Offset(n.Offset)
+		tr = &t
 	}
-	return TimeRelNone
-}
-
-func (results Results) Find(r *Result, rel TimeRel) *Result {
-	for i := range results {
-		rr := &results[i]
-		if rr.Rel(r) == rel {
-			return rr
+	switch len(n.Nodes) {
+	case 0:
+		return Result{
+			Data: tr.BlankData(math.NaN()),
 		}
+	case 1:
+		return n.Nodes[0].Aggregate(results, tr, agg)
 	}
-	return nil
-}
-
-func (n *aggNode) Result(in Results) Result {
 	var els []Result
+	if n.Agg != nil {
+		agg = n.Agg
+	}
 	for _, el := range n.Nodes {
-		els = append(els, el.Result(in))
+		els = append(els, el.Aggregate(results, tr, agg))
 	}
-	if len(els) > 0 {
-		out, tail := els[0], els[1:]
-		agg := blankAgg(n.Agg)
-		for i := range out.Data {
-			d := &out.Data[i]
-			v := agg.Zero()
-			v = agg.Aggregate(v, d.Value)
-			for j := range tail {
-				el := &tail[j]
-				if 0 <= i && i < len(el.Data) {
-					d := &el.Data[i]
-					v = agg.Aggregate(v, d.Value)
-				} else {
-					v = agg.Aggregate(v, math.NaN())
-				}
+	out, tail := els[0], els[1:]
+	a := blankAgg(agg)
+	for i := range out.Data {
+		d := &out.Data[i]
+		v := a.Zero()
+		v = a.Aggregate(v, d.Value)
+		for j := range tail {
+			el := &tail[j]
+			if 0 <= i && i < len(el.Data) {
+				d := &el.Data[i]
+				v = a.Aggregate(v, d.Value)
+			} else {
+				v = a.Aggregate(v, math.NaN())
 			}
-			d.Value = v
 		}
-		return out
+		d.Value = v
 	}
-	return Result{
-		Data: n.BlankData(math.NaN()),
-	}
+	return out
 }
 
 type opNode struct {
-	X  resultNode
-	Y  resultNode
+	X  aggResult
+	Y  aggResult
 	Op Merger
 }
 
 func (op *opNode) node() {}
-func (op *opNode) Result(r Results) Result {
-	x := op.X.Result(r)
-	y := op.Y.Result(r)
+func (op *opNode) Aggregate(r Results, tr *TimeRange, agg Aggregator) Result {
+	x := op.X.Aggregate(r, tr, agg)
+	y := op.Y.Aggregate(r, tr, agg)
 	for i := range x.Data {
 		p := &x.Data[i]
 		if 0 <= i && i < len(y.Data) {
@@ -217,37 +264,34 @@ func (op *opNode) Result(r Results) Result {
 	return x
 }
 
-type blockNode struct {
-	scanNode
-	nodes []evalNode
-}
+type blockNode []evalNode
 
-func (*blockNode) node() {}
+func (blockNode) node() {}
 
-func (b *blockNode) Eval(out []interface{}, in Results) []interface{} {
-	for _, n := range b.nodes {
-		out = n.Eval(out, in)
+func (b blockNode) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
+	for _, n := range b {
+		out = n.Eval(out, t, results)
 	}
 	return out
 }
 
-func expString(exp ast.Expr) (string, error) {
-	switch exp := exp.(type) {
-	case *ast.BasicLit:
-		return unquote(exp)
-	case *ast.Ident:
-		return exp.Name, nil
-	default:
-		return "", nil
-	}
-}
+// func expString(exp ast.Expr) (string, error) {
+// 	switch exp := exp.(type) {
+// 	case *ast.BasicLit:
+// 		return unquote(exp)
+// 	case *ast.Ident:
+// 		return exp.Name, nil
+// 	default:
+// 		return "", nil
+// 	}
+// }
 
-func unquote(lit *ast.BasicLit) (string, error) {
-	if lit.Kind == token.STRING {
-		return strconv.Unquote(lit.Value)
-	}
-	return lit.Value, nil
-}
+// func unquote(lit *ast.BasicLit) (string, error) {
+// 	if lit.Kind == token.STRING {
+// 		return strconv.Unquote(lit.Value)
+// 	}
+// 	return lit.Value, nil
+// }
 
 func blankAgg(agg Aggregator) Aggregator {
 	if _, avg := agg.(*aggAvg); avg {
@@ -256,36 +300,31 @@ func blankAgg(agg Aggregator) Aggregator {
 	return agg
 }
 
-// MatchResults finds results than match s
-func (s *ScanQuery) MatchResults(results Results) []Result {
-	start, end := s.Start.Unix(), s.End.Unix()
-	raw := Results{}
-	tr := &s.TimeRange
-	for i := range results {
-		r := &results[i]
-		if r.Event == s.Event && s.Match.Includes(r.Fields) {
-			switch r.TimeRange.Rel(tr) {
-			case TimeRelEqual, TimeRelBetween:
-				raw = append(raw, *r)
-			case TimeRelAround:
-				s := *r
-				s.Data = r.Data.Slice(start, end)
-				if len(s.Data) > 0 {
-					raw = append(raw, s)
-				}
-			default:
-				continue
-			}
-		}
+var _ = `
+
+!match{country: GR|US|RU}
+
+bid{ex: epom} / win[-1:h] * 2
+!group{country}
+{
+	*match{country: GR}
+	!avg{
+		bid{color: blue},
+		bid{color: green}[-1:week],
+		bid{color: red},
 	}
-	return raw
+
 }
 
-var _ = `
-!match{foo: bar}
+{
+	*match{foo: bar}
+	!avg{bid / bid[-1h]} + !sum{foo/bar}
+	*by{country, cid, empty: true}
+}
+
+
 !match{foo: baz}
-!group{country, status}
-foo / !avg{bar}
+foo / !!avg{bar, goo}  
 
 
 `

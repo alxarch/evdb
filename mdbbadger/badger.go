@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	errors "golang.org/x/xerrors"
+
 	"github.com/alxarch/go-meter/v2"
 	"github.com/alxarch/go-meter/v2/blob"
 	"github.com/dgraph-io/badger/v2"
@@ -49,17 +51,12 @@ func (db *DB) Storer(event string) meter.Storer {
 	return nil
 }
 
-// Scanner implements Scanners interface
-func (db DB) Scanner(event string) meter.Scanner {
-	if s, ok := db.events[event]; ok {
-		return s
+// ScanQuery implements meter.ScanQuerier interface
+func (db *DB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
+	if s, ok := db.events[q.Event]; ok {
+		return s.ScanQuery(ctx, q)
 	}
-	return nil
-}
-
-// Query implements meter.Querier interface
-func (db *DB) Query(ctx context.Context, q meter.Query, events ...string) (meter.Results, error) {
-	return q.Scan(ctx, db, events...)
+	return nil, errors.Errorf("Invalid event %q", q.Event)
 }
 
 // Close implements meter.DB interface

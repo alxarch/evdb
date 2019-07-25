@@ -73,6 +73,20 @@ func (fields *Fields) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+func (fields Fields) AppendGrouped(grouped Fields, empty string, groups []string) Fields {
+	for _, label := range groups {
+		value, ok := fields.Get(label)
+		if !ok {
+			value = empty
+		}
+		grouped = append(grouped, Field{
+			Label: label,
+			Value: value,
+		})
+	}
+	return grouped
+}
+
 // GroupBy groups fields by labels
 func (fields Fields) GroupBy(empty string, groups []string) Fields {
 	grouped := make([]Field, len(groups))
@@ -211,6 +225,22 @@ func ZipFields(labels []string, values []string) (fields Fields) {
 	}
 	return
 
+}
+
+// MatchValues matches fields agaist a map collection of Fields
+func (fields Fields) MatchValues(values map[string][]string) bool {
+	n := 0
+	for i := range fields {
+		f := &fields[i]
+		v := values[f.Label]
+		for j := range v {
+			if v[j] == f.Value {
+				n++
+				break
+			}
+		}
+	}
+	return n == len(values)
 }
 
 // MatchSorted matches fields agaist a sorted collection of Fields

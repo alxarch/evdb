@@ -32,15 +32,15 @@ func TestDB(t *testing.T) {
 		},
 	})
 	ctx := context.Background()
-	q := meter.Query{
+	q := meter.ScanQuery{
+		Event: "cost",
 		TimeRange: meter.TimeRange{
 			Start: now,
 			End:   now,
 			Step:  time.Hour,
 		},
-		Group: []string{"foo"},
 	}
-	results, err := db.Query(ctx, q, "cost")
+	results, err := db.ScanQuery(ctx, &q)
 	if err != nil {
 		t.Fatal(err)
 	}
