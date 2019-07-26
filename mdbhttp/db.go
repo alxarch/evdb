@@ -2,7 +2,6 @@ package mdbhttp
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"mime"
@@ -47,13 +46,13 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 				})
 			}
 		case http.MethodPost:
-			mime, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			m, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			defer r.Body.Close()
 			switch r.URL.Path {
 			case "/":
 				data, err := ioutil.ReadAll(r.Body)
 				var q *Query
-				switch mime {
+				switch m {
 				case "application/json":
 					q, err = ParseJSONQuery(data)
 				case "application/x-www-form-urlencoded":
@@ -72,13 +71,7 @@ func Handler(db meter.DB, events ...string) http.HandlerFunc {
 					return
 				}
 
-				data, err = json.Marshal(results)
-				if err != nil {
-					httperr.RespondJSON(w, httperr.InternalServerError(err))
-					return
-				}
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(data)
+				httperr.RespondJSON(w, results)
 			default:
 				event := strings.Trim(r.URL.Path, "/")
 				storer := storeHandlers[event]
@@ -164,8 +157,8 @@ const indexHTML = `
 <option value="24h">1d</option>
 <option value="168h">1w</option>
 </select></label>
-</fieldset>
-<textarea name="query"></textarea>
 <button>send</button>
+</fieldset>
+<textarea style="width: 100%" rows="30" name="query"></textarea>
 </form>
 `
