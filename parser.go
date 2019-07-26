@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -224,18 +225,6 @@ func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlo
 	return &b, nil
 }
 
-func (p *Parser) parseSelectResult(s *selectBlock, e ast.Expr) error {
-	return nil
-}
-
-func parseClause(exp ast.Expr) (string, []ast.Expr) {
-	if star, ok := exp.(*ast.StarExpr); ok {
-		fn, args := parseCall(star.X)
-		return strings.ToUpper(getName(fn)), args
-	}
-	return "", nil
-}
-
 func (p *Parser) parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
 	fn, args := parseCall(star.X)
 	clause := getName(fn)
@@ -301,24 +290,6 @@ func (p *Parser) parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, 
 		return &v, nil
 	default:
 		return nil, p.Errorf(exp, "Invalid scalar value")
-	}
-}
-
-func parseCall(exp ast.Expr) (ast.Expr, []ast.Expr) {
-	switch call := exp.(type) {
-	case *ast.CompositeLit:
-		return call.Type, call.Elts
-	case *ast.CallExpr:
-		return call.Fun, call.Args
-	case *ast.SliceExpr:
-		if call.Slice3 {
-			return call.X, []ast.Expr{call.Low, call.High, call.Max}
-		}
-		return call.X, []ast.Expr{call.Low, call.High}
-	case *ast.Ident:
-		return exp, nil
-	default:
-		return nil, nil
 	}
 }
 
@@ -428,116 +399,8 @@ func (p *Parser) parseAggExpr(s *selectBlock, exp *ast.UnaryExpr) (aggResult, er
 	return &a, nil
 }
 
-// func (p *Parser) parseBlock(s *scanExpr, block *ast.BlockStmt) error {
-// 	s = s.Child(block, kindBlock)
-// 	for _, stmt := range block.List {
-// 		if err := p.parseStmt(s, stmt); err != nil {
-// 			return err
-// 		}
-// 	}
-// 	return nil
-// }
-
-type queryNode interface {
-	noder
-	Query(TimeRange) ScanQuery
-}
-
-func nodeQueries(dst ScanQueries, t *TimeRange, n interface{}) ScanQueries {
-	switch n := n.(type) {
-	case queryNode:
-		return append(dst, n.Query(*t))
-	case *namedAggResult:
-		return nodeQueries(dst, t, n.aggResult)
-	case *selectBlock:
-		for _, n := range n.Select {
-			dst = nodeQueries(dst, t, n)
-		}
-		return dst
-	case *aggNode:
-		for _, n := range n.Nodes {
-			dst = nodeQueries(dst, t, n)
-		}
-		return dst
-	case *opNode:
-		dst = nodeQueries(dst, t, n.X)
-		dst = nodeQueries(dst, t, n.Y)
-		return dst
-	case *groupNode:
-		for _, n := range n.Nodes {
-			dst = nodeQueries(dst, t, n)
-		}
-		return dst
-	default:
-		fmt.Println(reflect.TypeOf(n))
-		return dst
-	}
-}
-
 func (p *Parser) Queries(t TimeRange) ScanQueries {
 	return nodeQueries(nil, &t, p.root)
-}
-
-func (tr *TimeRange) BlankData(v float64) DataPoints {
-	start, end, step := tr.Start.Unix(), tr.End.Unix(), int64(tr.Step/time.Second)
-	return fillData(v, start, end, step)
-}
-func fillData(v float64, start, end, step int64) (data DataPoints) {
-	if step < 1 {
-		step = 1
-	}
-	n := (end - start) / step
-	if n < 0 {
-		return
-	}
-	data = make([]DataPoint, n)
-	for i := range data {
-		ts := start + int64(i)*step
-		data[i] = DataPoint{
-			Timestamp: ts,
-			Value:     v,
-		}
-	}
-	return
-}
-func makeData(src DataPoints, start, end, step int64) (data DataPoints) {
-	if step < 1 {
-		step = 1
-	}
-	n := (end - start) / step
-	if n < 0 {
-		return
-	}
-	src = src.SeekRight(end)
-	data = make([]DataPoint, n)
-	for i := range data {
-		ts := start + int64(i)*step
-		src = src.SeekLeft(ts)
-		v := src.ValueAt(ts)
-		data[i] = DataPoint{
-			Timestamp: ts,
-			Value:     v,
-		}
-	}
-	return
-}
-
-func parseDurationUnit(exp ast.Expr) time.Duration {
-	if unit, ok := exp.(*ast.Ident); ok {
-		return durationUnit(unit.Name)
-	}
-	return 0
-}
-
-func parseAggregator(exp ast.Expr) (Aggregator, error) {
-	fn, err := parseString(exp)
-	if err != nil {
-		return nil, err
-	}
-	if a := newAgg(fn); a != nil {
-		return a, nil
-	}
-	return nil, errors.Errorf("Invalid aggregator name: %q", fn)
 }
 
 func (p *Parser) Error(exp ast.Node, err error) error {
@@ -550,55 +413,6 @@ func (p *Parser) Errorf(exp ast.Node, msg string, args ...interface{}) error {
 	return p.Error(exp, errors.Errorf(msg, args...))
 }
 
-func parseTime(exp ast.Expr, now time.Time) (time.Time, error) {
-	if exp == nil {
-		return now, nil
-	}
-	switch exp := exp.(type) {
-	case *ast.BasicLit:
-		switch lit := exp; lit.Kind {
-		case token.STRING:
-			v, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return time.Time{}, err
-			}
-			if strings.ToLower(v) == "now" {
-				return now, nil
-			}
-			return time.Parse(time.RFC3339Nano, v)
-		case token.INT:
-			n, err := strconv.ParseInt(lit.Value, 10, 64)
-			if err != nil {
-				return time.Time{}, errors.Errorf("Invalid timestamp value: %s", err)
-			}
-			return time.Unix(n, 0), nil
-		default:
-			return time.Time{}, errors.Errorf("Invalid time literal %s", exp)
-		}
-	case *ast.Ident:
-		switch strings.ToLower(exp.Name) {
-		case "now":
-			return now, nil
-		default:
-			return time.Time{}, errors.Errorf("Invalid time ident %s", exp.Name)
-		}
-	}
-	return time.Time{}, errors.Errorf("Invalid time expr: %s", reflect.TypeOf(exp))
-}
-
-func parseStrings(dst []string, exp ...ast.Expr) ([]string, error) {
-	for _, exp := range exp {
-		s, err := parseString(exp)
-		if err != nil {
-			return nil, err
-		}
-		dst = append(dst, s)
-	}
-	return dst, nil
-}
-
-const y2k = 946684800
-
 func (p *Parser) parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
 	n, ok := parseOffset(lo)
 	if !ok {
@@ -610,30 +424,6 @@ func (p *Parser) parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
 		return 0, p.Errorf(lo, "Invalid unit %q", name)
 	}
 	return time.Duration(n) * unit, nil
-}
-func parseOffset(exp ast.Expr) (int64, bool) {
-	switch e := exp.(type) {
-	case *ast.BasicLit:
-		if e.Kind != token.INT {
-			return 0, false
-		}
-		n, err := strconv.ParseInt(e.Value, 10, 64)
-		if err == nil && n < y2k {
-			return n, true
-		}
-	case *ast.UnaryExpr:
-		switch e.Op {
-		case token.ADD:
-			return parseOffset(e.X)
-		case token.SUB:
-			n, ok := parseOffset(e.X)
-			if ok {
-				return -n, true
-			}
-		}
-	}
-	return 0, false
-
 }
 
 func (p *Parser) parseMatchValues(values []string, exp ast.Expr) ([]string, error) {
@@ -658,25 +448,6 @@ func (p *Parser) parseMatchValues(values []string, exp ast.Expr) ([]string, erro
 			return nil, p.Errorf(exp, "Failed to parse match value: %s", err)
 		}
 		return append(values, s), nil
-	}
-}
-
-func durationUnit(unit string) time.Duration {
-	switch strings.ToLower(unit) {
-	case "s", "sec", "second", "seconds":
-		return time.Minute
-	case "min", "minute", "m", "minutes":
-		return time.Minute
-	case "hour", "h":
-		return time.Hour
-	case "day", "d":
-		return 24 * time.Hour
-	case "w", "week", "weeks":
-		return 24 * 7 * time.Hour
-	case "month":
-		return 30 * 24 * time.Hour
-	default:
-		return 0
 	}
 }
 
@@ -735,22 +506,6 @@ func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
 	}
 }
 
-func parseString(exp ast.Expr) (string, error) {
-	switch exp := exp.(type) {
-	case *ast.Ident:
-		return exp.Name, nil
-	case *ast.BasicLit:
-		switch exp.Kind {
-		case token.STRING:
-			return strconv.Unquote(exp.Value)
-		default:
-			return exp.Value, nil
-		}
-	default:
-		return "", errors.Errorf("Invalid string expression %s", exp)
-	}
-}
-
 // Eval executes the query against some results
 func (p *Parser) Eval(out []interface{}, t TimeRange, results Results) []interface{} {
 	if p.root != nil {
@@ -759,40 +514,12 @@ func (p *Parser) Eval(out []interface{}, t TimeRange, results Results) []interfa
 	return out
 }
 
-func getName(e ast.Expr) string {
-	if e != nil {
-		if id, ok := e.(*ast.Ident); ok {
-			return id.Name
-		}
-	}
-	return ""
-
-}
-
 func (p *Parser) print(x interface{}) (string, error) {
 	w := new(strings.Builder)
 	if err := printer.Fprint(w, p.fset, x); err != nil {
 		return "", err
 	}
 	return w.String(), nil
-}
-
-func newAgg(s string) Aggregator {
-	switch strings.ToLower(s) {
-	case "count":
-		return new(aggSum)
-	case "sum":
-		return new(aggSum)
-	case "avg":
-		return new(aggAvg)
-	case "min":
-		return new(aggMin)
-	case "max":
-		return new(aggMax)
-	default:
-		return nil
-	}
-
 }
 
 func (p *Parser) parseMatch(m Fields, op token.Token, args ...ast.Expr) (Fields, error) {
@@ -832,128 +559,399 @@ func (p *Parser) parseMatchArgs(match Fields, args ...ast.Expr) (Fields, error) 
 	return match, nil
 }
 
-// func (p *Parser) parseGroupNode(args ...ast.Expr) (*groupNode, error) {
-// 	g := groupNode{}
-// 	var labels []string
-// 	for _, arg := range args {
-// 		switch arg := arg.(type) {
-// 		case *ast.KeyValueExpr:
-// 			if err := p.parseGroupArg(&g, arg); err != nil {
-// 				return nil, err
-// 			}
-// 		default:
-// 			v, err := parseString(arg)
-// 			if err != nil {
-// 				return nil, p.Errorf(arg, "Invalid group label: %s", err)
-// 			}
-// 			labels = append(labels, v)
-// 		}
-// 	}
-// 	g.Group = labels
-// 	return &g, nil
-// }
+var _ = `
+{
+	!match{foo: bar}
+	!offset[-1: h]
+	foo / bar
+	bar / baz
+	!group{empty: "n/a", foo, bar, baz}
+}
+`
 
-// func (p *Parser) parseGroupArg(g *groupNode, arg *ast.KeyValueExpr) error {
-// 	key, ok := arg.Key.(*ast.Ident)
-// 	if !ok {
-// 		return p.Errorf(arg.Key, "Invalid keyword argument for group")
-// 	}
-// 	switch key.Name {
-// 	// case "by":
-// 	// 	v, err := p.parseMatchValues(nil, arg.Value)
-// 	// 	if err != nil {
-// 	// 		return p.Errorf(arg.Value, "Failed to parse %q argument: %s", "by", err)
-// 	// 	}
-// 	// 	g.Group = v
-// 	// 	return nil
-// 	// case "agg":
-// 	// 	v, err := parseString(arg.Value)
-// 	// 	if err != nil {
-// 	// 		return p.Errorf(arg.Value, "Failed to parse agg argument: %s", err)
-// 	// 	}
-// 	// 	agg := newAgg(v)
-// 	// 	if agg == nil {
-// 	// 		return p.Errorf(arg.Value, "Invalid agg argument: %q", agg)
-// 	// 	}
-// 	// 	g.Agg = agg
-// 	// 	return nil
-// 	case "empty":
-// 		v, err := parseString(arg.Value)
-// 		if err != nil {
-// 			return p.Errorf(arg.Value, "Failed to parse empty argument: %s", err)
-// 		}
-// 		g.Empty = v
-// 		return nil
-// 	default:
-// 		return p.Errorf(arg, "Invalid keyord argument: %q", key.Name)
-// 	}
-// }
+type noder interface {
+	node()
+}
 
-// // ParseTime parses time in various formats
-// func ParseTime(v string) (time.Time, error) {
-// 	if strings.Contains(v, ":") {
-// 		if strings.Contains(v, ".") {
-// 			return time.ParseInLocation(time.RFC3339Nano, v, time.UTC)
-// 		}
-// 		return time.ParseInLocation(time.RFC3339, v, time.UTC)
-// 	}
-// 	if strings.Contains(v, "-") {
-// 		return time.ParseInLocation("2006-01-02", v, time.UTC)
-// 	}
-// 	n, err := strconv.ParseInt(v, 10, 64)
-// 	if err != nil {
-// 		return time.Time{}, err
-// 	}
-// 	return time.Unix(n, 0), nil
-// }
+type evalNode interface {
+	noder
+	Eval([]interface{}, *TimeRange, Results) []interface{}
+}
 
-// func (p *Parser) parseBlock(s *selectBlock, stmts ...ast.Stmt) (b blockNode, err error) {
-// 	opts, err = p.parseBlockOptions(opts, stmts...)
-// 	if err != nil {
-// 		return
-// 	}
-// 	group := opts.GroupNode()
-// 	for _, stmt := range stmts {
-// 		switch stmt := stmt.(type) {
-// 		case *ast.ExprStmt:
-// 			var x interface{}
-// 			x, err = p.parseExpr(opts, stmt.X)
-// 			if err != nil {
-// 				return
-// 			}
-// 			switch x := x.(type) {
-// 			case *blockOptions:
-// 				opts = *x
-// 			case time.Duration:
-// 				opts.Offset = x
-// 			case aggResult:
-// 				name, _ := p.print(stmt.X)
-// 				if opts.Group != nil {
-// 					n := namedAggResult{
-// 						aggResult: x,
-// 						Name:      name,
-// 					}
-// 					group.Nodes = append(group.Nodes, &n)
-// 					continue
-// 				}
-// 				// Unwrap single scanResultNode into evaler
-// 				a, ok := x.(*scanAggNode)
-// 				if !ok {
-// 					return nil, p.Errorf(stmt.X, "Aggregator expression without group clause")
-// 				}
-// 				s := a.scanResultNode
-// 				e := scanEvalNode{s}
-// 				b = append(b, &e)
-// 			case evalNode:
-// 				b = append(b, x)
-// 			}
-// 		default:
-// 			return nil, p.Errorf(stmt, "Invalid stmt type: %s", reflect.TypeOf(stmt))
-// 		}
-// 	}
-// 	if len(group.Nodes) > 0 {
-// 		b = append(b, &group)
-// 	}
-// 	return
+type rawResult interface {
+	noder
+	Results(Results, TimeRange) Results
+}
 
-// }
+type aggResult interface {
+	noder
+	Aggregate(r Results, t *TimeRange, agg Aggregator) Result
+}
+
+type groupNode struct {
+	Nodes  []aggResult
+	Group  []string
+	Empty  string
+	Agg    Aggregator
+	groups []resultGroup
+}
+
+func (*groupNode) node() {}
+
+func (g *groupNode) reset(results Results) {
+	g.groups = nil
+	scratch := Fields(make([]Field, 0, len(g.Group)))
+	for i := range results {
+		r := &results[i]
+		scratch = r.Fields.AppendGrouped(scratch[:0], g.Empty, g.Group)
+		g.add(scratch, r)
+	}
+}
+func (g *groupNode) add(fields Fields, r *Result) {
+	for i := range g.groups {
+		group := &g.groups[i]
+		if group.Fields.Equal(fields) {
+			group.results = append(group.results, *r)
+			return
+		}
+	}
+	g.groups = append(g.groups, resultGroup{
+		Fields:  fields.Copy(),
+		results: Results{*r},
+	})
+}
+
+type resultGroup struct {
+	Fields  Fields
+	results Results
+}
+
+func (g *groupNode) Aggregator() Aggregator {
+	if g.Agg == nil {
+		return aggSum{}
+	}
+	return g.Agg
+}
+
+func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *TimeRange) []interface{} {
+	agg := g.Aggregator()
+	for _, n := range g.Nodes {
+		r := n.Aggregate(group.results, tr, agg)
+		r.Fields = group.Fields
+		out = append(out, &r)
+	}
+	return out
+}
+
+func (g *groupNode) Eval(out []interface{}, tr *TimeRange, results Results) []interface{} {
+	g.reset(results)
+	for i := range g.groups {
+		group := &g.groups[i]
+		out = g.evalGroup(out, group, tr)
+	}
+	return out
+}
+
+type scanResultNode struct {
+	Offset time.Duration
+	Event  string
+	Match  Fields
+}
+
+func (*scanResultNode) node() {}
+
+func (s *scanResultNode) Query(tr TimeRange) ScanQuery {
+	return ScanQuery{
+		TimeRange: tr.Offset(s.Offset),
+		Event:     s.Event,
+		Match:     s.Match,
+	}
+}
+
+type scanEvalNode struct {
+	*scanResultNode
+}
+
+func (*scanEvalNode) node() {}
+func (s *scanEvalNode) Eval(out []interface{}, t *TimeRange, r Results) []interface{} {
+	r = s.Results(r, *t)
+	for i := range r {
+		out = append(out, &r[i])
+	}
+	return out
+}
+func (s *scanResultNode) Results(results Results, tr TimeRange) Results {
+	tr = tr.Offset(s.Offset)
+	start, end := tr.Start.Unix(), tr.End.Unix()
+	out := Results{}
+	m := s.Match.Map()
+	for i := range results {
+		r := &results[i]
+		if r.Event == s.Event && r.Fields.MatchValues(m) {
+			switch rel := r.TimeRange.Rel(&tr); rel {
+			case TimeRelEqual, TimeRelBetween:
+				out = append(out, *r)
+			case TimeRelAround:
+				s := *r
+				s.Data = r.Data.Slice(start, end)
+				if len(s.Data) > 0 {
+					out = append(out, s)
+				}
+			default:
+			}
+		}
+	}
+	return out
+}
+
+type scanAggNode struct {
+	*scanResultNode
+}
+
+func (s *scanAggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+	t := *tr
+	data := tr.BlankData(agg.Zero())
+	results = s.Results(results, t)
+	for i := range data {
+		d := &data[i]
+		v := agg.Zero()
+		for j := range results {
+			r := &results[j]
+			if 0 <= i && i < len(r.Data) {
+				p := r.Data[i]
+				v = agg.Aggregate(v, p.Value)
+			} else {
+				v = agg.Aggregate(v, math.NaN())
+			}
+		}
+		d.Value = v
+	}
+	return Result{
+		TimeRange: t,
+		Event:     s.Event,
+		Fields:    s.Match,
+		Data:      data,
+	}
+}
+
+type valueNode struct {
+	Offset time.Duration
+	Value  float64
+}
+
+func (*valueNode) node() {}
+func (v *valueNode) Aggregate(_ Results, t *TimeRange, _ Aggregator) Result {
+	if v.Offset > 0 {
+		tt := t.Offset(v.Offset)
+		t = &tt
+	}
+	return Result{
+		Data: t.BlankData(v.Value),
+	}
+}
+
+type aggNode struct {
+	Offset time.Duration
+	Agg    Aggregator
+	Nodes  []aggResult
+}
+
+func (*aggNode) node() {}
+
+func (n *aggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+	if n.Offset != 0 {
+		t := tr.Offset(n.Offset)
+		tr = &t
+	}
+	switch len(n.Nodes) {
+	case 0:
+		return Result{
+			Data: tr.BlankData(math.NaN()),
+		}
+	case 1:
+		return n.Nodes[0].Aggregate(results, tr, agg)
+	}
+	var els []Result
+	if n.Agg != nil {
+		agg = n.Agg
+	}
+	for _, el := range n.Nodes {
+		els = append(els, el.Aggregate(results, tr, agg))
+	}
+	out, tail := els[0], els[1:]
+	a := blankAgg(agg)
+	for i := range out.Data {
+		d := &out.Data[i]
+		v := a.Zero()
+		v = a.Aggregate(v, d.Value)
+		for j := range tail {
+			el := &tail[j]
+			if 0 <= i && i < len(el.Data) {
+				d := &el.Data[i]
+				v = a.Aggregate(v, d.Value)
+			} else {
+				v = a.Aggregate(v, math.NaN())
+			}
+		}
+		d.Value = v
+	}
+	return out
+}
+
+type opNode struct {
+	X  aggResult
+	Y  aggResult
+	Op Merger
+}
+
+func (op *opNode) node() {}
+func (op *opNode) Aggregate(r Results, tr *TimeRange, agg Aggregator) Result {
+	x := op.X.Aggregate(r, tr, agg)
+	y := op.Y.Aggregate(r, tr, agg)
+	for i := range x.Data {
+		p := &x.Data[i]
+		if 0 <= i && i < len(y.Data) {
+			pp := &y.Data[i]
+			p.Value = op.Op.Merge(p.Value, pp.Value)
+		}
+	}
+	return x
+}
+
+type selectBlock struct {
+	Select []evalNode
+	Group  []string
+	Empty  string
+	Agg    Aggregator
+	Offset time.Duration
+	Match  Fields
+}
+
+func (s *selectBlock) group() groupNode {
+	agg := s.Agg
+	if agg == nil {
+		agg = aggSum{}
+	}
+	return groupNode{
+		Group: s.Group,
+		Empty: s.Empty,
+		Agg:   agg,
+	}
+}
+func (s *selectBlock) GroupNode() *groupNode {
+	if s.Group == nil {
+		return nil
+	}
+	switch len(s.Select) {
+	case 0:
+		g := s.group()
+		s.Select = append(s.Select, &g)
+		return &g
+	case 1:
+		g := s.Select[0]
+		if g, ok := g.(*groupNode); ok {
+			return g
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func (*selectBlock) node() {}
+
+func (b *selectBlock) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
+	for _, n := range b.Select {
+		out = n.Eval(out, t, results)
+	}
+	return out
+}
+
+var _ = `
+
+!match{country: GR|US|RU}
+
+bid{ex: epom} / win[-1:h] * 2
+!group{country}
+{
+	*match{country: GR}
+	!avg{
+		bid{color: blue},
+		bid{color: green}[-1:week],
+		bid{color: red},
+	}
+
+}
+
+{
+	+WHERE{}
+	!WHERE{foo: bar}
+	!GROUP{avg}
+	!BY{foo, bar, baz}
+}
+{
+	*match{foo: bar}
+	!avg{bid / bid[-1h]} + !sum{foo/bar}
+	*by{country, cid, empty: true}
+}
+!sum{
+	*match{foo: bar},
+	goo -
+	foo{bar: baz}[-1h],
+	*by{goo, bar, baz, empty: "-"},
+}
+
+
+!match{foo: baz}
+foo / !!avg{bar, goo}  
+
+
+`
+
+type namedAggResult struct {
+	aggResult
+	Name string
+}
+
+func (n *namedAggResult) Aggregate(r Results, t *TimeRange, a Aggregator) Result {
+	out := n.aggResult.Aggregate(r, t, a)
+	out.Event = n.Name
+	out.Fields = nil
+	return out
+}
+
+type queryNode interface {
+	noder
+	Query(TimeRange) ScanQuery
+}
+
+func nodeQueries(dst ScanQueries, t *TimeRange, n interface{}) ScanQueries {
+	switch n := n.(type) {
+	case queryNode:
+		return append(dst, n.Query(*t))
+	case *namedAggResult:
+		return nodeQueries(dst, t, n.aggResult)
+	case *selectBlock:
+		for _, n := range n.Select {
+			dst = nodeQueries(dst, t, n)
+		}
+		return dst
+	case *aggNode:
+		for _, n := range n.Nodes {
+			dst = nodeQueries(dst, t, n)
+		}
+		return dst
+	case *opNode:
+		dst = nodeQueries(dst, t, n.X)
+		dst = nodeQueries(dst, t, n.Y)
+		return dst
+	case *groupNode:
+		for _, n := range n.Nodes {
+			dst = nodeQueries(dst, t, n)
+		}
+		return dst
+	default:
+		fmt.Println(reflect.TypeOf(n))
+		return dst
+	}
+}

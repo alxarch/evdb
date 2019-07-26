@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"strconv"
+	"time"
 )
 
 // DataPoint is a time/value pair
@@ -310,4 +311,27 @@ func (s DataPoints) Aggregate(agg Aggregator) float64 {
 		v = agg.Aggregate(v, d.Value)
 	}
 	return v
+}
+
+func (tr *TimeRange) BlankData(v float64) DataPoints {
+	start, end, step := tr.Start.Unix(), tr.End.Unix(), int64(tr.Step/time.Second)
+	return fillData(v, start, end, step)
+}
+func fillData(v float64, start, end, step int64) (data DataPoints) {
+	if step < 1 {
+		step = 1
+	}
+	n := (end - start) / step
+	if n < 0 {
+		return
+	}
+	data = make([]DataPoint, n)
+	for i := range data {
+		ts := start + int64(i)*step
+		data[i] = DataPoint{
+			Timestamp: ts,
+			Value:     v,
+		}
+	}
+	return
 }

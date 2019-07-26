@@ -122,3 +122,22 @@ func vdeepcopy(values []string) []string {
 	return cp
 
 }
+
+func durationUnit(unit string) time.Duration {
+	switch strings.ToLower(unit) {
+	case "s", "sec", "second", "seconds":
+		return time.Minute
+	case "min", "minute", "m", "minutes":
+		return time.Minute
+	case "hour", "h":
+		return time.Hour
+	case "day", "d":
+		return 24 * time.Hour
+	case "w", "week", "weeks":
+		return 24 * 7 * time.Hour
+	case "month":
+		return 30 * 24 * time.Hour
+	default:
+		return 0
+	}
+}

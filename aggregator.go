@@ -4,6 +4,7 @@ import (
 	"errors"
 	"go/token"
 	"math"
+	"strings"
 )
 
 type Aggregator interface {
@@ -257,4 +258,22 @@ func blankAgg(agg Aggregator) Aggregator {
 		return new(aggAvg)
 	}
 	return agg
+}
+
+func newAgg(s string) Aggregator {
+	switch strings.ToLower(s) {
+	case "count":
+		return new(aggSum)
+	case "sum":
+		return new(aggSum)
+	case "avg":
+		return new(aggAvg)
+	case "min":
+		return new(aggMin)
+	case "max":
+		return new(aggMax)
+	default:
+		return nil
+	}
+
 }
