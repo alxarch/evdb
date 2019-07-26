@@ -112,15 +112,14 @@ func TestParser_Reset(t *testing.T) {
 		{`foo{bar: baz|42}[-10:h]`, false},
 		{`
 		{
-			*group{foo}
-			+match{foo: bar}
-			-match{foo: bar}
+			*BY{foo}
+			*WHERE{foo: bar}
 			foo + bar
 		}
 		`, false},
 		{`{
-			*group{foo, bar, baz, agg: min}
-			*match{foo: bar}
+			*BY{foo, bar, baz, agg: min}
+			*WHERE{foo: bar}
 			!avg{
 				foo{bar: baz|42}[1:h],
 				foo{bar: baz|42},

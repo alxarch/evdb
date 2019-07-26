@@ -264,12 +264,52 @@ func (op *opNode) Aggregate(r Results, tr *TimeRange, agg Aggregator) Result {
 	return x
 }
 
+type selectBlock struct {
+	Select []evalNode
+	Group  []string
+	Empty  string
+	Agg    Aggregator
+	Offset time.Duration
+	Match  Fields
+}
+
+func (s *selectBlock) group() groupNode {
+	agg := s.Agg
+	if agg == nil {
+		agg = aggSum{}
+	}
+	return groupNode{
+		Group: s.Group,
+		Empty: s.Empty,
+		Agg:   agg,
+	}
+}
+func (s *selectBlock) GroupNode() *groupNode {
+	if s.Group == nil {
+		return nil
+	}
+	switch len(s.Select) {
+	case 0:
+		g := s.group()
+		s.Select = append(s.Select, &g)
+		return &g
+	case 1:
+		g := s.Select[0]
+		if g, ok := g.(*groupNode); ok {
+			return g
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 type blockNode []evalNode
 
-func (blockNode) node() {}
+func (*selectBlock) node() {}
 
-func (b blockNode) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
-	for _, n := range b {
+func (b *selectBlock) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
+	for _, n := range b.Select {
 		out = n.Eval(out, t, results)
 	}
 	return out
@@ -293,13 +333,6 @@ func (b blockNode) Eval(out []interface{}, t *TimeRange, results Results) []inte
 // 	return lit.Value, nil
 // }
 
-func blankAgg(agg Aggregator) Aggregator {
-	if _, avg := agg.(*aggAvg); avg {
-		return new(aggAvg)
-	}
-	return agg
-}
-
 var _ = `
 
 !match{country: GR|US|RU}
@@ -317,9 +350,21 @@ bid{ex: epom} / win[-1:h] * 2
 }
 
 {
+	+WHERE{}
+	!WHERE{foo: bar}
+	!GROUP{avg}
+	!BY{foo, bar, baz}
+}
+{
 	*match{foo: bar}
 	!avg{bid / bid[-1h]} + !sum{foo/bar}
 	*by{country, cid, empty: true}
+}
+!sum{
+	*match{foo: bar},
+	goo -
+	foo{bar: baz}[-1h],
+	*by{goo, bar, baz, empty: "-"},
 }
 
 
@@ -328,3 +373,15 @@ foo / !!avg{bar, goo}
 
 
 `
+
+type namedAggResult struct {
+	aggResult
+	Name string
+}
+
+func (n *namedAggResult) Aggregate(r Results, t *TimeRange, a Aggregator) Result {
+	out := n.aggResult.Aggregate(r, t, a)
+	out.Event = n.Name
+	out.Fields = nil
+	return out
+}

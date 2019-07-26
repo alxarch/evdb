@@ -251,3 +251,10 @@ func (aggRaw) Aggregate(_ float64) float64 {
 	return math.NaN()
 
 }
+
+func blankAgg(agg Aggregator) Aggregator {
+	if _, avg := agg.(*aggAvg); avg {
+		return new(aggAvg)
+	}
+	return agg
+}

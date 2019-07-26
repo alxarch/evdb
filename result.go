@@ -17,9 +17,6 @@ type Result struct {
 // Results is a slice of results
 type Results []Result
 
-// ResultType is a type of result
-type ResultType int
-
 // Merge implements Value interface
 func (r *Result) Merge(m Merger, x interface{}, rev bool) (interface{}, error) {
 	if r == nil {
@@ -82,7 +79,7 @@ func (results Results) Add(event string, fields Fields, t int64, v float64) Resu
 		if !r.Fields.Equal(fields) {
 			continue
 		}
-		// r.Data = r.Data.Add(t, v)
+		r.Data = r.Data.Add(t, v)
 		return results
 	}
 	return append(results, Result{
@@ -91,28 +88,6 @@ func (results Results) Add(event string, fields Fields, t int64, v float64) Resu
 		Data:   []DataPoint{{t, v}},
 	})
 
-}
-
-// Result types
-const (
-	ArrayResult ResultType = iota
-	TotalsResult
-	EventSummaryResult
-	FieldSummaryResult
-)
-
-// ResultTypeFromString converts a string to ResultType
-func ResultTypeFromString(s string) ResultType {
-	switch s {
-	case "totals":
-		return TotalsResult
-	case "events":
-		return EventSummaryResult
-	case "fields":
-		return FieldSummaryResult
-	default:
-		return ArrayResult
-	}
 }
 
 // FieldSummary is a query result presented as a summary of field values
@@ -283,4 +258,28 @@ type Table struct {
 // 		Fields: fields.Copy(),
 // 		Data:   data,
 // 	})
+// }
+
+// // ResultType is a type of result
+// type ResultType int
+// // Result types
+// const (
+// 	ArrayResult ResultType = iota
+// 	TotalsResult
+// 	EventSummaryResult
+// 	FieldSummaryResult
+// )
+
+// // ResultTypeFromString converts a string to ResultType
+// func ResultTypeFromString(s string) ResultType {
+// 	switch s {
+// 	case "totals":
+// 		return TotalsResult
+// 	case "events":
+// 		return EventSummaryResult
+// 	case "fields":
+// 		return FieldSummaryResult
+// 	default:
+// 		return ArrayResult
+// 	}
 // }
