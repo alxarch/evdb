@@ -62,7 +62,8 @@ func TestBadgerEvents(t *testing.T) {
 		t.Fatal("Failed to store counters", err)
 	}
 	ctx := context.Background()
-	q := meter.Query{
+	q := meter.ScanQuery{
+		Event: "test",
 		TimeRange: meter.TimeRange{
 			Step:  time.Second,
 			Start: tm.Add(-1 * time.Hour),
@@ -72,7 +73,7 @@ func TestBadgerEvents(t *testing.T) {
 			{Label: "country", Value: "USA"},
 		},
 	}
-	results, err := events.Query(ctx, q, "test")
+	results, err := events.ScanQuery(ctx, &q)
 	if err != nil {
 		t.Fatal("Query failed", err)
 	}
