@@ -69,8 +69,10 @@ func TestBadgerEvents(t *testing.T) {
 			Start: tm.Add(-1 * time.Hour),
 			End:   tm.Add(24 * time.Hour),
 		},
-		Match: meter.Fields{
-			{Label: "country", Value: "USA"},
+		Match: meter.MatchFields{
+			Fields: meter.Fields{
+				{Label: "country", Value: "USA"},
+			},
 		},
 	}
 	results, err := events.ScanQuery(ctx, &q)

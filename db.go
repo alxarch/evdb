@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"net/url"
 	"sync"
+
+	errors "golang.org/x/xerrors"
 )
 
 type DB interface {
-	ScanQuerier
-	Storer(event string) Storer
+	Scanner
+	Store
 	Close() error
 }
 
@@ -21,15 +23,17 @@ var (
 	openers  = map[string]Opener{}
 )
 
-func Register(scheme string, op Opener) {
+func Register(scheme string, op Opener) error {
 	openerMu.Lock()
 	defer openerMu.Unlock()
 	_, alreadyRegistered := openers[scheme]
 	if alreadyRegistered {
-		panic(fmt.Errorf(`Scheme %q already registered`, scheme))
+		return errors.Errorf(`Scheme %q already registered`, scheme)
 	}
 	openers[scheme] = op
+	return nil
 }
+
 func Open(configURL string) (DB, error) {
 	u, err := url.Parse(configURL)
 	if err != nil {

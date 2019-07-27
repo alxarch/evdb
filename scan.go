@@ -12,7 +12,7 @@ type Scanner interface {
 type ScanQuery struct {
 	Event string
 	TimeRange
-	Match Fields
+	Match MatchFields
 }
 
 type ScanQueries []ScanQuery
@@ -24,16 +24,25 @@ type scanner struct {
 	q ScanQuerier
 }
 
+// NewScanner convers a ScanQuerier to a Scanner
 func NewScanner(q ScanQuerier) Scanner {
 	s := scanner{q}
 	return &s
 
 }
+
+// Compact merges overlapping queries
+func (queries ScanQueries) Compact() ScanQueries {
+	if len(queries) > 1 {
+		return ScanQueries(nil).Merge(queries...)
+	}
+	return queries
+}
+
+// Scan implements Scanner interface
 func (s *scanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
 	// Merge all overlapping queries
-	if len(queries) > 1 {
-		queries = ScanQueries(nil).Merge(queries...)
-	}
+	queries = ScanQueries(queries).Compact()
 	wg := new(sync.WaitGroup)
 	var out Results
 	var mu sync.Mutex
@@ -62,9 +71,10 @@ func (s *scanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, erro
 	return out, nil
 }
 
-func (sq ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
-	for i := range sq {
-		s := &sq[i]
+// MergeQuery merges a query if it overlaps or appends it to the query list
+func (queries ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
+	for i := range queries {
+		s := &queries[i]
 		if q.Event != s.Event {
 			continue
 		}
@@ -79,23 +89,26 @@ func (sq ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
 		default:
 			continue
 		}
-		s.Match = s.Match.Merge(q.Match...)
-		return sq
+		s.Match.Fields = s.Match.Merge(q.Match.Fields...)
+		return queries
 	}
-	return append(sq, ScanQuery{
-		Event:     q.Event,
-		Match:     q.Match.Copy(),
+	return append(queries, ScanQuery{
+		Event: q.Event,
+		Match: MatchFields{
+			Fields: q.Match.Copy(),
+		},
 		TimeRange: q.TimeRange,
 	})
 }
 
-func (sq ScanQueries) Match(q *ScanQuery) *ScanQuery {
-	for i := range sq {
-		s := &sq[i]
+// Match finds a matching query
+func (queries ScanQueries) Match(q *ScanQuery) *ScanQuery {
+	for i := range queries {
+		s := &queries[i]
 		if q.Event != s.Event {
 			continue
 		}
-		if !s.Match.Includes(q.Match) {
+		if !s.Match.Includes(q.Match.Fields) {
 			continue
 		}
 		switch rel := s.TimeRange.Rel(&q.TimeRange); rel {
@@ -106,10 +119,10 @@ func (sq ScanQueries) Match(q *ScanQuery) *ScanQuery {
 	return nil
 }
 
-func (sq ScanQueries) Merge(queries ...ScanQuery) ScanQueries {
-	for i := range queries {
-		q := &queries[i]
-		sq = sq.MergeQuery(q)
+func (queries ScanQueries) Merge(other ...ScanQuery) ScanQueries {
+	for i := range other {
+		q := &other[i]
+		queries = queries.MergeQuery(q)
 	}
-	return sq
+	return queries
 }

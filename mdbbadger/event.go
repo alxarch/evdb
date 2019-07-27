@@ -149,7 +149,7 @@ func (e *eventDB) Fields(id uint64) (meter.Fields, error) {
 
 type resolver func(uint64) (meter.Fields, error)
 
-func (e *eventDB) resolver(match meter.Fields) resolver {
+func (e *eventDB) resolver(match meter.MatchFields) resolver {
 	cache := make(map[uint64]meter.Fields)
 	return func(id uint64) (meter.Fields, error) {
 		fields, ok := cache[id]
@@ -162,7 +162,7 @@ func (e *eventDB) resolver(match meter.Fields) resolver {
 				return nil, err
 			}
 			fields = nil
-		} else if fields.MatchSorted(match) {
+		} else if fields.MatchSorted(&match) {
 		} else {
 			fields = nil
 		}

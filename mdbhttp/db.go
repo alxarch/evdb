@@ -3,16 +3,11 @@ package mdbhttp
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
-	"mime"
 	"net/http"
 	"net/url"
 	"path"
-	"strings"
 
 	"github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/httperr"
-	errors "golang.org/x/xerrors"
 )
 
 type Query struct {
@@ -20,80 +15,29 @@ type Query struct {
 	meter.TimeRange
 }
 
-// Handler creates an HTTP endpoint for a meter.DB
-func Handler(db meter.DB, events ...string) http.HandlerFunc {
-	scanner := meter.NewScanner(db)
-	querier := meter.NewQuerier(scanner)
-	queryHandler := QueryHandler(querier)
-	storeHandlers := make(map[string]http.Handler, len(events))
+// Mux creates an HTTP endpoint for a meter.DB
+func Mux(db meter.DB, events ...string) http.Handler {
+	mux := http.NewServeMux()
 	for _, event := range events {
 		storer := db.Storer(event)
 		handler := StoreHandler(storer)
-		storeHandlers[event] = InflateRequest(handler)
+		handler = InflateRequest(handler)
+		mux.HandleFunc("/store/"+event, handler)
 	}
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			switch r.URL.Path {
-			case "/simplequery":
-				queryHandler(w, r)
-			case "/", "/index.html":
-				w.Header().Set("Content-Type", "text/html")
-				w.Write([]byte(indexHTML))
-			default:
-				httperr.RespondJSON(w, map[string]interface{}{
-					"events": events,
-				})
-			}
-		case http.MethodPost:
-			m, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-			defer r.Body.Close()
-			switch r.URL.Path {
-			case "/":
-				data, err := ioutil.ReadAll(r.Body)
-				var q *Query
-				switch m {
-				case "application/json":
-					q, err = ParseJSONQuery(data)
-				case "application/x-www-form-urlencoded":
-					q, err = ParseFormQuery(string(data))
-				case "text/plain":
-					q, err = ParseFormQuery(r.URL.RawQuery)
-					q.Query = string(data)
-				}
-				if err != nil {
-					httperr.RespondJSON(w, httperr.BadRequest(err))
-					return
-				}
-				results, err := querier.Query(r.Context(), q.TimeRange, q.Query)
-				if err != nil {
-					httperr.RespondJSON(w, httperr.InternalServerError(err))
-					return
-				}
-
-				httperr.RespondJSON(w, results)
-			default:
-				event := strings.Trim(r.URL.Path, "/")
-				storer := storeHandlers[event]
-				if storer == nil {
-					err := errors.Errorf("Unknown event %q", event)
-					httperr.RespondJSON(w, httperr.NotFound(err))
-					return
-				}
-				storer.ServeHTTP(w, r)
-
-			}
-		default:
-			httperr.RespondJSON(w, httperr.MethodNotAllowed(nil))
-		}
-	}
-
+	mux.HandleFunc("/scan", ScanQueryHandler(db))
+	mux.HandleFunc("/query", QueryHandler(db))
+	mux.HandleFunc("/", serveIndexHTML)
+	mux.HandleFunc("/index.html", serveIndexHTML)
+	return mux
 }
 
 type db struct {
+	meter.Scanner
 	Querier
 	events map[string]meter.Storer
 }
+
+var _ (meter.DB) = (*db)(nil)
 
 func (db *db) Storer(event string) meter.Storer {
 	if s, ok := db.events[event]; ok {
@@ -105,7 +49,6 @@ func (db *db) Close() error {
 	return nil
 }
 func (db *db) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
-	db.queryURL(q.TimeRange)
 	return nil, nil
 }
 
@@ -127,6 +70,10 @@ func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
 		},
 		events: make(map[string]meter.Storer, len(events)),
 	}
+	scanURL := u
+	scanURL.Path = path.Join(u.Path, "/scan")
+	scan := ScanQuerier{scanURL.String(), client}
+	db.Scanner = meter.NewScanner(&scan)
 	for _, event := range events {
 		storeURL := u
 		storeURL.Path = path.Join(u.Path, event)
@@ -162,3 +109,9 @@ const indexHTML = `
 <textarea style="width: 100%" rows="30" name="query"></textarea>
 </form>
 `
+
+func serveIndexHTML(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.Write([]byte(indexHTML))
+
+}

@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+type Store interface {
+	Storer(event string) Storer
+}
+
 // Snapshot is a snaphot of event counters
 type Snapshot struct {
 	Time     time.Time    `json:"time,omitempty"`
@@ -18,16 +22,21 @@ type Snapshot struct {
 type Storer interface {
 	Store(s *Snapshot) error
 }
+type StorerFunc func(s *Snapshot) error
 
-// MemoryStore is an in-memory EventStore for debugging
-type MemoryStore struct {
+func (fn StorerFunc) Store(s *Snapshot) error {
+	return fn(s)
+}
+
+// MemoryStorer is an in-memory EventStore for debugging
+type MemoryStorer struct {
 	data []Snapshot
 }
 
-type MemoryScanner map[string]*MemoryStore
+type MemoryStore map[string]*MemoryStorer
 
 // Last retuns the last posted StoreRequest
-func (m *MemoryStore) Last() *Snapshot {
+func (m *MemoryStorer) Last() *Snapshot {
 	if n := len(m.data) - 1; 0 <= n && n < len(m.data) {
 		return &m.data[n]
 	}
@@ -36,7 +45,7 @@ func (m *MemoryStore) Last() *Snapshot {
 }
 
 // Store implements EventStore interface
-func (m *MemoryStore) Store(req *Snapshot) error {
+func (m *MemoryStorer) Store(req *Snapshot) error {
 	last := m.Last()
 	if last == nil || req.Time.After(last.Time) {
 		m.data = append(m.data, *req)
@@ -45,8 +54,22 @@ func (m *MemoryStore) Store(req *Snapshot) error {
 	return errors.New("Invalid time")
 }
 
+func NewMemoryStore(events ...string) MemoryStore {
+	store := make(map[string]*MemoryStorer, len(events))
+	for _, e := range events {
+		store[e] = new(MemoryStorer)
+	}
+	return store
+}
+func (m MemoryStore) Storer(event string) Storer {
+	if s := m[event]; s != nil {
+		return s
+	}
+	return nil
+}
+
 // Scan implements the Scanner interface
-func (m MemoryScanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
+func (m MemoryStore) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
 	var results Results
 	for _, q := range queries {
 		store, ok := m[q.Event]
@@ -65,7 +88,7 @@ func (m MemoryScanner) Scan(ctx context.Context, queries ...ScanQuery) (Results,
 			for j := range d.Counters {
 				c := &d.Counters[j]
 				fields := ZipFields(d.Labels, c.Values)
-				ok := fields.MatchSorted(q.Match)
+				ok := fields.MatchSorted(&q.Match)
 				if ok {
 					tm := stepTS(d.Time.Unix(), step)
 					results = results.Add(q.Event, fields, tm, float64(c.Count))
@@ -130,4 +153,18 @@ func (tee teeStorer) Store(s *Snapshot) error {
 		}
 	}
 	return nil
+}
+
+type EventStore map[string]Storer
+
+func (s EventStore) Add(event string, stor Storer) error {
+	if _, ok := s[event]; ok {
+		return errors.New("Duplicate event")
+	}
+	s[event] = stor
+	return nil
+}
+
+func (s EventStore) Storer(event string) Storer {
+	return s[event]
 }

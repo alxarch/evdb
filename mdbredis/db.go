@@ -146,7 +146,7 @@ const defaultScanSize = 1000
 // 	defer conn.Close()
 // 	return redis.Int64Map(conn.Do("HGETALL", key))
 // }
-func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Fields) (results meter.Results, err error) {
+func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.MatchFields) (results meter.Results, err error) {
 	var (
 		key           []byte
 		fields        meter.Fields
@@ -163,7 +163,7 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Field
 			if r == nil {
 				fields = parseFields(fields[:0], string(k))
 				sort.Sort(fields)
-				if !fields.MatchSorted(match) {
+				if !fields.MatchSorted(&match) {
 					index[string(k)] = skip
 					return nil
 				}

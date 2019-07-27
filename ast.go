@@ -76,6 +76,27 @@ func parseDurationUnit(exp ast.Expr) time.Duration {
 	return 0
 }
 
+func parseAggFn(exp ast.Expr) (prefix byte, name string, args []ast.Expr) {
+	fn, args := parseCall(exp)
+	name = getName(fn)
+	if len(name) > 0 {
+		switch name[0] {
+		case 'z', 'Z':
+			if len(name) > 3 {
+				p, n := name[:3], name[3:]
+				if strings.ToLower(p) != "zip" {
+					return
+				}
+				prefix, name = 'Z', n
+			}
+		case 'v', 'V':
+			prefix = 'V'
+			name = name[1:]
+		}
+	}
+	return
+}
+
 func parseAggregator(exp ast.Expr) (Aggregator, error) {
 	fn, err := parseString(exp)
 	if err != nil {

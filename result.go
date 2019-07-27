@@ -1,6 +1,7 @@
 package meter
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -12,6 +13,44 @@ type Result struct {
 	Event  string     `json:"event,omitempty"`
 	Fields Fields     `json:"fields,omitempty"`
 	Data   DataPoints `json:"data,omitempty"`
+}
+type GroupResult struct {
+	TimeRange
+	Group map[string]string `json:"group,omitempty"`
+	Event string            `json:"event,omitempty"`
+	Data  DataPoints        `json:"data,omitempty"`
+}
+
+func (r *GroupResult) MarshalJSON() ([]byte, error) {
+	tmp := jsonResult{
+		TimeRange: [3]int64{
+			r.Start.Unix(), r.End.Unix(), int64(r.Step.Seconds()),
+		},
+		Event: r.Event,
+		Group: r.Group,
+		Data:  r.Data,
+	}
+	return json.Marshal(&tmp)
+}
+
+type jsonResult struct {
+	TimeRange [3]int64          `json:"time"`
+	Group     map[string]string `json:"group,omitempty"`
+	Event     string            `json:"event,omitempty"`
+	Fields    Fields            `json:"fields,omitempty"`
+	Data      DataPoints        `json:"data,omitempty"`
+}
+
+func (r *Result) MarshalJSON() ([]byte, error) {
+	tmp := jsonResult{
+		TimeRange: [3]int64{
+			r.Start.Unix(), r.End.Unix(), int64(r.Step.Seconds()),
+		},
+		Event:  r.Event,
+		Fields: r.Fields,
+		Data:   r.Data,
+	}
+	return json.Marshal(&tmp)
 }
 
 // Results is a slice of results

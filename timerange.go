@@ -1,6 +1,8 @@
 package meter
 
-import "time"
+import (
+	"time"
+)
 
 // TimeRange is a range of time with a specific step
 type TimeRange struct {

@@ -62,34 +62,25 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 	switch strings.ToUpper(clause) {
 	case "SELECT":
 		if op != token.MUL {
-			return p.Errorf(exp, "Invalid SELECT clause")
+			return p.Errorf(exp, "Invalid SELECT clause %s%s", op, clause)
 		}
 		return nil
 	case "WHERE":
-		if s.Match != nil {
-			return p.Errorf(exp, "Duplicate WHERE clause")
+		if s.Match.Fields != nil {
+			return p.Errorf(exp, "Duplicate WHERE clause %s%s", op, clause)
 		}
 		switch op {
-		case token.SUB:
-			// TODO: Fields.Del
-			s.Match, err = p.parseMatchArgs(nil, args...)
-			// s.Match = parent.Match.Copy().Del(s.Match...)
 		case token.ADD:
 			m := parent.Match.Copy()
-			s.Match, err = p.parseMatchArgs(m, args...)
+			s.Match.Fields, err = p.parseMatchArgs(m, args...)
+		case token.SUB:
+			s.Match.Fields, err = p.parseMatchArgs(nil, args...)
+			s.Match.Fields = parent.Match.Del(s.Match.Fields...)
 		case token.MUL:
-			s.Match, err = p.parseMatchArgs(nil, args...)
+			s.Match.Fields, err = p.parseMatchArgs(nil, args...)
 		default:
-			return p.Errorf(exp, "Invalid WHERE clause modifier %q", op)
+			return p.Errorf(exp, "Invalid WHERE clause %s%s", op, clause)
 		}
-	case "GROUP":
-		if s.Agg != nil {
-			return p.Errorf(exp, "Duplicate GROUP clause")
-		}
-		if op != token.MUL || len(args) != 1 {
-			return p.Errorf(exp, "Invalid GROUP clause")
-		}
-		s.Agg, err = parseAggregator(args[0])
 	case "OFFSET":
 		if len(args) == 2 {
 			d, err := p.parseScanOffset(args[0], args[1])
@@ -110,10 +101,18 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 
 		}
 		return p.Errorf(exp, "Invalid OFFSET clause")
+	// case "GROUP":
+	// 	if s.Agg != nil {
+	// 		return p.Errorf(exp, "Duplicate GROUP clause")
+	// 	}
+	// 	if op != token.MUL || len(args) != 1 {
+	// 		return p.Errorf(exp, "Invalid GROUP clause")
+	// 	}
+	// 	s.Agg, err = parseAggregator(args[0])
 
-	case "BY":
+	case "BY", "GROUP", "GROUPBY":
 		if s.Group != nil {
-			return p.Errorf(exp, "Duplicate BY clause")
+			return p.Errorf(exp, "Duplicate GROUP clause %s%s", op, clause)
 		}
 		if op != token.MUL {
 			return p.Errorf(exp, "Invalid BY clause")
@@ -187,7 +186,7 @@ func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlo
 	if b.Group != nil && b.Agg == nil {
 		b.Agg = aggSum{}
 	}
-	if b.Match == nil {
+	if b.Match.Fields == nil {
 		b.Match = s.Match
 	}
 	if b.Empty == "" {
@@ -244,7 +243,7 @@ func (p *Parser) parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
 }
 
 func (p *Parser) parseSelectExpr(s *selectBlock, e ast.Expr) error {
-	a, err := p.parseAggResult(s, e)
+	a, err := p.parseResult(s.Agg, s, e)
 	if err != nil {
 		return err
 	}
@@ -293,12 +292,12 @@ func (p *Parser) parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, 
 	}
 }
 
-func (p *Parser) parseAggResult(s *selectBlock, e ast.Expr) (aggResult, error) {
+func (p *Parser) parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggResult, error) {
 	switch exp := e.(type) {
 	case *ast.ParenExpr:
-		return p.parseAggResult(s, exp.X)
+		return p.parseResult(agg, s, exp.X)
 	case *ast.UnaryExpr:
-		return p.parseAggExpr(s, exp)
+		return p.parseAggExpr(agg, s, exp)
 	case *ast.BasicLit:
 		return p.parseValueNode(s, exp)
 	case *ast.BinaryExpr:
@@ -309,26 +308,26 @@ func (p *Parser) parseAggResult(s *selectBlock, e ast.Expr) (aggResult, error) {
 		if m == nil {
 			return nil, p.Errorf(exp, "Invalid result operation %q", exp.Op)
 		}
-		x, err := p.parseAggResult(s, exp.X)
+		x, err := p.parseResult(agg, s, exp.X)
 		if err != nil {
 			return nil, err
 		}
-		y, err := p.parseAggResult(s, exp.Y)
+		y, err := p.parseResult(agg, s, exp.Y)
 		if err != nil {
 			return nil, err
 		}
-		op := opNode{
+		op := aggOp{
 			X:  x,
 			Y:  y,
 			Op: m,
 		}
 		return &op, nil
 	default:
-		s, err := p.parseScanResult(s, e)
+		scan, err := p.parseScanResult(s, e)
 		if err != nil {
 			return nil, err
 		}
-		return &scanAggNode{s}, nil
+		return &scanAggNode{agg, scan}, nil
 	}
 
 }
@@ -354,7 +353,7 @@ func (p *Parser) parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode,
 		if err != nil {
 			return nil, err
 		}
-		scan.Match = scan.Match.Merge(m...)
+		scan.Match.Fields = scan.Match.Merge(m...)
 		return scan, nil
 	case *ast.Ident:
 		return &scanResultNode{
@@ -367,36 +366,56 @@ func (p *Parser) parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode,
 	}
 }
 
-func (p *Parser) parseAggExpr(s *selectBlock, exp *ast.UnaryExpr) (aggResult, error) {
+func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) (aggResult, error) {
 	if exp.Op != token.NOT {
-		return nil, p.Errorf(exp, "Invalid result agg")
+		return nil, p.Errorf(exp, "Invalid aggregator keyword prefix %q", exp.Op)
 	}
-	// if opts.Group == nil {
-	// 	return nil, p.Errorf(exp, "Cannot use aggregators without group")
-	// }
-	fn, args := parseCall(exp.X)
-	agg, err := parseAggregator(fn)
-	if err != nil {
-		return nil, p.Error(exp.X, err)
+	prefix, name, args := parseAggFn(exp.X)
+	agg := newAgg(name)
+	if agg == nil {
+		return nil, p.Errorf(exp, "Invalid aggregator %s%s", exp.Op, name)
 	}
-	var nodes []aggResult
-	for _, arg := range args {
-		n, err := p.parseAggResult(s, arg)
+	if prefix == 'Z' {
+		z := zipAggNode{
+			Offset: s.Offset,
+			Agg:    agg,
+		}
+		for _, arg := range args {
+			n, err := p.parseResult(a, s, arg)
+			if err != nil {
+				return nil, err
+			}
+			z.Nodes = append(z.Nodes, n)
+		}
+		return &z, nil
+	}
+	if len(args) != 1 {
+		if len(args) == 0 {
+			return nil, p.Errorf(exp, "No arguments for %s%s", exp.Op, name)
+		}
+		return nil, p.Errorf(exp, "Too many arguments for %s%s", exp.Op, name)
+	}
+
+	if prefix == 'V' {
+		a, err := p.parseResult(agg, s, args[0])
 		if err != nil {
 			return nil, err
 		}
-		if n, ok := n.(aggResult); ok {
-			nodes = append(nodes, n)
-		} else {
-			return nil, p.Errorf(arg, "Invalid result")
+		n := aggNode{
+			Agg:       agg,
+			aggResult: a,
 		}
+		return &n, nil
 	}
-	a := aggNode{
-		Offset: s.Offset,
-		Agg:    agg,
-		Nodes:  nodes,
+	scan, err := p.parseScanResult(s, args[0])
+	if err != nil {
+		return nil, err
 	}
-	return &a, nil
+	n := scanAggNode{
+		Agg:            agg,
+		scanResultNode: scan,
+	}
+	return &n, nil
 }
 
 func (p *Parser) Queries(t TimeRange) ScanQueries {
@@ -559,16 +578,6 @@ func (p *Parser) parseMatchArgs(match Fields, args ...ast.Expr) (Fields, error) 
 	return match, nil
 }
 
-var _ = `
-{
-	!match{foo: bar}
-	!offset[-1: h]
-	foo / bar
-	bar / baz
-	!group{empty: "n/a", foo, bar, baz}
-}
-`
-
 type noder interface {
 	node()
 }
@@ -585,7 +594,7 @@ type rawResult interface {
 
 type aggResult interface {
 	noder
-	Aggregate(r Results, t *TimeRange, agg Aggregator) Result
+	Aggregate(r Results, t *TimeRange) Result
 }
 
 type groupNode struct {
@@ -626,6 +635,15 @@ type resultGroup struct {
 	results Results
 }
 
+func (g resultGroup) Values() map[string]string {
+	v := make(map[string]string, len(g.Fields))
+	for i := range g.Fields {
+		f := &g.Fields[i]
+		v[f.Label] = f.Value
+	}
+	return v
+}
+
 func (g *groupNode) Aggregator() Aggregator {
 	if g.Agg == nil {
 		return aggSum{}
@@ -634,10 +652,10 @@ func (g *groupNode) Aggregator() Aggregator {
 }
 
 func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *TimeRange) []interface{} {
-	agg := g.Aggregator()
 	for _, n := range g.Nodes {
-		r := n.Aggregate(group.results, tr, agg)
+		r := n.Aggregate(group.results, tr)
 		r.Fields = group.Fields
+		r.TimeRange = *tr
 		out = append(out, &r)
 	}
 	return out
@@ -655,7 +673,7 @@ func (g *groupNode) Eval(out []interface{}, tr *TimeRange, results Results) []in
 type scanResultNode struct {
 	Offset time.Duration
 	Event  string
-	Match  Fields
+	Match  MatchFields
 }
 
 func (*scanResultNode) node() {}
@@ -671,6 +689,8 @@ func (s *scanResultNode) Query(tr TimeRange) ScanQuery {
 type scanEvalNode struct {
 	*scanResultNode
 }
+
+func (n *scanEvalNode) unwrap() noder { return n.scanResultNode }
 
 func (*scanEvalNode) node() {}
 func (s *scanEvalNode) Eval(out []interface{}, t *TimeRange, r Results) []interface{} {
@@ -705,13 +725,31 @@ func (s *scanResultNode) Results(results Results, tr TimeRange) Results {
 }
 
 type scanAggNode struct {
+	Agg Aggregator
 	*scanResultNode
 }
 
-func (s *scanAggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+func (n *scanAggNode) unwrap() noder { return n.scanResultNode }
+
+// func (s *scanAggNode) Results(results Results, tr *TimeRange) Results {
+// 	results = s.scanResultNode.Results(results, *tr)
+// 	out := make([]Result, len(results))
+// 	for i := range results {
+// 		r := &results[i]
+// 		o := &out[i]
+// 		*o = *r
+// 		agg := blankAgg(s.Agg)
+// 		v := r.Data.Aggregate(agg)
+// 		o.Data = tr.BlankData(v)
+// 	}
+// 	return out
+// }
+
+func (s *scanAggNode) Aggregate(results Results, tr *TimeRange) Result {
+	agg := blankAgg(s.Agg)
 	t := *tr
 	data := tr.BlankData(agg.Zero())
-	results = s.Results(results, t)
+	results = s.scanResultNode.Results(results, *tr)
 	for i := range data {
 		d := &data[i]
 		v := agg.Zero()
@@ -726,11 +764,12 @@ func (s *scanAggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) 
 		}
 		d.Value = v
 	}
+	// No fields group op
 	return Result{
 		TimeRange: t,
 		Event:     s.Event,
-		Fields:    s.Match,
-		Data:      data,
+		// Fields:    s.Match.Fields,
+		Data: data,
 	}
 }
 
@@ -740,7 +779,7 @@ type valueNode struct {
 }
 
 func (*valueNode) node() {}
-func (v *valueNode) Aggregate(_ Results, t *TimeRange, _ Aggregator) Result {
+func (v *valueNode) Aggregate(_ Results, t *TimeRange) Result {
 	if v.Offset > 0 {
 		tt := t.Offset(v.Offset)
 		t = &tt
@@ -750,15 +789,15 @@ func (v *valueNode) Aggregate(_ Results, t *TimeRange, _ Aggregator) Result {
 	}
 }
 
-type aggNode struct {
+type zipAggNode struct {
 	Offset time.Duration
 	Agg    Aggregator
 	Nodes  []aggResult
 }
 
-func (*aggNode) node() {}
+func (*zipAggNode) node() {}
 
-func (n *aggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Result {
+func (n *zipAggNode) Aggregate(results Results, tr *TimeRange) Result {
 	if n.Offset != 0 {
 		t := tr.Offset(n.Offset)
 		tr = &t
@@ -769,17 +808,14 @@ func (n *aggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Resu
 			Data: tr.BlankData(math.NaN()),
 		}
 	case 1:
-		return n.Nodes[0].Aggregate(results, tr, agg)
+		return n.Nodes[0].Aggregate(results, tr)
 	}
 	var els []Result
-	if n.Agg != nil {
-		agg = n.Agg
-	}
 	for _, el := range n.Nodes {
-		els = append(els, el.Aggregate(results, tr, agg))
+		els = append(els, el.Aggregate(results, tr))
 	}
 	out, tail := els[0], els[1:]
-	a := blankAgg(agg)
+	a := blankAgg(n.Agg)
 	for i := range out.Data {
 		d := &out.Data[i]
 		v := a.Zero()
@@ -798,16 +834,16 @@ func (n *aggNode) Aggregate(results Results, tr *TimeRange, agg Aggregator) Resu
 	return out
 }
 
-type opNode struct {
+type aggOp struct {
 	X  aggResult
 	Y  aggResult
 	Op Merger
 }
 
-func (op *opNode) node() {}
-func (op *opNode) Aggregate(r Results, tr *TimeRange, agg Aggregator) Result {
-	x := op.X.Aggregate(r, tr, agg)
-	y := op.Y.Aggregate(r, tr, agg)
+func (op *aggOp) node() {}
+func (op *aggOp) Aggregate(r Results, tr *TimeRange) Result {
+	x := op.X.Aggregate(r, tr)
+	y := op.Y.Aggregate(r, tr)
 	for i := range x.Data {
 		p := &x.Data[i]
 		if 0 <= i && i < len(y.Data) {
@@ -815,8 +851,12 @@ func (op *opNode) Aggregate(r Results, tr *TimeRange, agg Aggregator) Result {
 			p.Value = op.Op.Merge(p.Value, pp.Value)
 		}
 	}
-	return x
+	return Result{
+		Data: x.Data,
+	}
 }
+
+type blockNode []evalNode
 
 type selectBlock struct {
 	Select []evalNode
@@ -824,7 +864,7 @@ type selectBlock struct {
 	Empty  string
 	Agg    Aggregator
 	Offset time.Duration
-	Match  Fields
+	Match  MatchFields
 }
 
 func (s *selectBlock) group() groupNode {
@@ -860,8 +900,8 @@ func (s *selectBlock) GroupNode() *groupNode {
 
 func (*selectBlock) node() {}
 
-func (b *selectBlock) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
-	for _, n := range b.Select {
+func (s *selectBlock) Eval(out []interface{}, t *TimeRange, results Results) []interface{} {
+	for _, n := range s.Select {
 		out = n.Eval(out, t, results)
 	}
 	return out
@@ -913,35 +953,36 @@ type namedAggResult struct {
 	Name string
 }
 
-func (n *namedAggResult) Aggregate(r Results, t *TimeRange, a Aggregator) Result {
-	out := n.aggResult.Aggregate(r, t, a)
+func (n *namedAggResult) unwrap() noder { return n.aggResult }
+
+func (n *namedAggResult) Aggregate(r Results, t *TimeRange) Result {
+	out := n.aggResult.Aggregate(r, t)
 	out.Event = n.Name
+	out.TimeRange = *t
 	out.Fields = nil
 	return out
 }
 
-type queryNode interface {
-	noder
-	Query(TimeRange) ScanQuery
-}
+func nodeQueries(dst ScanQueries, t *TimeRange, n noder) ScanQueries {
+	type queryNode interface {
+		noder
+		Query(TimeRange) ScanQuery
+	}
+	type unwraper interface {
+		unwrap() noder
+	}
 
-func nodeQueries(dst ScanQueries, t *TimeRange, n interface{}) ScanQueries {
 	switch n := n.(type) {
 	case queryNode:
 		return append(dst, n.Query(*t))
-	case *namedAggResult:
-		return nodeQueries(dst, t, n.aggResult)
+	case unwraper:
+		return nodeQueries(dst, t, n.unwrap())
 	case *selectBlock:
 		for _, n := range n.Select {
 			dst = nodeQueries(dst, t, n)
 		}
 		return dst
-	case *aggNode:
-		for _, n := range n.Nodes {
-			dst = nodeQueries(dst, t, n)
-		}
-		return dst
-	case *opNode:
+	case *aggOp:
 		dst = nodeQueries(dst, t, n.X)
 		dst = nodeQueries(dst, t, n.Y)
 		return dst
@@ -954,4 +995,21 @@ func nodeQueries(dst ScanQueries, t *TimeRange, n interface{}) ScanQueries {
 		fmt.Println(reflect.TypeOf(n))
 		return dst
 	}
+}
+
+// aggNode reduces a result to a value
+type aggNode struct {
+	aggResult
+	Agg Aggregator
+}
+
+func (n *aggNode) node()         {}
+func (n *aggNode) unwrap() noder { return n.aggResult }
+
+func (n *aggNode) Aggregate(r Results, t *TimeRange) Result {
+	a := n.aggResult.Aggregate(r, t)
+	agg := blankAgg(n.Agg)
+	v := a.Data.Aggregate(agg)
+	a.Data.Fill(v)
+	return a
 }

@@ -17,6 +17,10 @@ type Field struct {
 // Fields is a collection of Label/Value pairs
 type Fields []Field
 
+type MatchFields struct {
+	Fields
+}
+
 // Reset resets Fields to empty
 func (fields Fields) Reset() Fields {
 	for i := range fields {
@@ -52,6 +56,11 @@ func (fields Fields) Get(label string) (string, bool) {
 // MarshalJSON implements json.Marshaler interface
 func (fields Fields) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields.Map())
+}
+
+// MarshalJSON implements json.Marshaler interface
+func (m *MatchFields) MarshalJSON() ([]byte, error) {
+	return json.Marshal(m.Fields.Map())
 }
 
 // UnmarshalJSON implements json.Marshaler interface
@@ -163,13 +172,26 @@ func (fields Fields) Less(i, j int) bool {
 }
 
 // Map converts a Fields collection to a map
-func (fields Fields) Map() map[string][]string {
+func (fields Fields) Map() map[string]string {
 	if fields == nil {
 		return nil
 	}
-	m := make(map[string][]string, len(fields))
+	m := make(map[string]string, len(fields))
 	for i := range fields {
 		f := &fields[i]
+		m[f.Label] = f.Value
+	}
+	return m
+}
+
+// Map converts a Fields collection to a map
+func (fields *MatchFields) Map() map[string][]string {
+	if fields.Fields == nil {
+		return nil
+	}
+	m := make(map[string][]string, len(fields.Fields))
+	for i := range fields.Fields {
+		f := &fields.Fields[i]
 		m[f.Label] = append(m[f.Label], f.Value)
 	}
 	return m
@@ -180,6 +202,21 @@ func (fields Fields) Merge(other ...Field) Fields {
 		fields = fields.Add(o)
 	}
 	return fields
+}
+func (fields Fields) Del(del ...Field) Fields {
+	var out Fields
+iloop:
+	for i := range fields {
+		f := &fields[i]
+		for j := range del {
+			d := &del[j]
+			if f.Label == d.Label && f.Value == d.Value {
+				continue iloop
+			}
+		}
+		out = append(out, *f)
+	}
+	return out
 }
 
 func (fields Fields) Add(field Field) Fields {
@@ -244,7 +281,8 @@ func (fields Fields) MatchValues(values map[string][]string) bool {
 }
 
 // MatchSorted matches fields agaist a sorted collection of Fields
-func (fields Fields) MatchSorted(match Fields) bool {
+func (fields Fields) MatchSorted(m *MatchFields) bool {
+	match := m.Fields
 next:
 	for i := range fields {
 		f := &fields[i]

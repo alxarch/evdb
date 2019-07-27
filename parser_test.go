@@ -120,7 +120,7 @@ func TestParser_Reset(t *testing.T) {
 		{`{
 			*BY{foo, bar, baz, agg: min}
 			*WHERE{foo: bar}
-			!avg{
+			!ZIPAVG{
 				foo{bar: baz|42}[1:h],
 				foo{bar: baz|42},
 			} + 2
