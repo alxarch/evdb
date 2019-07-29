@@ -11,8 +11,10 @@ type TimeRange struct {
 	Step  time.Duration `json:"step"`
 }
 
+// TimeRel is a relation between two time ranges
 type TimeRel int
 
+// TimeRel enum
 const (
 	TimeRelNone TimeRel = iota
 	TimeRelAround

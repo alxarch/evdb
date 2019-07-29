@@ -39,9 +39,10 @@ func (mm Matchers) Match(b []byte) bool {
 	}
 	return false
 }
-func (mm Matchers) String() string {
-	return fmt.Sprintf("%s", ([]Matcher)(mm))
-}
+
+// func (mm Matchers) String() string {
+// 	return fmt.Sprintf("%s", ([]Matcher)(mm))
+// }
 func (mm Matchers) MatchString(s string) bool {
 	for _, m := range mm {
 		if m.MatchString(s) {
@@ -123,6 +124,14 @@ func (mf MatchFields) Copy() MatchFields {
 	return cp
 }
 
+func (mf MatchFields) Set(label string, m Matcher) MatchFields {
+	if mf == nil {
+		return MatchFields{label: m}
+	}
+	mf[label] = m
+	return mf
+}
+
 func (mf MatchFields) Add(label string, m Matcher) MatchFields {
 	if mf == nil {
 		return MatchFields{label: m}
@@ -148,81 +157,70 @@ func (mf MatchFields) Merge(other MatchFields) MatchFields {
 	return mf
 }
 
-type MatchValues map[string][]string
+// type MatchValues map[string][]string
 
-// func (m MatchValues) merge(other FieldMatcher) FieldMatcher {
-// 	switch other := other.(type) {
-// 	case MatchValues:
-// 		return m.Merge(other)
-// 	case fieldMatchers:
-// 		return append(fieldMatchers{m}, other...)
-// 	default:
-// 		return fieldMatchers{m, other}
+// func (m MatchValues) Add(label string, values ...string) MatchValues {
+// 	if m == nil {
+// 		m = make(map[string][]string)
 // 	}
+// 	m[label] = appendDistinct(m[label], values...)
+// 	return m
 // }
 
-func (m MatchValues) Add(label string, values ...string) MatchValues {
-	if m == nil {
-		m = make(map[string][]string)
-	}
-	m[label] = appendDistinct(m[label], values...)
-	return m
-}
+// func (m MatchValues) Del(label string, values ...string) {
+// 	all := m[label]
+// 	if len(all) == 0 {
+// 		return
+// 	}
+// 	keep := make([]string, 0, len(all))
+// vloop:
+// 	for _, v := range all {
+// 		for _, d := range values {
+// 			if v == d {
+// 				continue vloop
+// 			}
+// 		}
+// 		keep = append(keep, v)
+// 	}
+// 	m[label] = keep
+// }
 
-func (m MatchValues) Del(label string, values ...string) {
-	all := m[label]
-	if len(all) == 0 {
-		return
-	}
-	keep := make([]string, 0, len(all))
-vloop:
-	for _, v := range all {
-		for _, d := range values {
-			if v == d {
-				continue vloop
-			}
-		}
-		keep = append(keep, v)
-	}
-	m[label] = keep
-}
+// func (m MatchValues) Merge(values MatchValues) MatchValues {
+// 	if m == nil {
+// 		return values.Copy()
+// 	}
+// 	for label, values := range values {
+// 		v := m[label]
+// 		m[label] = appendDistinct(v, values...)
+// 	}
+// 	return m
+// }
 
-func (m MatchValues) Merge(values MatchValues) MatchValues {
-	if m == nil {
-		return values.Copy()
-	}
-	for label, values := range values {
-		v := m[label]
-		m[label] = appendDistinct(v, values...)
-	}
-	return m
-}
+// func (m MatchValues) Copy() MatchValues {
+// 	if m == nil {
+// 		return nil
+// 	}
+// 	cp := make(map[string][]string, len(m))
+// 	for label, values := range m {
+// 		cp[label] = append(([]string)(nil), values...)
+// 	}
+// 	return cp
+// }
 
-func (m MatchValues) Copy() MatchValues {
-	if m == nil {
-		return nil
-	}
-	cp := make(map[string][]string, len(m))
-	for label, values := range m {
-		cp[label] = append(([]string)(nil), values...)
-	}
-	return cp
-}
-
-func (m MatchValues) Includes(other MatchValues) bool {
-	for label, values := range other {
-		vv := m[label]
-		if len(vv) == 0 {
-			return false
-		}
-		for _, v := range values {
-			if indexOf(vv, v) == -1 {
-				return false
-			}
-		}
-	}
-	return true
-}
+// func (m MatchValues) Includes(other MatchValues) bool {
+// 	for label, values := range other {
+// 		vv := m[label]
+// 		if len(vv) == 0 {
+// 			return false
+// 		}
+// 		for _, v := range values {
+// 			if indexOf(vv, v) == -1 {
+// 				return false
+// 			}
+// 		}
+// 	}
+// 	return true
+// }
 
 // type stringMatcher interface {
 // 	MatchString(v string) bool

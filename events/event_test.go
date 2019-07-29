@@ -19,10 +19,11 @@ func Test_Event(t *testing.T) {
 	e.Add(1, "BAR", "BAZ")
 
 	s := e.Flush(nil)
-	assert.Equal(t, s, meter.CounterSlice{{
+	assert.Equal(t, len(s), 1)
+	assert.Equal(t, s[0], meter.Counter{
 		Values: []string{"BAR", "BAZ"},
 		Count:  1,
-	}})
+	})
 	// assert.Equal(t, e.get(0).Count, int64(0))
 	e.Merge(s)
 	e.Add(1, "BAR", "BAZ")
