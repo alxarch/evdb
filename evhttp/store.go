@@ -49,41 +49,6 @@ func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	return
 }
 
-type syncBuffer struct {
-	buffer bytes.Buffer
-	gzip   *gzip.Writer
-	json   *json.Encoder
-}
-
-var syncBuffers sync.Pool
-
-func getSyncBuffer() *syncBuffer {
-	if x := syncBuffers.Get(); x != nil {
-		return x.(*syncBuffer)
-	}
-	return new(syncBuffer)
-}
-
-func putSyncBuffer(b *syncBuffer) {
-	syncBuffers.Put(b)
-}
-
-func (b *syncBuffer) Encode(x interface{}) error {
-	b.buffer.Reset()
-	if b.gzip == nil {
-		b.gzip = gzip.NewWriter(&b.buffer)
-	} else {
-		b.gzip.Reset(&b.buffer)
-	}
-	if b.json == nil {
-		b.json = json.NewEncoder(b.gzip)
-	}
-	if err := b.json.Encode(x); err != nil {
-		return err
-	}
-	return b.gzip.Close()
-}
-
 // StoreHandler returns an HTTP endpoint for an EventStore
 func StoreHandler(s meter.Storer) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -123,4 +88,39 @@ func InflateRequest(next http.Handler) http.HandlerFunc {
 		}
 		next.ServeHTTP(w, r)
 	}
+}
+
+type syncBuffer struct {
+	buffer bytes.Buffer
+	gzip   *gzip.Writer
+	json   *json.Encoder
+}
+
+var syncBuffers sync.Pool
+
+func getSyncBuffer() *syncBuffer {
+	if x := syncBuffers.Get(); x != nil {
+		return x.(*syncBuffer)
+	}
+	return new(syncBuffer)
+}
+
+func putSyncBuffer(b *syncBuffer) {
+	syncBuffers.Put(b)
+}
+
+func (b *syncBuffer) Encode(x interface{}) error {
+	b.buffer.Reset()
+	if b.gzip == nil {
+		b.gzip = gzip.NewWriter(&b.buffer)
+	} else {
+		b.gzip.Reset(&b.buffer)
+	}
+	if b.json == nil {
+		b.json = json.NewEncoder(b.gzip)
+	}
+	if err := b.json.Encode(x); err != nil {
+		return err
+	}
+	return b.gzip.Close()
 }
