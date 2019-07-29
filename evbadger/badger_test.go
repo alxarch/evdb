@@ -1,4 +1,4 @@
-package mdbbadger_test
+package evbadger_test
 
 import (
 	"context"
@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/go-meter/v2/mdbbadger"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/evbadger"
+	"github.com/alxarch/evdb/events"
 	"github.com/dgraph-io/badger/v2"
 )
 
@@ -27,19 +28,19 @@ func TestBadgerEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal("Failed to open badger", err)
 	}
-	events, err := mdbbadger.Open(db, "test")
+	edb, err := evbadger.Open(db, "test")
 	if err != nil {
 		t.Fatal("Failed to open badger store", err)
 	}
 	tm := time.Date(2019, time.May, 15, 13, 14, 0, 0, time.UTC)
-	req := meter.Snapshot{
+	req := evdb.Snapshot{
 		Time: tm,
 		Labels: []string{
 			"country",
 			"host",
 			"method",
 		},
-		Counters: []meter.Counter{
+		Counters: []events.Counter{
 			{
 				Values: []string{"USA", "www.example.org", "GET"},
 				Count:  12,
@@ -58,24 +59,22 @@ func TestBadgerEvents(t *testing.T) {
 			},
 		},
 	}
-	if err := events.Storer("test").Store(&req); err != nil {
+	if err := edb.Storer("test").Store(&req); err != nil {
 		t.Fatal("Failed to store counters", err)
 	}
 	ctx := context.Background()
-	q := meter.ScanQuery{
+	q := evdb.ScanQuery{
 		Event: "test",
-		TimeRange: meter.TimeRange{
+		TimeRange: evdb.TimeRange{
 			Step:  time.Second,
 			Start: tm.Add(-1 * time.Hour),
 			End:   tm.Add(24 * time.Hour),
 		},
-		Match: meter.MatchFields{
-			Fields: meter.Fields{
-				{Label: "country", Value: "USA"},
-			},
+		Fields: evdb.MatchFields{
+			"country": evdb.MatchString("USA"),
 		},
 	}
-	results, err := events.ScanQuery(ctx, &q)
+	results, err := edb.ScanQuery(ctx, &q)
 	if err != nil {
 		t.Fatal("Query failed", err)
 	}

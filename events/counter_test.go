@@ -1,29 +1,30 @@
-package meter_test
+package events_test
 
 import (
 	"reflect"
 	"strconv"
 	"testing"
 
-	"github.com/alxarch/go-meter/v2"
+	meter "github.com/alxarch/evdb/events"
+	"github.com/alxarch/evdb/internal/assert"
 )
 
 func Test_UnsafeCounters(t *testing.T) {
 	var cc meter.UnsafeCounters
-	AssertEqual(t, cc.Add(1, "foo", "bar"), int64(1))
-	AssertEqual(t, cc.Add(41, "foo", "bar"), int64(42))
-	AssertEqual(t, cc.Len(), 1)
+	assert.Equal(t, cc.Add(1, "foo", "bar"), int64(1))
+	assert.Equal(t, cc.Add(41, "foo", "bar"), int64(42))
+	assert.Equal(t, cc.Len(), 1)
 	snapshot := cc.Flush(nil)
-	AssertEqual(t, len(snapshot), 1)
-	AssertEqual(t, snapshot[0].Count, int64(42))
-	AssertEqual(t, cc.Get(0).Count, int64(0))
-	AssertEqual(t, cc.Add(1, "foo", "bar"), int64(1))
-	AssertEqual(t, cc.Add(41, "foo", "bar"), int64(42))
-	AssertEqual(t, cc.Add(0, "bar", "baz"), int64(0))
+	assert.Equal(t, len(snapshot), 1)
+	assert.Equal(t, snapshot[0].Count, int64(42))
+	assert.Equal(t, cc.Get(0).Count, int64(0))
+	assert.Equal(t, cc.Add(1, "foo", "bar"), int64(1))
+	assert.Equal(t, cc.Add(41, "foo", "bar"), int64(42))
+	assert.Equal(t, cc.Add(0, "bar", "baz"), int64(0))
 	cc.Pack()
 	packed := cc.Flush(nil)
-	AssertEqual(t, len(packed), 1)
-	AssertEqual(t, packed[0].Count, int64(42))
+	assert.Equal(t, len(packed), 1)
+	assert.Equal(t, packed[0].Count, int64(42))
 }
 
 func TestCounterSlice_FilterZero(t *testing.T) {

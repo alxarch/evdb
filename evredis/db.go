@@ -1,4 +1,4 @@
-package mdbredis
+package evredis
 
 import (
 	"context"
@@ -7,24 +7,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alxarch/evdb"
 	redis "github.com/alxarch/fastredis"
 	"github.com/alxarch/fastredis/resp"
-	meter "github.com/alxarch/go-meter/v2"
 	errors "golang.org/x/xerrors"
 )
 
 type DB struct {
 	redis *redis.Pool
-	meter.Scanner
+	evdb.Scanner
 	keyPrefix   string
 	scanSize    int64
-	events      map[string]meter.Storer
+	events      map[string]evdb.Storer
 	resolutions map[time.Duration]Resolution
 }
 
-var _ meter.DB = (*DB)(nil)
+var _ evdb.DB = (*DB)(nil)
 
-func (db *DB) Storer(event string) meter.Storer {
+func (db *DB) Storer(event string) evdb.Storer {
 	if e, ok := db.events[event]; ok {
 		return e
 	}
@@ -37,8 +37,8 @@ type storer struct {
 	Resolution
 }
 
-func (db *DB) storer(event string) meter.Storer {
-	storers := make([]meter.Storer, 0, len(db.resolutions))
+func (db *DB) storer(event string) evdb.Storer {
+	storers := make([]evdb.Storer, 0, len(db.resolutions))
 	for _, res := range db.resolutions {
 		storers = append(storers, &storer{
 			DB:         db,
@@ -46,7 +46,7 @@ func (db *DB) storer(event string) meter.Storer {
 			Resolution: res,
 		})
 	}
-	return meter.TeeStore(storers...)
+	return evdb.TeeStore(storers...)
 }
 
 const (
@@ -73,13 +73,13 @@ func Open(options Options, events ...string) (*DB, error) {
 		redis:       pool,
 		scanSize:    options.ScanSize,
 		keyPrefix:   options.KeyPrefix,
-		events:      make(map[string]meter.Storer),
+		events:      make(map[string]evdb.Storer),
 		resolutions: byDuration,
 	}
 	for _, event := range events {
 		db.events[event] = db.storer(event)
 	}
-	db.Scanner = meter.NewScanner(&db)
+	db.Scanner = evdb.NewScanner(&db)
 	return &db, nil
 }
 
@@ -88,7 +88,7 @@ func (db *DB) Close() error {
 	return nil
 }
 
-func (db *DB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
+func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	res, ok := db.resolutions[q.Step]
 	if !ok {
 		return nil, errors.Errorf("Invalid query step: %s", q.Step)
@@ -98,10 +98,10 @@ func (db *DB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results,
 		event:      q.Event,
 		Resolution: res,
 	}
-	return s.Scan(ctx, q.TimeRange, q.Match)
+	return s.Scan(ctx, q.TimeRange, q.Fields)
 }
 
-func (db *storer) Store(s *meter.Snapshot) error {
+func (db *storer) Store(s *evdb.Snapshot) error {
 	if len(s.Counters) == 0 {
 		return nil
 	}
@@ -146,13 +146,13 @@ const defaultScanSize = 1000
 // 	defer conn.Close()
 // 	return redis.Int64Map(conn.Do("HGETALL", key))
 // }
-func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.MatchFields) (results meter.Results, err error) {
+func (db *storer) Scan(ctx context.Context, q evdb.TimeRange, m evdb.MatchFields) (results evdb.Results, err error) {
 	var (
 		key           []byte
-		fields        meter.Fields
+		fields        evdb.Fields
 		ts            int64
-		index         = map[string]*meter.Result{}
-		skip          = &meter.Result{}
+		index         = map[string]*evdb.Result{}
+		skip          = &evdb.Result{}
 		start         = db.Truncate(q.Start)
 		tm, end, step = start, db.Truncate(q.End), db.Step()
 		scan          = func(k []byte, v resp.Value) error {
@@ -163,16 +163,16 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Match
 			if r == nil {
 				fields = parseFields(fields[:0], string(k))
 				sort.Sort(fields)
-				if !fields.MatchSorted(&match) {
+				if !m.Match(fields) {
 					index[string(k)] = skip
 					return nil
 				}
 
-				results = append(results, meter.Result{
+				results = append(results, evdb.Result{
 					TimeRange: q,
 					Event:     db.event,
 					Fields:    fields.Copy(),
-					Data:      q.BlankData(0),
+					Data:      evdb.BlankData(&q, 0),
 				})
 				r = &results[len(results)-1]
 				index[string(k)] = r
@@ -204,7 +204,7 @@ func (db *storer) Scan(ctx context.Context, q meter.TimeRange, match meter.Match
 	return
 }
 
-func parseFields(fields meter.Fields, s string) meter.Fields {
+func parseFields(fields evdb.Fields, s string) evdb.Fields {
 	pos := strings.IndexByte(s, fieldTerminator)
 	if 0 <= pos && pos < len(s) {
 		s = s[:pos]
@@ -225,7 +225,7 @@ func parseFields(fields meter.Fields, s string) meter.Fields {
 				if value == "\x00" {
 					value = ""
 				}
-				fields = append(fields, meter.Field{
+				fields = append(fields, evdb.Field{
 					Label: label,
 					Value: value,
 				})
@@ -240,7 +240,7 @@ func parseFields(fields meter.Fields, s string) meter.Fields {
 			value = ""
 		}
 
-		fields = append(fields, meter.Field{
+		fields = append(fields, evdb.Field{
 			Label: label,
 			Value: value,
 		})

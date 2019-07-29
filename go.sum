@@ -4,8 +4,6 @@ github.com/AndreasBriese/bbloom v0.0.0-20190306092124-e2d15f34fcf9 h1:HD8gA2tkBy
 github.com/AndreasBriese/bbloom v0.0.0-20190306092124-e2d15f34fcf9/go.mod h1:bOvUY6CB00SOBii9/FifXqc0awNKxLFCL/+pkDPuyl8=
 github.com/alxarch/fastredis v0.1.8-alpha h1:SPa8G8LPWGkhKbKymrz0n4Z4225jrw0PIbx/PieYt6M=
 github.com/alxarch/fastredis v0.1.8-alpha/go.mod h1:+y8WbliZtPol0AR2OE0trsFjoXn164MJaApw6tY6utY=
-github.com/alxarch/go-meter v1.0.0 h1:IKTYSuRABHFA7sZMtHZewpfuHyQqQsqpHCj5c6JynTY=
-github.com/alxarch/go-meter v1.0.0/go.mod h1:IQfooTIt30/kX9S5moVxcUQ/01cter3LGAqSJ8s7nC8=
 github.com/alxarch/httperr v0.0.0-20190718123259-527f111510dd h1:6vnK2qHiHV381reZuRUxbUGAGxdm9iRW/eMOwelDLtk=
 github.com/alxarch/httperr v0.0.0-20190718123259-527f111510dd/go.mod h1:PRjEQlczePEH5VSkKnXjM7ClPUVksRJD2ZjB82QgEHc=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
@@ -23,8 +21,6 @@ github.com/golang/protobuf v1.2.0 h1:P3YflyNX/ehuJFLhxviNdFxQPkGK5cDcApsge1SqnvM
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
 github.com/golang/protobuf v1.3.1 h1:YF8+flBXS5eO826T4nzqPrxfhQThhXl0YzfuUPu4SBg=
 github.com/golang/protobuf v1.3.1/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
-github.com/gomodule/redigo v2.0.0+incompatible h1:K/R+8tc58AaqLkqG2Ol3Qk+DR/TlNuhuh457pBFPtt0=
-github.com/gomodule/redigo v2.0.0+incompatible/go.mod h1:B4C85qUVwatsJoIUNIfCRsp7qO0iAmpGFZ4EELWSbC4=
 github.com/inconshreveable/mousetrap v1.0.0/go.mod h1:PxqpIevigyE2G7u3NXJIT2ANytuPF1OarO4DADm73n8=
 github.com/pkg/errors v0.8.0 h1:WdK/asTD0HN+q6hsWO3/vpuAkAr+tw6aNJNDFFf0+qw=
 github.com/pkg/errors v0.8.0/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

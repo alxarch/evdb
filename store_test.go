@@ -1,19 +1,20 @@
-package meter_test
+package evdb_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
+	meter "github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/events"
 )
 
 func Test_MemoryStore(t *testing.T) {
-	m := new(meter.MemoryStore)
+	m := new(meter.MemoryStorer)
 	r1 := meter.Snapshot{
 		Time:   time.Now(),
 		Labels: []string{"color", "taste"},
-		Counters: []meter.Counter{
+		Counters: []events.Counter{
 			{
 				Values: []string{"blue", "sour"},
 				Count:  3,
@@ -38,12 +39,12 @@ func Test_MemoryStore(t *testing.T) {
 			Start: time.Now().Add(-1 * time.Hour),
 			End:   time.Now().Add(time.Hour),
 		},
-		Match: meter.Fields{
-			{Label: "color", Value: "blue"},
+		Fields: meter.MatchFields{
+			"color": meter.MatchString("blue"),
 		},
 	}
 
-	s := meter.MemoryScanner{"foo": m}
+	s := meter.MemoryStore{"foo": m}
 	results, err := s.Scan(ctx, q1)
 	if err != nil {
 		t.Fatalf(`Unexpected error %s`, err)

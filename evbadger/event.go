@@ -1,18 +1,19 @@
-package mdbbadger
+package evbadger
 
 import (
 	"bytes"
 	"context"
 	"encoding/binary"
 
-	meter "github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/events"
 	"github.com/dgraph-io/badger/v2"
 )
 
 type eventDB struct {
 	badger *badger.DB
 	id     eventID
-	fields meter.FieldCache
+	fields evdb.FieldCache
 }
 
 func (e *eventDB) Labels() ([]string, error) {
@@ -20,11 +21,11 @@ func (e *eventDB) Labels() ([]string, error) {
 }
 
 // Store implements Store interface
-func (e *eventDB) Store(s *meter.Snapshot) error {
+func (e *eventDB) Store(s *evdb.Snapshot) error {
 	return e.store(s.Time.Unix(), s.Labels, s.Counters)
 }
 
-func (e *eventDB) store(ts int64, labels []string, counters meter.CounterSlice) (err error) {
+func (e *eventDB) store(ts int64, labels []string, counters []events.Counter) (err error) {
 	var (
 		cache   = &e.fields
 		index   = newLabelIndex(labels...)
@@ -128,7 +129,7 @@ func (e *eventDB) loadID(data []byte) (id uint64, err error) {
 	return
 }
 
-func (e *eventDB) Fields(id uint64) (meter.Fields, error) {
+func (e *eventDB) Fields(id uint64) (evdb.Fields, error) {
 	fields := e.fields.Fields(id)
 	if fields != nil {
 		return fields, nil
@@ -147,11 +148,11 @@ func (e *eventDB) Fields(id uint64) (meter.Fields, error) {
 	return fields, nil
 }
 
-type resolver func(uint64) (meter.Fields, error)
+type resolver func(uint64) (evdb.Fields, error)
 
-func (e *eventDB) resolver(match meter.MatchFields) resolver {
-	cache := make(map[uint64]meter.Fields)
-	return func(id uint64) (meter.Fields, error) {
+func (e *eventDB) resolver(m evdb.MatchFields) resolver {
+	cache := make(map[uint64]evdb.Fields)
+	return func(id uint64) (evdb.Fields, error) {
 		fields, ok := cache[id]
 		if ok {
 			return fields, nil
@@ -162,8 +163,7 @@ func (e *eventDB) resolver(match meter.MatchFields) resolver {
 				return nil, err
 			}
 			fields = nil
-		} else if fields.MatchSorted(&match) {
-		} else {
+		} else if !m.Match(fields) {
 			fields = nil
 		}
 		cache[id] = fields
@@ -173,11 +173,9 @@ func (e *eventDB) resolver(match meter.MatchFields) resolver {
 
 }
 
-var merger = meter.MergeSum{}
-
-func (e *eventDB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (results meter.Results, err error) {
+func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evdb.Results, err error) {
 	var (
-		resolver   = e.resolver(q.Match)
+		resolver   = e.resolver(q.Fields)
 		minT, maxT = q.Start.Unix(), q.End.Unix()
 		ts         int64
 		scanValue  = func(value []byte) error {

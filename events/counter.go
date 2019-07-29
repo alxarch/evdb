@@ -1,4 +1,4 @@
-package meter
+package events
 
 import (
 	"sync"
@@ -10,9 +10,6 @@ type Counter struct {
 	Count  int64    `json:"n"`
 	Values []string `json:"v,omitempty"`
 }
-
-// CounterSlice is a slice of counters
-type CounterSlice []Counter
 
 // UnsafeCounters is an index of counters not safe for concurrent use
 type UnsafeCounters struct {
@@ -150,6 +147,9 @@ func (cs *UnsafeCounters) Pack() {
 	cs.counters = counters
 }
 
+// CounterSlice is a slice of counters
+type CounterSlice []Counter
+
 // FilterZero filters out empty counters in-place
 func (s CounterSlice) FilterZero() CounterSlice {
 	j := 0
@@ -180,22 +180,8 @@ func (s CounterSlice) Zero() {
 	}
 }
 
-var snapshotPool sync.Pool
-
-func getCounterSlice() CounterSlice {
-	if x := snapshotPool.Get(); x != nil {
-		return x.(CounterSlice)
-	}
-	const minCounterSliceSize = 64
-	return make([]Counter, 0, minCounterSliceSize)
-}
-
-func putCounterSlice(s CounterSlice) {
-	snapshotPool.Put(s.Reset())
-}
-
 // Flush appends counters to a CounterSlice and resets all counters to zero
-func (cs *Counters) Flush(s CounterSlice) CounterSlice {
+func (cs *Counters) Flush(s []Counter) []Counter {
 	src := cs.counters.counters
 	cs.mu.RLock()
 	for i := range src {

@@ -1,4 +1,4 @@
-package meter
+package evdb
 
 import (
 	"time"

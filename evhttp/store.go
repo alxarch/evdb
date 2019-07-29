@@ -1,4 +1,4 @@
-package mdbhttp
+package evhttp
 
 import (
 	"bytes"
@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
+	meter "github.com/alxarch/evdb"
 	"github.com/alxarch/httperr"
 )
 

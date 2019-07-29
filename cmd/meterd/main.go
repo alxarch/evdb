@@ -14,10 +14,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/go-meter/v2/mdbbadger"
-	"github.com/alxarch/go-meter/v2/mdbhttp"
-	"github.com/alxarch/go-meter/v2/mdbredis"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/evbadger"
+	"github.com/alxarch/evdb/evhttp"
+	"github.com/alxarch/evdb/evredis"
 	"github.com/dgraph-io/badger/v2"
 )
 
@@ -58,7 +58,7 @@ func main() {
 	srv := http.Server{
 		Addr:     *addr,
 		ErrorLog: logs.err,
-		Handler:  mdbhttp.Handler(db, events...),
+		Handler:  evhttp.Mux(db, events...),
 	}
 	if prefix := *basePath; prefix != "" {
 		prefix = "/" + strings.Trim(prefix, "/")
@@ -101,18 +101,18 @@ func (log *logger) Infof(format string, args ...interface{}) {
 	log.Logger.Printf(format, args...)
 }
 
-func open(dbURL string, events ...string) (meter.DB, error) {
+func open(dbURL string, events ...string) (evdb.DB, error) {
 	u, err := url.Parse(dbURL)
 	if err != nil {
 		return nil, err
 	}
 	switch u.Scheme {
 	case "redis":
-		opts, err := mdbredis.ParseURL(dbURL)
+		opts, err := evredis.ParseURL(dbURL)
 		if err != nil {
 			return nil, err
 		}
-		db, err := mdbredis.Open(opts, events...)
+		db, err := evredis.Open(opts, events...)
 		if err != nil {
 			return nil, err
 		}
@@ -126,7 +126,7 @@ func open(dbURL string, events ...string) (meter.DB, error) {
 		if err != nil {
 			logs.err.Fatalf(`Failed to open db: %s`, err)
 		}
-		db, err := mdbbadger.Open(b, events...)
+		db, err := evbadger.Open(b, events...)
 		if err != nil {
 			logs.err.Fatalf("Failed to open db: %s\n", err)
 		}

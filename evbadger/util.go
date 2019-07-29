@@ -1,4 +1,4 @@
-package mdbbadger
+package evbadger
 
 import (
 	"errors"

@@ -1,4 +1,4 @@
-package meter
+package events
 
 // Event stores counters for an event
 type Event struct {

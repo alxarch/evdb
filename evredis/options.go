@@ -1,4 +1,4 @@
-package mdbredis
+package evredis
 
 import (
 	"net/url"

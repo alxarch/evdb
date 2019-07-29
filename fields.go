@@ -1,11 +1,11 @@
-package meter
+package evdb
 
 import (
 	"encoding/json"
 	"sort"
 	"sync"
 
-	"github.com/alxarch/go-meter/v2/blob"
+	"github.com/alxarch/evdb/blob"
 )
 
 // Field is a Label/Value pair
@@ -17,29 +17,12 @@ type Field struct {
 // Fields is a collection of Label/Value pairs
 type Fields []Field
 
-type MatchFields struct {
-	Fields
-}
-
 // Reset resets Fields to empty
 func (fields Fields) Reset() Fields {
 	for i := range fields {
 		fields[i] = Field{}
 	}
 	return fields[:0]
-}
-
-// Labels returns all fields labels
-func (fields Fields) Labels() []string {
-	if fields == nil {
-		return nil
-	}
-	labels := make([]string, 0, len(fields))
-	for i := range fields {
-		f := &fields[i]
-		labels = appendDistinct(labels, f.Label)
-	}
-	return labels
 }
 
 // Get returns the value of label
@@ -53,75 +36,23 @@ func (fields Fields) Get(label string) (string, bool) {
 	return "", false
 }
 
-// MarshalJSON implements json.Marshaler interface
-func (fields Fields) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fields.Map())
-}
-
-// MarshalJSON implements json.Marshaler interface
-func (m *MatchFields) MarshalJSON() ([]byte, error) {
-	return json.Marshal(m.Fields.Map())
-}
-
-// UnmarshalJSON implements json.Marshaler interface
+// UnmarshalJSON implements json.Unmarshaler interface
 func (fields *Fields) UnmarshalJSON(data []byte) error {
-	values := make(map[string][]string)
-	if err := json.Unmarshal(data, &values); err != nil {
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
 		return err
 	}
-	fs := (*fields)[:0]
-	for label := range values {
-		for _, v := range values[label] {
-			fs = fs.Add(Field{
-				Label: label,
-				Value: v,
-			})
-		}
+	f := (*fields)[:0]
+	for label, value := range m {
+		f = f.Set(label, value)
 	}
-	*fields = fs
+	*fields = f
 	return nil
 }
 
-func (fields Fields) AppendGrouped(grouped Fields, empty string, groups []string) Fields {
-	for _, label := range groups {
-		value, ok := fields.Get(label)
-		if !ok {
-			value = empty
-		}
-		grouped = append(grouped, Field{
-			Label: label,
-			Value: value,
-		})
-	}
-	return grouped
-}
-
-// GroupBy groups fields by labels
-func (fields Fields) GroupBy(empty string, groups []string) Fields {
-	grouped := make([]Field, len(groups))
-	for i, label := range groups {
-		value, ok := fields.Get(label)
-		if !ok {
-			value = empty
-		}
-		grouped[i] = Field{
-			Label: label,
-			Value: value,
-		}
-	}
-	return grouped
-}
-
-// AppendValues appends the values for the labels in order
-func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
-	for _, label := range labels {
-		v, ok := fields.Get(label)
-		if !ok {
-			v = empty
-		}
-		dst = append(dst, v)
-	}
-	return dst
+// MarshalJSON implements json.Marshaler interface
+func (fields Fields) MarshalJSON() ([]byte, error) {
+	return json.Marshal(fields.Map())
 }
 
 // Equal checks if two Fields are equal
@@ -139,24 +70,6 @@ func (fields Fields) Equal(other Fields) bool {
 		return true
 	}
 	return false
-}
-
-// Includes checks if fields includes a set of fields
-func (fields Fields) Includes(other Fields) bool {
-	n := 0
-iloop:
-	for i := range other {
-		o := &other[i]
-		for j := range fields {
-			f := &fields[j]
-			if f.Label == o.Label && f.Value == o.Value {
-				n++
-				continue iloop
-			}
-		}
-		return false
-	}
-	return n == len(other) && n > 0
 }
 
 func (fields Fields) Len() int {
@@ -184,66 +97,16 @@ func (fields Fields) Map() map[string]string {
 	return m
 }
 
-// Map converts a Fields collection to a map
-func (fields *MatchFields) Map() map[string][]string {
-	if fields.Fields == nil {
-		return nil
-	}
-	m := make(map[string][]string, len(fields.Fields))
-	for i := range fields.Fields {
-		f := &fields.Fields[i]
-		m[f.Label] = append(m[f.Label], f.Value)
-	}
-	return m
-}
-
-func (fields Fields) Merge(other ...Field) Fields {
-	for _, o := range other {
-		fields = fields.Add(o)
-	}
-	return fields
-}
-func (fields Fields) Del(del ...Field) Fields {
-	var out Fields
-iloop:
+// Set sets a label to a value
+func (fields Fields) Set(label, value string) Fields {
 	for i := range fields {
 		f := &fields[i]
-		for j := range del {
-			d := &del[j]
-			if f.Label == d.Label && f.Value == d.Value {
-				continue iloop
-			}
-		}
-		out = append(out, *f)
-	}
-	return out
-}
-
-func (fields Fields) Add(field Field) Fields {
-	for i := range fields {
-		f := &fields[i]
-		if f.Label == field.Label && f.Value == field.Value {
+		if f.Label == label {
+			f.Value = value
 			return fields
 		}
 	}
-	return append(fields, field)
-}
-
-// Copy clones a collection of fields
-func (fields Fields) Copy() Fields {
-	if fields == nil {
-		return nil
-	}
-	cp := make([]Field, len(fields))
-	copy(cp, fields)
-	return cp
-}
-
-// Sorted returns a copy of fields sorted by label
-func (fields Fields) Sorted() Fields {
-	fields = fields.Copy()
-	sort.Stable(fields)
-	return fields
+	return append(fields, Field{label, value})
 }
 
 // ZipFields creates a field collection zipping labels and values
@@ -264,92 +127,14 @@ func ZipFields(labels []string, values []string) (fields Fields) {
 
 }
 
-// MatchValues matches fields agaist a map collection of Fields
-func (fields Fields) MatchValues(values map[string][]string) bool {
-	n := 0
-	for i := range fields {
-		f := &fields[i]
-		v := values[f.Label]
-		for j := range v {
-			if v[j] == f.Value {
-				n++
-				break
-			}
-		}
+// Copy clones a collection of fields
+func (fields Fields) Copy() Fields {
+	if fields == nil {
+		return nil
 	}
-	return n == len(values)
-}
-
-// MatchSorted matches fields agaist a sorted collection of Fields
-func (fields Fields) MatchSorted(m *MatchFields) bool {
-	match := m.Fields
-next:
-	for i := range fields {
-		f := &fields[i]
-		for j := range match {
-			m := &match[j]
-			if m.Label != f.Label {
-				if j == 0 {
-					// The match fields do not contain f.Label at all
-					continue next
-				}
-				return false
-			}
-			if m.Value == f.Value {
-				match = match[j:]
-				// Skip label
-				for j = range match {
-					m = &match[j]
-					if m.Label != f.Label {
-						match = match[j:]
-						continue next
-					}
-				}
-				match = nil
-				continue next
-			}
-		}
-		// return len(match) == 0
-	}
-	return len(match) == 0
-
-}
-
-// AppendBlob implements blob.Appender interface
-func (fields Fields) AppendBlob(b []byte) ([]byte, error) {
-	b = blob.WriteU32BE(b, uint32(len(fields)))
-	for i := range fields {
-		f := &fields[i]
-		b = blob.WriteString(b, f.Label)
-		b = blob.WriteString(b, f.Value)
-	}
-	return b, nil
-}
-
-// ShiftBlob implements blob.Shifter interface
-func (fields Fields) FromBlob(b []byte) (Fields, []byte) {
-	n, b := blob.ReadU32BE(b)
-	var label, value string
-	for ; len(b) > 0 && n > 0; n-- {
-		label, b = blob.ReadString(b)
-		value, b = blob.ReadString(b)
-		fields = append(fields, Field{
-			Label: label,
-			Value: value,
-		})
-	}
-	return fields, b
-}
-
-// ShiftBlob implements blob.Shifter interface
-func (fields *Fields) ShiftBlob(b []byte) ([]byte, error) {
-	*fields, b = (*fields).FromBlob(b)
-	return b, nil
-}
-
-func (fields *Fields) UnmarshalBinary(b []byte) error {
-	*fields, _ = (*fields).FromBlob(b)
-	return nil
+	cp := make([]Field, len(fields))
+	copy(cp, fields)
+	return cp
 }
 
 // FieldCache is an in memory cache of field ids
@@ -434,4 +219,73 @@ func (c *FieldCache) Labels() (labels []string) {
 	}
 	sort.Strings(labels)
 	return distinctSorted(labels)
+}
+
+// AppendBlob implements blob.Appender interface
+func (fields Fields) AppendBlob(b []byte) ([]byte, error) {
+	b = blob.WriteU32BE(b, uint32(len(fields)))
+	for i := range fields {
+		f := &fields[i]
+		b = blob.WriteString(b, f.Label)
+		b = blob.WriteString(b, f.Value)
+	}
+	return b, nil
+}
+
+// ShiftBlob implements blob.Shifter interface
+func (fields Fields) FromBlob(b []byte) (Fields, []byte) {
+	n, b := blob.ReadU32BE(b)
+	var label, value string
+	for ; len(b) > 0 && n > 0; n-- {
+		label, b = blob.ReadString(b)
+		value, b = blob.ReadString(b)
+		fields = append(fields, Field{
+			Label: label,
+			Value: value,
+		})
+	}
+	return fields, b
+}
+
+// ShiftBlob implements blob.Shifter interface
+func (fields *Fields) ShiftBlob(b []byte) ([]byte, error) {
+	*fields, b = (*fields).FromBlob(b)
+	return b, nil
+}
+
+func (fields *Fields) UnmarshalBinary(b []byte) error {
+	*fields, _ = (*fields).FromBlob(b)
+	return nil
+}
+
+// AppendValues appends the values for the labels in order
+func (fields Fields) AppendValues(dst []string, empty string, labels ...string) []string {
+	for _, label := range labels {
+		v, ok := fields.Get(label)
+		if !ok {
+			v = empty
+		}
+		dst = append(dst, v)
+	}
+	return dst
+}
+
+func (fields Fields) AppendGrouped(grouped Fields, empty string, groups []string) Fields {
+	for _, label := range groups {
+		value, ok := fields.Get(label)
+		if !ok {
+			value = empty
+		}
+		grouped = append(grouped, Field{
+			Label: label,
+			Value: value,
+		})
+	}
+	return grouped
+}
+
+func (fields Fields) Sorted() Fields {
+	sorted := fields.Copy()
+	sort.Sort(sorted)
+	return sorted
 }

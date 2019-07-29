@@ -1,8 +1,7 @@
-package meter
+package evdb
 
 import (
 	"encoding/json"
-	"errors"
 	"math"
 	"strconv"
 	"time"
@@ -54,10 +53,6 @@ func (p *DataPoint) UnmarshalJSON(data []byte) error {
 // DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
 
-func (p *DataPoint) Merge(m Merger, v float64) {
-	p.Value = m.Merge(p.Value, v)
-}
-
 // Copy creates a copy of s
 func (s DataPoints) Copy() DataPoints {
 	if s == nil {
@@ -66,11 +61,6 @@ func (s DataPoints) Copy() DataPoints {
 	cp := make([]DataPoint, len(s))
 	copy(cp, s)
 	return cp
-}
-
-// First returns a pointer to the first point
-func (s DataPoints) First() *DataPoint {
-	return s.Get(0)
 }
 
 // Get returns a pointer to the i-th point
@@ -99,27 +89,9 @@ func (s DataPoints) SeekLeft(ts int64) DataPoints {
 	return nil
 }
 
-func (s DataPoints) MergeVectorR(m Merger, v DataPoints) error {
-	if len(v) == len(s) {
-		v = v[:len(s)]
-		for i := range s {
-			p0, p1 := &s[i], &v[i]
-			p0.Value = m.Merge(p1.Value, p0.Value)
-		}
-		return nil
-	}
-	return errors.New("Invalid operand size")
-}
-func (s DataPoints) MergeVector(m Merger, v DataPoints) error {
-	if len(v) == len(s) {
-		v = v[:len(s)]
-		for i := range s {
-			p0, p1 := &s[i], &v[i]
-			p0.Value = m.Merge(p0.Value, p1.Value)
-		}
-		return nil
-	}
-	return errors.New("Invalid operand size")
+// First returns a pointer to the first point
+func (s DataPoints) First() *DataPoint {
+	return s.Get(0)
 }
 
 // Last returns a pointer to the last point
@@ -143,55 +115,6 @@ func (s DataPoints) Add(t int64, v float64) DataPoints {
 		Timestamp: t,
 		Value:     v,
 	})
-}
-
-// ValueAt searches for the value at a specific time
-func (s DataPoints) ValueAt(ts int64) float64 {
-	for i := range s {
-		if d := &s[i]; d.Timestamp == ts {
-			return d.Value
-		}
-	}
-	return math.NaN()
-}
-
-// IndexOf returns the index of tm in the collection of data points
-func (s DataPoints) IndexOf(ts int64) int {
-	for i := range s {
-		if d := &s[i]; d.Timestamp == ts {
-			return i
-		}
-	}
-	return -1
-}
-
-// Avg returns the average value of all points
-func (s DataPoints) Avg() float64 {
-	return s.Sum() / float64(len(s))
-}
-
-// Sum returns the sum of the values of all points
-func (s DataPoints) Sum() (sum float64) {
-	for i := range s {
-		d := &s[i]
-		sum += d.Value
-	}
-	return
-}
-
-// Len implements sort.Interface
-func (s DataPoints) Len() int {
-	return len(s)
-}
-
-// Swap implements sort.Interface
-func (s DataPoints) Swap(i, j int) {
-	s[i], s[j] = s[j], s[i]
-}
-
-// Less implements sort.Interface
-func (s DataPoints) Less(i, j int) bool {
-	return s[i].Timestamp < s[j].Timestamp
 }
 
 // AppendJSON appends points as JSON to a buffer
@@ -221,62 +144,6 @@ func (s DataPoints) MarshalJSON() ([]byte, error) {
 	return s.AppendJSON(make([]byte, 0, size)), nil
 }
 
-// MergeValue merges a value to all datapoints using s as base
-func (s DataPoints) MergeValue(m Merger, v float64) DataPoints {
-	for i := range s {
-		d := &s[i]
-		d.Value = m.Merge(d.Value, v)
-	}
-	return s
-}
-
-// MergeValueR merges a value to all datapoints using v as base
-func (s DataPoints) MergeValueR(m Merger, v float64) DataPoints {
-	for i := range s {
-		d := &s[i]
-		d.Value = m.Merge(v, d.Value)
-	}
-	return s
-}
-
-// MergeConsecutiveDuplicates merges sequential points with equal timestamps
-func (s DataPoints) MergeConsecutiveDuplicates(m Merger) DataPoints {
-	if m == nil {
-		m = MergeSum{}
-	}
-	distinct := s[:0]
-	for i := 0; 0 <= i && i < len(s); i++ {
-		p := &s[i]
-		for j := i; 0 <= j && j < len(s); j++ {
-			next := &s[j]
-			if next.Timestamp == p.Timestamp {
-				p.Value = m.Merge(p.Value, next.Value)
-				i++
-			} else {
-				break
-			}
-		}
-		distinct = append(distinct, *p)
-	}
-	return distinct
-
-}
-
-var mergeSum = MergeSum{}
-
-func (s DataPoints) Pick(data DataPoints) DataPoints {
-	for i := range data {
-		d := &data[i]
-		for j := range s {
-			p := &s[j]
-			if p.Timestamp == d.Timestamp {
-				p.Value = d.Value
-			}
-		}
-	}
-	return s
-}
-
 func (s DataPoints) Slice(start, end int64) DataPoints {
 	if s == nil {
 		return nil
@@ -304,19 +171,12 @@ func (s DataPoints) Fill(v float64) {
 		d.Value = v
 	}
 }
-func (s DataPoints) Aggregate(agg Aggregator) float64 {
-	v := agg.Zero()
-	for i := range s {
-		d := &s[i]
-		v = agg.Aggregate(v, d.Value)
-	}
-	return v
-}
 
-func (tr *TimeRange) BlankData(v float64) DataPoints {
-	start, end, step := tr.Start.Unix(), tr.End.Unix(), int64(tr.Step/time.Second)
+func BlankData(t *TimeRange, v float64) DataPoints {
+	start, end, step := t.Start.Unix(), t.End.Unix(), int64(t.Step/time.Second)
 	return fillData(v, start, end, step)
 }
+
 func fillData(v float64, start, end, step int64) (data DataPoints) {
 	if step < 1 {
 		step = 1
@@ -332,6 +192,20 @@ func fillData(v float64, start, end, step int64) (data DataPoints) {
 			Timestamp: ts,
 			Value:     v,
 		}
+	}
+	return
+}
+
+// Avg returns the average value of all points
+func (s DataPoints) Avg() float64 {
+	return s.Sum() / float64(len(s))
+}
+
+// Sum returns the sum of the values of all points
+func (s DataPoints) Sum() (sum float64) {
+	for i := range s {
+		d := &s[i]
+		sum += d.Value
 	}
 	return
 }

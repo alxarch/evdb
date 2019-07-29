@@ -1,18 +1,19 @@
-package mdbredis
+package evredis
 
 import (
 	"fmt"
 	"time"
 
-	"github.com/alxarch/go-meter/v2/tcodec"
+	"github.com/alxarch/evdb/tcodec"
 )
 
+// Date formats
 const (
-	// DailyDateFormat is the date format used by the start/end query parameters
 	DailyDateFormat  string = "2006-01-02"
 	HourlyDateFormat string = "2006-01-02-15"
 )
 
+// Resolution describes time dimensions
 type Resolution struct {
 	name string
 	// step time.Duration
@@ -22,6 +23,7 @@ type Resolution struct {
 	codec tcodec.TimeCodec
 }
 
+// Common durations
 const (
 	Hourly  = time.Hour
 	Daily   = 24 * time.Hour
@@ -30,6 +32,7 @@ const (
 	Yearly  = 365 * Daily
 )
 
+// Common resolutions
 var (
 	// NoResolution     = Resolution{"totals", 0, 0, NoResolutionCodec}
 	ResolutionHourly = Resolution{"hourly", 0, Hourly, tcodec.LayoutCodec(HourlyDateFormat)}

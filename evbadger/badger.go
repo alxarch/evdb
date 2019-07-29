@@ -1,4 +1,4 @@
-package mdbbadger
+package evbadger
 
 import (
 	"context"
@@ -10,13 +10,14 @@ import (
 
 	errors "golang.org/x/xerrors"
 
-	"github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/go-meter/v2/blob"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/blob"
 	"github.com/dgraph-io/badger/v2"
 )
 
 // DB is a collection of Events stored in BadgerDB
 type DB struct {
+	evdb.Scanner
 	badger *badger.DB
 	events map[string]*eventDB
 }
@@ -31,6 +32,7 @@ func Open(b *badger.DB, events ...string) (*DB, error) {
 		badger: b,
 		events: make(map[string]*eventDB, len(events)),
 	}
+	db.Scanner = evdb.NewScanner(&db)
 
 	for i, event := range events {
 		id := eventIDs[i]
@@ -44,22 +46,22 @@ func Open(b *badger.DB, events ...string) (*DB, error) {
 }
 
 // Storer implements Storerer interface
-func (db *DB) Storer(event string) meter.Storer {
+func (db *DB) Storer(event string) evdb.Storer {
 	if e, ok := db.events[event]; ok {
 		return e
 	}
 	return nil
 }
 
-// ScanQuery implements meter.ScanQuerier interface
-func (db *DB) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
+// ScanQuery implements evdb.ScanQuerier interface
+func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	if s, ok := db.events[q.Event]; ok {
 		return s.ScanQuery(ctx, q)
 	}
 	return nil, errors.Errorf("Invalid event %q", q.Event)
 }
 
-// Close implements meter.DB interface
+// Close implements evdb.DB interface
 func (db *DB) Close() error {
 	return db.badger.Close()
 }
@@ -128,7 +130,7 @@ func (db *DB) DumpKeys(w io.Writer) error {
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 		var k keyBuffer
-		var fields meter.Fields
+		var fields evdb.Fields
 		for iter.Seek(k[:]); iter.Valid(); iter.Next() {
 			item := iter.Item()
 			key := item.Key()
@@ -260,11 +262,11 @@ func (index labelIndex) WriteFields(dst []byte, values []string) []byte {
 	return dst
 }
 
-var _ meter.DB = (*DB)(nil)
+var _ evdb.DB = (*DB)(nil)
 
 type badgerOpener struct{}
 
-func (_ badgerOpener) Open(configURL string) (meter.DB, error) {
+func (_ badgerOpener) Open(configURL string) (evdb.DB, error) {
 	options, events, err := parseURL(configURL)
 	if err != nil {
 		return nil, err
@@ -279,5 +281,5 @@ func (_ badgerOpener) Open(configURL string) (meter.DB, error) {
 const urlScheme = "badger"
 
 func init() {
-	meter.Register(urlScheme, badgerOpener{})
+	evdb.Register(urlScheme, badgerOpener{})
 }

@@ -1,29 +1,41 @@
-package meter
+package evdb
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
+
+	"github.com/alxarch/evdb/events"
+	errors "golang.org/x/xerrors"
 )
 
+// Store provides snapshot storers for events
 type Store interface {
 	Storer(event string) Storer
 }
 
 // Snapshot is a snaphot of event counters
 type Snapshot struct {
-	Time     time.Time    `json:"time,omitempty"`
-	Labels   []string     `json:"labels"`
-	Counters CounterSlice `json:"counters"`
+	Time     time.Time        `json:"time,omitempty"`
+	Labels   []string         `json:"labels"`
+	Counters []events.Counter `json:"counters"`
 }
 
-// Storer stores events
+func (s *Snapshot) Reset() {
+	*s = Snapshot{
+		Counters: events.CounterSlice(s.Counters).Reset(),
+	}
+}
+
+// Storer stores event snapshots
 type Storer interface {
 	Store(s *Snapshot) error
 }
+
+// StorerFunc is a function that implements Storer interface
 type StorerFunc func(s *Snapshot) error
 
+// Store implements storer interface
 func (fn StorerFunc) Store(s *Snapshot) error {
 	return fn(s)
 }
@@ -88,7 +100,7 @@ func (m MemoryStore) Scan(ctx context.Context, queries ...ScanQuery) (Results, e
 			for j := range d.Counters {
 				c := &d.Counters[j]
 				fields := ZipFields(d.Labels, c.Values)
-				ok := fields.MatchSorted(&q.Match)
+				ok := q.Fields.Match(fields)
 				if ok {
 					tm := stepTS(d.Time.Unix(), step)
 					results = results.Add(q.Event, fields, tm, float64(c.Count))
@@ -97,28 +109,6 @@ func (m MemoryStore) Scan(ctx context.Context, queries ...ScanQuery) (Results, e
 		}
 	}
 	return results, nil
-}
-
-// SyncTask dumps an Event to an EventStore
-func (e *Event) SyncTask(db Storer) func(time.Time) error {
-	return func(tm time.Time) error {
-		s := getCounterSlice()
-		defer putCounterSlice(s)
-		if s = e.Flush(s[:0]); len(s) == 0 {
-			return nil
-		}
-		req := Snapshot{
-			Labels:   e.Labels,
-			Time:     tm,
-			Counters: s,
-		}
-		if err := db.Store(&req); err != nil {
-			e.Merge(s)
-			return err
-		}
-		return nil
-
-	}
 }
 
 // TeeStore stores to multiple stores
@@ -155,16 +145,36 @@ func (tee teeStorer) Store(s *Snapshot) error {
 	return nil
 }
 
-type EventStore map[string]Storer
+// SyncTask dumps an Event to an EventStore
+func SyncTask(e *events.Event, db Storer) func(time.Time) error {
+	return func(tm time.Time) error {
+		s := getSnapshot()
+		defer putSnapshot(s)
+		if s.Counters = e.Flush(s.Counters[:0]); len(s.Counters) == 0 {
+			return nil
+		}
+		s.Labels, s.Time = e.Labels, tm
+		if err := db.Store(s); err != nil {
+			e.Merge(s.Counters)
+			return err
+		}
+		return nil
 
-func (s EventStore) Add(event string, stor Storer) error {
-	if _, ok := s[event]; ok {
-		return errors.New("Duplicate event")
 	}
-	s[event] = stor
-	return nil
 }
 
-func (s EventStore) Storer(event string) Storer {
-	return s[event]
+var snapshotPool sync.Pool
+
+func getSnapshot() *Snapshot {
+	if x := snapshotPool.Get(); x != nil {
+		return x.(*Snapshot)
+	}
+	return new(Snapshot)
+}
+
+func putSnapshot(s *Snapshot) {
+	if s != nil {
+		s.Reset()
+		snapshotPool.Put(s)
+	}
 }

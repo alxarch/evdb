@@ -1,4 +1,4 @@
-package mdbredis_test
+package evredis_test
 
 import (
 	"context"
@@ -6,35 +6,36 @@ import (
 	"testing"
 	"time"
 
-	meter "github.com/alxarch/go-meter/v2"
-	"github.com/alxarch/go-meter/v2/mdbredis"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/events"
+	"github.com/alxarch/evdb/evredis"
 )
 
 func TestDB(t *testing.T) {
 	now := time.Now().In(time.UTC)
-	options := mdbredis.Options{
+	options := evredis.Options{
 		Redis:       "",
-		KeyPrefix:   fmt.Sprintf("mdbredis:test:%d", now.UnixNano()),
+		KeyPrefix:   fmt.Sprintf("evredis:test:%d", now.UnixNano()),
 		ScanSize:    1000,
-		Resolutions: []mdbredis.Resolution{mdbredis.ResolutionHourly},
+		Resolutions: []evredis.Resolution{evredis.ResolutionHourly},
 	}
-	db, err := mdbredis.Open(options, "cost")
+	db, err := evredis.Open(options, "cost")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	db.Storer("cost").Store(&meter.Snapshot{
+	db.Storer("cost").Store(&evdb.Snapshot{
 		Time:   now,
 		Labels: []string{"foo", "bar"},
-		Counters: []meter.Counter{
+		Counters: []events.Counter{
 			{Count: 3, Values: []string{"bax", "baz"}},
 			{Count: 2, Values: []string{"fax", "faz"}},
 		},
 	})
 	ctx := context.Background()
-	q := meter.ScanQuery{
+	q := evdb.ScanQuery{
 		Event: "cost",
-		TimeRange: meter.TimeRange{
+		TimeRange: evdb.TimeRange{
 			Start: now,
 			End:   now,
 			Step:  time.Hour,

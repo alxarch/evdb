@@ -1,4 +1,4 @@
-package mdbbadger
+package evbadger
 
 import (
 	"encoding/binary"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alxarch/go-meter/v2/blob"
+	"github.com/alxarch/evdb/blob"
 	"github.com/dgraph-io/badger/v2"
 )
 

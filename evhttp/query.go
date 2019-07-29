@@ -1,4 +1,4 @@
-package mdbhttp
+package evhttp
 
 import (
 	"context"
@@ -7,14 +7,15 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"sort"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	errors "golang.org/x/xerrors"
 
-	meter "github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/evql"
 	"github.com/alxarch/httperr"
 )
 
@@ -29,7 +30,7 @@ type HTTPClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
-func TimeRangeURL(rawURL string, t *meter.TimeRange) (string, error) {
+func TimeRangeURL(rawURL string, t *evdb.TimeRange) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
@@ -39,12 +40,15 @@ func TimeRangeURL(rawURL string, t *meter.TimeRange) (string, error) {
 	u.RawQuery = values.Encode()
 	return u.String(), nil
 }
-func ScanURL(rawURL string, q *meter.ScanQuery) (string, error) {
+func ScanURL(rawURL string, q *evdb.ScanQuery) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
-	values := QueryValues(q)
+	values, err := QueryValues(q)
+	if err != nil {
+		return "", err
+	}
 	u.RawQuery = values.Encode()
 	return u.String(), nil
 }
@@ -55,7 +59,7 @@ type ScanQuerier struct {
 	HTTPClient
 }
 
-func (s *ScanQuerier) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
+func (s *ScanQuerier) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	u, err := ScanURL(s.URL, q)
 	if err != nil {
 		return nil, err
@@ -64,7 +68,7 @@ func (s *ScanQuerier) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.
 	if err != nil {
 		return nil, err
 	}
-	var results meter.Results
+	var results evdb.Results
 	if err := sendJSON(ctx, s.HTTPClient, req, &results); err != nil {
 		return nil, err
 	}
@@ -72,8 +76,8 @@ func (s *ScanQuerier) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.
 
 }
 
-// Query implements meter.Evaler interface
-func (qr *Querier) Query(ctx context.Context, r meter.TimeRange, q string) ([]interface{}, error) {
+// Query implements evdb.Evaler interface
+func (qr *Querier) Query(ctx context.Context, r evdb.TimeRange, q string) ([]interface{}, error) {
 	body := strings.NewReader(q)
 	u, err := TimeRangeURL(qr.URL, &r)
 	if err != nil {
@@ -93,26 +97,61 @@ func (qr *Querier) Query(ctx context.Context, r meter.TimeRange, q string) ([]in
 }
 
 // TimeRangeValues assigns a time range to a url.Values
-func TimeRangeValues(values url.Values, q meter.TimeRange) {
+func TimeRangeValues(values url.Values, q evdb.TimeRange) {
 	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
 	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
 	values.Set("step", q.Step.String())
 }
 
-// QueryValues converts a meter.Query to url.Values
-func QueryValues(q *meter.ScanQuery) url.Values {
-	values := url.Values(q.Match.Map())
-	for key, v := range values {
-		key = "match." + key
-		values[key] = v
+func matcherFromString(s string) (evdb.Matcher, error) {
+	ss := strings.SplitN(s, ":", 2)
+	if len(ss) == 2 {
+		switch ss[0] {
+		case "equals":
+			return evdb.MatchString(ss[1]), nil
+		case "prefix":
+			return evdb.MatchPrefix(ss[1]), nil
+		case "suffix":
+			return evdb.MatchSuffix(ss[1]), nil
+		case "regexp":
+			return regexp.Compile(ss[1])
+		}
+	}
+	return nil, errors.Errorf("Invalid matcher string %q", s)
+}
+
+func MatchFieldValues(mf evdb.MatchFields) (url.Values, error) {
+	q := url.Values(make(map[string][]string, len(mf)))
+	for label, m := range mf {
+		switch m := m.(type) {
+		case *regexp.Regexp:
+			q.Set("match.regexp."+label, m.String())
+		case evdb.MatchSuffix:
+			q.Set("match.suffix."+label, string(m))
+		case evdb.MatchPrefix:
+			q.Set("match.prefix."+label, string(m))
+		case evdb.MatchString:
+			q.Set("match."+label, string(m))
+		default:
+			return nil, errors.Errorf("Cannot convert %q matcher to query", label)
+		}
+	}
+	return q, nil
+}
+
+// QueryValues converts a evdb.Query to url.Values
+func QueryValues(q *evdb.ScanQuery) (url.Values, error) {
+	values, err := MatchFieldValues(q.Fields)
+	if err != nil {
+		return nil, err
 	}
 	TimeRangeValues(values, q.TimeRange)
 	values.Set("event", q.Event)
-	return values
+	return values, nil
 }
 
 // QueryHandler returns an HTTP endpoint for a QueryRunner
-func QueryHandler(scanner meter.Scanner) http.HandlerFunc {
+func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var q Query
 		switch r.Method {
@@ -172,7 +211,7 @@ func QueryHandler(scanner meter.Scanner) http.HandlerFunc {
 			q.Start = q.End.Add(-1 * q.Step)
 		}
 
-		p := new(meter.Parser)
+		p := new(evql.Parser)
 		if err := p.Reset(q.Query); err != nil {
 			httperr.RespondJSON(w, httperr.BadRequest(err))
 			return
@@ -192,12 +231,12 @@ func QueryHandler(scanner meter.Scanner) http.HandlerFunc {
 		httperr.RespondJSON(w, out)
 	}
 }
-func ScanQueryHandler(scan meter.Scanner) http.HandlerFunc {
+func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var queries []meter.ScanQuery
+		var queries []evdb.ScanQuery
 		switch r.Method {
 		case http.MethodGet:
-			var q meter.ScanQuery
+			var q evdb.ScanQuery
 			values := r.URL.Query()
 			if err := ParseQueryTimeRange(&q.TimeRange, values); err != nil {
 				httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -217,7 +256,7 @@ func ScanQueryHandler(scan meter.Scanner) http.HandlerFunc {
 			m, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 			switch m {
 			case "application/x-www-form-urlencoded":
-				var q meter.ScanQuery
+				var q evdb.ScanQuery
 				values, err := url.ParseQuery(string(data))
 				if err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -232,7 +271,7 @@ func ScanQueryHandler(scan meter.Scanner) http.HandlerFunc {
 					queries = append(queries, q)
 				}
 			case "application/json":
-				var q meter.ScanQuery
+				var q evdb.ScanQuery
 				if err := json.Unmarshal(data, &q); err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
 					return
@@ -252,7 +291,7 @@ func ScanQueryHandler(scan meter.Scanner) http.HandlerFunc {
 	}
 }
 
-func ParseQueryTimeRange(tr *meter.TimeRange, values url.Values) error {
+func ParseQueryTimeRange(tr *evdb.TimeRange, values url.Values) error {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
 			tr.Step, _ = time.ParseDuration(step[0])
@@ -281,34 +320,48 @@ func ParseQueryTimeRange(tr *meter.TimeRange, values url.Values) error {
 }
 
 // ParseQuery sets query values from a URL query
-func ParseQuery(values url.Values) (q meter.ScanQuery, err error) {
+func ParseQuery(values url.Values) (q evdb.ScanQuery, err error) {
 	if err = ParseQueryTimeRange(&q.TimeRange, values); err != nil {
 		return
 	}
-	match := q.Match.Fields[:0]
-	for key, values := range values {
-		if strings.HasPrefix(key, "match.") {
-			label := strings.TrimPrefix(key, "match.")
-			for _, value := range values {
-				match = append(match, meter.Field{
-					Label: label,
-					Value: value,
-				})
+	var m evdb.MatchFields
+	for key := range values {
+		if !strings.HasPrefix(key, "match.") {
+			continue
+		}
+		label := strings.TrimPrefix(key, "match.")
+		var typ string
+		if parts := strings.SplitN(label, ".", 2); len(parts) == 2 {
+			label, typ = parts[1], parts[0]
+		}
+		switch strings.ToLower(typ) {
+		case "regexp":
+			rx, err := regexp.Compile(values.Get(key))
+			if err != nil {
+				return q, errors.Errorf("Invalid query.%s: %s", key, err)
 			}
+			m[label] = rx
+		case "suffix":
+			m[label] = evdb.MatchSuffix(values.Get(key))
+		case "prefix":
+			m[label] = evdb.MatchPrefix(values.Get(key))
+		case "equals":
+			m[label] = evdb.MatchString(values.Get(key))
+		case "":
+			m[label] = evdb.MatchAny(values[key]...)
+		default:
+			return q, errors.Errorf("Invalid match type %q", typ)
 		}
 	}
-	group, ok := values["group"]
-	if ok && len(group) == 0 {
-		group = make([]string, 0, len(match))
-		for i := range match {
-			m := &match[i]
-			group = appendDistinct(group, m.Label)
-		}
-	}
-	sort.Stable(match)
-	// q.Match, q.Group = match, group
-	q.Match.Fields = match
-	// q.EmptyValue = values.Get("empty")
+	// group, ok := values["group"]
+	// if ok && len(group) == 0 {
+	// 	group = make([]string, 0, len(m))
+	// 	for label := range m {
+	// 		group = append(group, label)
+	// 	}
+	// 	sort.Strings(group)
+	// }
+	q.Fields = m
 	return
 }
 
@@ -439,3 +492,24 @@ func sendJSON(ctx context.Context, c HTTPClient, req *http.Request, x interface{
 	return json.Unmarshal(data, x)
 
 }
+
+// func matcherFromStrings(values []string) (evdb.Matcher, error) {
+// 	var matchers evdb.Matchers
+// 	for len(values) > 0 {
+// 		v, tail := values[0], values[1:]
+// 		m, err := matcherFromString(v)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		matchers = append(matchers, m)
+// 		values = tail
+// 	}
+// 	switch len(matchers) {
+// 	case 0:
+// 		return nil, nil
+// 	case 1:
+// 		return matchers[0], nil
+// 	default:
+// 		return matchers, nil
+// 	}
+// }

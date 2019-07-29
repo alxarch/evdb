@@ -1,4 +1,4 @@
-package meter
+package evql
 
 import (
 	"go/ast"
@@ -27,6 +27,17 @@ func getName(e ast.Expr) string {
 
 }
 
+func parseStrings(exp ...ast.Expr) ([]string, error) {
+	var values []string
+	for _, exp := range exp {
+		s, err := parseString(exp)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, s)
+	}
+	return values, nil
+}
 func parseString(exp ast.Expr) (string, error) {
 	switch exp := exp.(type) {
 	case *ast.Ident:
@@ -102,7 +113,7 @@ func parseAggregator(exp ast.Expr) (Aggregator, error) {
 	if err != nil {
 		return nil, err
 	}
-	if a := newAgg(fn); a != nil {
+	if a := NewAggregator(fn); a != nil {
 		return a, nil
 	}
 	return nil, errors.Errorf("Invalid aggregator name: %q", fn)
@@ -180,4 +191,23 @@ func parseOffset(exp ast.Expr) (int64, bool) {
 	}
 	return 0, false
 
+}
+
+func durationUnit(unit string) time.Duration {
+	switch strings.ToLower(unit) {
+	case "s", "sec", "second", "seconds":
+		return time.Minute
+	case "min", "minute", "m", "minutes":
+		return time.Minute
+	case "hour", "h":
+		return time.Hour
+	case "day", "d":
+		return 24 * time.Hour
+	case "w", "week", "weeks":
+		return 24 * 7 * time.Hour
+	case "month":
+		return 30 * 24 * time.Hour
+	default:
+		return 0
+	}
 }

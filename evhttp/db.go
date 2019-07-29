@@ -1,4 +1,4 @@
-package mdbhttp
+package evhttp
 
 import (
 	"context"
@@ -7,16 +7,16 @@ import (
 	"net/url"
 	"path"
 
-	"github.com/alxarch/go-meter/v2"
+	"github.com/alxarch/evdb"
 )
 
 type Query struct {
 	Query string
-	meter.TimeRange
+	evdb.TimeRange
 }
 
-// Mux creates an HTTP endpoint for a meter.DB
-func Mux(db meter.DB, events ...string) http.Handler {
+// Mux creates an HTTP endpoint for a evdb.DB
+func Mux(db evdb.DB, events ...string) http.Handler {
 	mux := http.NewServeMux()
 	for _, event := range events {
 		storer := db.Storer(event)
@@ -32,14 +32,14 @@ func Mux(db meter.DB, events ...string) http.Handler {
 }
 
 type db struct {
-	meter.Scanner
+	evdb.Scanner
 	Querier
-	events map[string]meter.Storer
+	events map[string]evdb.Storer
 }
 
-var _ (meter.DB) = (*db)(nil)
+var _ (evdb.DB) = (*db)(nil)
 
-func (db *db) Storer(event string) meter.Storer {
+func (db *db) Storer(event string) evdb.Storer {
 	if s, ok := db.events[event]; ok {
 		return s
 	}
@@ -48,12 +48,12 @@ func (db *db) Storer(event string) meter.Storer {
 func (db *db) Close() error {
 	return nil
 }
-func (db *db) ScanQuery(ctx context.Context, q *meter.ScanQuery) (meter.Results, error) {
+func (db *db) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	return nil, nil
 }
 
-// DB connects to a remote meter.DB over HTTP
-func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
+// DB connects to a remote evdb.DB over HTTP
+func DB(baseURL string, client HTTPClient, events ...string) (evdb.DB, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return nil, err
@@ -68,12 +68,12 @@ func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
 			URL:        baseURL,
 			HTTPClient: client,
 		},
-		events: make(map[string]meter.Storer, len(events)),
+		events: make(map[string]evdb.Storer, len(events)),
 	}
 	scanURL := u
 	scanURL.Path = path.Join(u.Path, "/scan")
 	scan := ScanQuerier{scanURL.String(), client}
-	db.Scanner = meter.NewScanner(&scan)
+	db.Scanner = evdb.NewScanner(&scan)
 	for _, event := range events {
 		storeURL := u
 		storeURL.Path = path.Join(u.Path, event)
@@ -88,7 +88,7 @@ func DB(baseURL string, client HTTPClient, events ...string) (meter.DB, error) {
 
 type opener struct{}
 
-func (opener) Open(baseURL string, events ...string) (meter.DB, error) {
+func (opener) Open(baseURL string, events ...string) (evdb.DB, error) {
 	return DB(baseURL, http.DefaultClient, events...)
 }
 
