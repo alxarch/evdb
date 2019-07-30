@@ -22,6 +22,8 @@ type DB struct {
 	events map[string]*eventDB
 }
 
+var _ evdb.DB = (*DB)(nil)
+
 // Open opens a new Event collection stored in BadgerDB
 func Open(b *badger.DB, events ...string) (*DB, error) {
 	eventIDs, err := loadEventIDs(b, events...)
@@ -260,26 +262,4 @@ func (index labelIndex) WriteFields(dst []byte, values []string) []byte {
 		dst = blob.WriteString(dst, v)
 	}
 	return dst
-}
-
-var _ evdb.DB = (*DB)(nil)
-
-type badgerOpener struct{}
-
-func (_ badgerOpener) Open(configURL string) (evdb.DB, error) {
-	options, events, err := parseURL(configURL)
-	if err != nil {
-		return nil, err
-	}
-	db, err := badger.Open(options)
-	if err != nil {
-		return nil, err
-	}
-	return Open(db, events...)
-}
-
-const urlScheme = "badger"
-
-func init() {
-	evdb.Register(urlScheme, badgerOpener{})
 }

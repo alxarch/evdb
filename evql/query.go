@@ -2,48 +2,82 @@ package evql
 
 import (
 	"context"
+	"fmt"
+	"go/parser"
+	"go/token"
 
-	"github.com/alxarch/evdb"
+	db "github.com/alxarch/evdb"
 )
 
-// Querier executes meterql queries
-type Querier interface {
-	Query(ctx context.Context, t evdb.TimeRange, q string) ([]interface{}, error)
+// Execer executes evql queries
+type Execer interface {
+	Exec(ctx context.Context, t db.TimeRange, q string) ([]interface{}, error)
 }
 
-type querier struct {
-	evdb.Scanner
+type execer struct {
+	db.Scanner
 }
 
-// Query implements Querier interface
-func (s *querier) Query(ctx context.Context, t evdb.TimeRange, q string) ([]interface{}, error) {
-	p, err := ParseQuery(q)
+// Exec implements Execer interface
+func (s *execer) Exec(ctx context.Context, t db.TimeRange, query string) ([]interface{}, error) {
+	q, err := Parse(query)
 	if err != nil {
 		return nil, err
 	}
-	r, err := s.Scanner.Scan(ctx, p.Queries(t)...)
+	r, err := s.Scanner.Scan(ctx, q.Queries(t)...)
 	if err != nil {
 		return nil, err
 	}
-	return p.Eval(nil, t, r), nil
+	return q.Eval(nil, t, r), nil
 }
 
-// NewQuerier turns a Scanner to a Querier
-func NewQuerier(scanner evdb.Scanner) Querier {
+// NewExecer turns a Scanner to an Execer
+func NewExecer(scanner db.Scanner) Execer {
 	if scanner == nil {
 		return nil
 	}
-	if e, ok := scanner.(*querier); ok {
+	if e, ok := scanner.(*execer); ok {
 		return e
 	}
-	return &querier{scanner}
+	return &execer{scanner}
 
 }
 
-func ParseQuery(q string) (*Parser, error) {
-	p := new(Parser)
-	if err := p.Reset(q); err != nil {
+type Query struct {
+	root blockNode
+}
+
+func Parse(query string) (*Query, error) {
+	fset := token.NewFileSet()
+	// Wrap query body
+	query = fmt.Sprintf(`func(){%s}`, query)
+	exp, err := parser.ParseExprFrom(fset, "", []byte(query), 0)
+	if err != nil {
 		return nil, err
 	}
-	return p, nil
+
+	root, err := parseRoot(exp)
+	if err != nil {
+		if e, ok := err.(*nodeError); ok {
+			return nil, e.ParseError(fset)
+		}
+		return nil, err
+	}
+	root.nameResults(fset)
+	q := Query{
+		root: root,
+	}
+	return &q, nil
+}
+
+func (q *Query) Queries(t db.TimeRange) []db.ScanQuery {
+	return nodeQueries(nil, &t, q.root)
+}
+
+// Eval executes the query against some results
+func (q *Query) Eval(out []interface{}, t db.TimeRange, results db.Results) []interface{} {
+	if q.root != nil {
+		out = q.root.Eval(out, &t, results)
+	}
+	return out
 }

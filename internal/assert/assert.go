@@ -22,7 +22,15 @@ func OK(t *testing.T, ok bool, msg string, args ...interface{}) {
 
 func Nil(t *testing.T, a interface{}) {
 	if a != nil {
-		t.Errorf("a != nil %v", a)
+		v := reflect.ValueOf(a)
+		switch k := v.Type().Kind(); k {
+		case reflect.Ptr, reflect.Slice, reflect.Func, reflect.Chan, reflect.Map:
+			if !v.IsNil() {
+				t.Errorf("a != nil %v", a)
+			}
+		default:
+			t.Errorf("Not a pointer %q", v.Type())
+		}
 	}
 }
 func NoError(t *testing.T, err error) {

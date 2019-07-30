@@ -107,12 +107,12 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 			q.Start = q.End.Add(-1 * q.Step)
 		}
 
-		p := new(evql.Parser)
-		if err := p.Reset(q.Query); err != nil {
+		e, err := evql.Parse(q.Query)
+		if err != nil {
 			httperr.RespondJSON(w, httperr.BadRequest(err))
 			return
 		}
-		queries := p.Queries(q.TimeRange)
+		queries := e.Queries(q.TimeRange)
 		if len(queries) == 0 {
 			err := errors.New("Empty query")
 			httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -123,7 +123,7 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 			httperr.RespondJSON(w, errors.Errorf("Query evaluation failed: %s", err))
 			return
 		}
-		out := p.Eval(nil, q.TimeRange, results)
+		out := e.Eval(nil, q.TimeRange, results)
 		httperr.RespondJSON(w, out)
 	}
 }

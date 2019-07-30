@@ -108,6 +108,9 @@ func NewAggregator(name string) Aggregator {
 
 // BlankAggregator returns a separate Aggregator instance
 func BlankAggregator(agg Aggregator) Aggregator {
+	if agg == nil {
+		return aggSum{}
+	}
 	if _, isAvg := agg.(*aggAvg); isAvg {
 		return new(aggAvg)
 	}

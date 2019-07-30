@@ -18,21 +18,6 @@ func indexOf(values []string, s string) int {
 	return -1
 }
 
-func distinctSorted(ss []string) []string {
-	var (
-		i    int
-		last string
-	)
-	for _, s := range ss {
-		if i == 0 || s != last {
-			last = s
-			ss[i] = s
-			i++
-		}
-	}
-	return ss[:i]
-}
-
 func stringsEqual(a, b []string) bool {
 	if len(a) == len(b) {
 		b = b[:len(a)]
@@ -44,14 +29,4 @@ func stringsEqual(a, b []string) bool {
 		return true
 	}
 	return false
-}
-
-func stepTS(ts, step int64) int64 {
-	if step > 0 {
-		return ts - ts%step
-	}
-	if step == 0 {
-		return ts
-	}
-	return 0
 }

@@ -26,6 +26,7 @@ const (
 	TimeRelBetween
 )
 
+// Truncate truncates time to the TimeRange step
 func (tr *TimeRange) Truncate(tm time.Time) time.Time {
 	if tr.Step > 0 {
 		return tm.Truncate(tr.Step).In(tm.Location())
@@ -36,24 +37,26 @@ func (tr *TimeRange) Truncate(tm time.Time) time.Time {
 	return tm
 }
 
+// Each calls a function for each step in a TimeRange
 func (tr *TimeRange) Each(fn func(time.Time, int)) {
 	start := tr.Start.Truncate(tr.Step)
 	end := tr.End.Truncate(tr.Step)
-	for i := 0; !end.After(start); start, i = start.Add(tr.Step), i+1 {
+	for i := 0; !end.Before(start); start, i = start.Add(tr.Step), i+1 {
 		fn(start, i)
 	}
 }
 
+// NumSteps calculates the number of steps in a TimeRange
 func (tr *TimeRange) NumSteps() int {
+	if tr.Step == 0 {
+		return -1
+	}
 	start := tr.Start.Truncate(tr.Step)
 	end := tr.End.Truncate(tr.Step)
 	return int(end.Sub(start) / tr.Step)
 }
 
-func (tr *TimeRange) SameShape(other *TimeRange) bool {
-	return tr.Step == other.Step && tr.NumSteps() == other.NumSteps()
-}
-
+// Rel finds the relation between two time ranges
 func (tr *TimeRange) Rel(other *TimeRange) TimeRel {
 	if tr.Step != other.Step {
 		return TimeRelNone
@@ -96,6 +99,7 @@ func (tr *TimeRange) Rel(other *TimeRange) TimeRel {
 	return TimeRelBetween
 }
 
+// Offset offsets a TimeRange by a duration
 func (tr TimeRange) Offset(d time.Duration) TimeRange {
 	tr.Start, tr.End = tr.Start.Add(d), tr.End.Add(d)
 	return tr

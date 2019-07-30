@@ -1,7 +1,6 @@
 package evql
 
 import (
-	"fmt"
 	"go/ast"
 	"go/token"
 
@@ -13,7 +12,7 @@ type nodeError struct {
 	err error
 }
 
-func err(n ast.Node, err error) error {
+func newError(n ast.Node, err error) error {
 	e := nodeError{
 		Node: n,
 		err:  err,
@@ -22,14 +21,21 @@ func err(n ast.Node, err error) error {
 }
 
 func (e *nodeError) Error() string {
-	return fmt.Sprintf("Parse error at pos %d: %s", e.Pos(), e.err)
+	return e.err.Error()
 }
 
 func (e *nodeError) ParseError(fset *token.FileSet) error {
 	pos := fset.Position(e.Pos())
-	return errors.Errorf("Parse error at %d.%d: %s", pos.Line, pos.Column, e.err)
+	return errors.Errorf("Parse error at line %d, col %d: %s", pos.Line, pos.Column, e.err)
 }
 
 func errorf(n ast.Node, msg string, args ...interface{}) error {
-	return err(n, errors.Errorf(msg, args...))
+	for i, arg := range args {
+		if e, ok := arg.(*nodeError); ok {
+			n = e.Node
+			args[i] = e.err
+			break
+		}
+	}
+	return newError(n, errors.Errorf(msg, args...))
 }

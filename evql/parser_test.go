@@ -20,16 +20,20 @@ func TestParser_Reset(t *testing.T) {
 		{`foo{bar: "baz"}`, false},
 		{`foo{bar: baz|"foo-bar"|goo}`, false},
 		{`foo{bar: baz, bar: foo}`, false},
-		{`foo[-1:h]`, false},
+		{`foo[-1:h]; *WHERE{foo: bar}; {*WHERE{bar: baz}; bar}`, false},
 		{`*GROUP{foo}; foo/foo[-1:h]`, false},
+		{`*SELECT{foo} ; *GROUP{bar}`, false},
+		{`*GROUP{foo}; foo/foo[-1:h] + 1`, false},
+		{`*GROUP{foo}; foo + 1.0`, false},
+		{`*GROUP{foo}; foo + !vAVG{bar[-1:h]}`, false},
 		{`foo{bar: !regexp(baz)}`, false},
 		{`foo{bar: baz|foo}; *BY{foo}; *OFFSET[1:h]`, false},
 		{`!avg{foo{bar: baz}}; *GROUP{foo}`, false},
-		{`!zipavg{foo{bar: baz}, bar[-1:d]}; *BY{foo}`, false},
+		{`!zipavg{foo{bar: baz}, !avg{bar[-1:d]}}; *BY{foo}`, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
-			_, err := evql.ParseQuery(tt.query)
+			_, err := evql.Parse(tt.query)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Parser.Reset() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -83,7 +87,7 @@ func TestParser(t *testing.T) {
 		},
 	}
 	scanner := db.NewScanner(all)
-	querier := evql.NewQuerier(scanner)
+	ex := evql.NewExecer(scanner)
 	tests := []struct {
 		query       string
 		tr          db.TimeRange
@@ -135,6 +139,20 @@ func TestParser(t *testing.T) {
 				Data:      db.BlankData(&tr, 9/2.0),
 			},
 		}},
+		{`!avg{foo}; *BY{size}`, tr, false, []interface{}{
+			&db.Result{
+				Event:     "!avg{foo}",
+				TimeRange: tr,
+				Fields:    db.Fields{{"size", "s"}},
+				Data:      db.BlankData(&tr, 8),
+			},
+			&db.Result{
+				Event:     "!avg{foo}",
+				TimeRange: tr,
+				Fields:    db.Fields{{"size", "m"}},
+				Data:      db.BlankData(&tr, 9),
+			},
+		}},
 		// {`foo{bar: baz}`, false},
 		// {`foo{bar: "baz"}`, false},
 		// {`foo{bar: baz|"foo-bar"|goo}`, false},
@@ -149,7 +167,7 @@ func TestParser(t *testing.T) {
 	ctx := context.Background()
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
-			results, err := querier.Query(ctx, tt.tr, tt.query)
+			results, err := ex.Exec(ctx, tt.tr, tt.query)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Query error = %v, wantErr %v", err, tt.wantErr)
 			}

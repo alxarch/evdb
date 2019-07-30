@@ -7,13 +7,14 @@ import (
 
 	"github.com/alxarch/evdb"
 	"github.com/alxarch/evdb/events"
+	"github.com/alxarch/evdb/evutil"
 	"github.com/dgraph-io/badger/v2"
 )
 
 type eventDB struct {
 	badger *badger.DB
 	id     eventID
-	fields evdb.FieldCache
+	fields evutil.FieldCache
 }
 
 func (e *eventDB) Labels() ([]string, error) {

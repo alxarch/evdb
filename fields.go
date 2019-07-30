@@ -3,7 +3,6 @@ package evdb
 import (
 	"encoding/json"
 	"sort"
-	"sync"
 
 	"github.com/alxarch/evdb/blob"
 )
@@ -109,24 +108,6 @@ func (fields Fields) Set(label, value string) Fields {
 	return append(fields, Field{label, value})
 }
 
-// ZipFields creates a field collection zipping labels and values
-func ZipFields(labels []string, values []string) (fields Fields) {
-	for i, label := range labels {
-		if 0 <= i && i < len(values) {
-			fields = append(fields, Field{
-				Label: label,
-				Value: values[i],
-			})
-		} else {
-			fields = append(fields, Field{
-				Label: label,
-			})
-		}
-	}
-	return
-
-}
-
 // Copy clones a collection of fields
 func (fields Fields) Copy() Fields {
 	if fields == nil {
@@ -135,90 +116,6 @@ func (fields Fields) Copy() Fields {
 	cp := make([]Field, len(fields))
 	copy(cp, fields)
 	return cp
-}
-
-// FieldCache is an in memory cache of field ids
-type FieldCache struct {
-	mu     sync.RWMutex
-	ids    map[string]uint64
-	fields map[uint64]Fields
-}
-
-// Set set a field to an id
-func (c *FieldCache) Set(id uint64, fields Fields) Fields {
-	c.mu.Lock()
-	if fields := c.fields[id]; fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	raw, _ := fields.AppendBlob(nil)
-	c.ids[string(raw)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-
-// SetRaw sets a raw field value to an id
-func (c *FieldCache) SetBlob(id uint64, blob []byte) Fields {
-	c.mu.Lock()
-	fields := c.fields[id]
-	if fields != nil {
-		c.mu.Unlock()
-		return fields
-	}
-	if c.ids == nil {
-		c.ids = make(map[string]uint64)
-	}
-	fields, _ = fields.FromBlob(blob)
-	c.ids[string(blob)] = id
-	if c.fields == nil {
-		c.fields = make(map[uint64]Fields)
-	}
-	c.fields[id] = fields
-	c.mu.Unlock()
-	return fields
-}
-
-// ID gets the id of fields
-func (c *FieldCache) ID(fields Fields) (uint64, bool) {
-	raw, _ := fields.AppendBlob(nil)
-	return c.BlobID(raw)
-}
-
-// BlobID returns the id of raw fields
-func (c *FieldCache) BlobID(blob []byte) (id uint64, ok bool) {
-	c.mu.RLock()
-	id, ok = c.ids[string(blob)]
-	c.mu.RUnlock()
-	return
-}
-
-// Fields gets fields by id
-func (c *FieldCache) Fields(id uint64) (fields Fields) {
-	c.mu.RLock()
-	fields = c.fields[id]
-	c.mu.RUnlock()
-	return
-}
-
-// Labels returns the distinct cached labels
-func (c *FieldCache) Labels() (labels []string) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for _, fields := range c.fields {
-		for i := range fields {
-			f := &fields[i]
-			labels = append(labels, f.Label)
-		}
-	}
-	sort.Strings(labels)
-	return distinctSorted(labels)
 }
 
 // AppendBlob implements blob.Appender interface

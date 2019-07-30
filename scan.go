@@ -113,24 +113,6 @@ func (queries ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
 	})
 }
 
-// // Match finds a matching query
-// func (queries ScanQueries) Match(q *ScanQuery) *ScanQuery {
-// 	for i := range queries {
-// 		s := &queries[i]
-// 		if q.Event != s.Event {
-// 			continue
-// 		}
-// 		if !s.Match.Includes(q.Match) {
-// 			continue
-// 		}
-// 		switch rel := s.TimeRange.Rel(&q.TimeRange); rel {
-// 		case TimeRelEqual, TimeRelBetween:
-// 			return s
-// 		}
-// 	}
-// 	return nil
-// }
-
 func (queries ScanQueries) Merge(other ...ScanQuery) ScanQueries {
 	for i := range other {
 		q := &other[i]

@@ -1,11 +1,7 @@
 package evbadger
 
 import (
-	"errors"
-	"net/url"
 	"sync"
-
-	"github.com/dgraph-io/badger/v2"
 )
 
 const (
@@ -31,21 +27,6 @@ func hashFNVa32(data []byte) uint32 {
 	return h
 }
 
-func distinctSorted(ss []string) []string {
-	var (
-		i    int
-		last string
-	)
-	for _, s := range ss {
-		if i == 0 || s != last {
-			last = s
-			ss[i] = s
-			i++
-		}
-	}
-	return ss[:i]
-}
-
 func indexOf(values []string, s string) int {
 	for i := 0; 0 <= i && i < len(values); i++ {
 		if values[i] == s {
@@ -68,32 +49,4 @@ func getBuffer() []byte {
 
 func putBuffer(buf []byte) {
 	buffers.Put(buf)
-}
-
-func parseURL(optionsURL string) (badger.Options, []string, error) {
-	u, err := url.Parse(optionsURL)
-	if err != nil {
-		return badger.Options{}, nil, err
-	}
-	if u.Scheme != "badger" {
-		return badger.Options{}, nil, errors.New(`Invalid scheme`)
-	}
-	options := badger.DefaultOptions
-	// options.Logger = nil
-	options.Dir = u.Path
-	q := u.Query()
-	options.ValueDir = q.Get("ValueDir")
-	if options.ValueDir == "" {
-		options.ValueDir = options.Dir
-	}
-	_, ok := q["ReadOnly"]
-	if ok {
-		switch q.Get("ReadOnly") {
-		case "FALSE", "false", "off", "no", "0":
-		default:
-			options.ReadOnly = true
-		}
-	}
-
-	return options, q["event"], nil
 }

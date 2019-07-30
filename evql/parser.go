@@ -3,9 +3,9 @@ package evql
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/printer"
 	"go/token"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -16,120 +16,69 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
-// Parser parses queries
-type Parser struct {
-	fset *token.FileSet
-	root evalNode
+type noder interface {
+	node()
 }
 
-func (p *Parser) Reset(query string) error {
-	fset := token.NewFileSet()
-	// Wrap query body
-	query = fmt.Sprintf(`func(){%s}`, query)
-	exp, err := parser.ParseExprFrom(fset, "", []byte(query), 0)
-	if err != nil {
-		return err
-	}
-	var body *ast.BlockStmt
-	if fn, ok := exp.(*ast.FuncLit); ok {
-		body = fn.Body
-	}
-	if body == nil {
-		return errors.New("Empty query body")
-	}
-
-	*p = Parser{
-		fset: fset,
-	}
-	s := selectBlock{
-		Agg: aggSum{},
-	}
-	root, err := p.parseSelectBlock(&s, body.List...)
-	if err != nil {
-		if err, ok := err.(*nodeError); ok {
-			return err.ParseError(fset)
-		}
-		return err
-	}
-	p.root = blockNode(root.Select)
-	return nil
+type evalNode interface {
+	noder
+	Eval([]interface{}, *db.TimeRange, db.Results) []interface{}
 }
 
-func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Expr) (err error) {
-	fn, args := parseCall(exp)
+type aggResult interface {
+	noder
+	Aggregate(r db.Results, t *db.TimeRange) db.Result
+}
+
+func parseRoot(exp ast.Expr) (blockNode, error) {
+	fn, ok := exp.(*ast.FuncLit)
+	if !ok {
+		return nil, errorf(exp, "Invalid root expression %s", reflect.TypeOf(exp))
+	}
+
+	if len(fn.Body.List) == 0 {
+		return nil, errorf(fn.Body, "Empty query body")
+	}
+	sel, err := newSelectBlock(nil, fn.Body.List...)
+	if err != nil {
+		return nil, err
+	}
+	return parseBlock(sel, fn.Body.List...)
+}
+
+func parseClause(s *selectBlock, exp *ast.StarExpr) (err error) {
+	const op = token.MUL
+	fn, args := parseCall(exp.X)
 	clause := getName(fn)
 	switch strings.ToUpper(clause) {
 	case "SELECT":
-		if op != token.MUL {
-			return errorf(exp, "Invalid SELECT clause %s%s", op, clause)
-		}
 		return nil
 	case "WHERE":
 		if s.Match != nil {
 			return errorf(exp, "Duplicate WHERE clause %s%s", op, clause)
 		}
-		switch op {
-		case token.ADD:
-			m := parent.Match.Copy()
-			s.Match, err = p.parseMatchArgs(m, args...)
-		// case token.SUB:
-		// 	m := parent.Match.Copy()
-		// 	del, err := parseStrings(args...)
-		// 	if err != nil {
-		// 		return p.Error(exp, err)
-		// 	}
-		// 	for _, label := range del {
-		// 		delete(m, label)
-		// 	}
-		// 	s.Match = m
-		case token.MUL:
-			s.Match, err = p.parseMatchArgs(nil, args...)
-		default:
-			return errorf(exp, "Invalid WHERE clause %s%s", op, clause)
-		}
+		s.Match, err = parseMatchArgs(nil, args...)
 	case "OFFSET":
 		if len(args) == 2 {
-			d, err := p.parseScanOffset(args[0], args[1])
+			d, err := parseScanOffset(args[0], args[1])
 			if err != nil {
 				return err
 			}
-			switch op {
-			case token.ADD:
-				s.Offset = parent.Offset + d
-			case token.SUB:
-				s.Offset = parent.Offset - d
-			case token.MUL:
-				s.Offset = d
-			default:
-				return errorf(fn, "Invalid clause %s%s", op, clause)
-			}
+			s.Offset = d
 			return nil
-
 		}
 		return errorf(exp, "Invalid OFFSET clause")
-	// case "GROUP":
-	// 	if s.Agg != nil {
-	// 		return p.Errorf(exp, "Duplicate GROUP clause")
-	// 	}
-	// 	if op != token.MUL || len(args) != 1 {
-	// 		return p.Errorf(exp, "Invalid GROUP clause")
-	// 	}
-	// 	s.Agg, err = parseAggregator(args[0])
-
 	case "BY", "GROUP", "GROUPBY":
 		if s.Group != nil {
 			return errorf(exp, "Duplicate GROUP clause %s%s", op, clause)
 		}
-		if op != token.MUL {
-			return errorf(exp, "Invalid BY clause")
-		}
-		return p.parseGroupClause(s, args...)
+		return parseGroupClause(s, args...)
 	default:
 		return errorf(fn, "Invalid clause %s%s", op, clause)
 	}
 	return
 }
-func (p *Parser) parseGroupClause(s *selectBlock, args ...ast.Expr) (err error) {
+func parseGroupClause(s *selectBlock, args ...ast.Expr) (err error) {
 	labels := make([]string, 0, len(args))
 	for _, arg := range args {
 		switch arg := arg.(type) {
@@ -162,7 +111,7 @@ func (p *Parser) parseGroupClause(s *selectBlock, args ...ast.Expr) (err error) 
 	return nil
 }
 
-func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlock, error) {
+func newSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlock, error) {
 	var b selectBlock
 	for _, stmt := range stmts {
 		exp, ok := stmt.(*ast.ExprStmt)
@@ -171,53 +120,55 @@ func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlo
 		}
 		switch exp := exp.X.(type) {
 		case *ast.StarExpr:
-			if err := p.parseClause(&b, s, token.MUL, exp.X); err != nil {
+			if err := parseClause(&b, exp); err != nil {
 				return nil, err
-			}
-		case *ast.UnaryExpr:
-			switch exp.Op {
-			case token.ADD, token.SUB:
-				if err := p.parseClause(&b, s, exp.Op, exp.X); err != nil {
-					return nil, err
-				}
 			}
 		}
 	}
-	if b.Agg == nil {
-		b.Agg = s.Agg
-	}
-	if b.Group == nil {
-		b.Group = s.Group
+	if s != nil {
+		if b.Agg == nil {
+			b.Agg = s.Agg
+		}
+		if b.Group == nil {
+			b.Group = s.Group
+		}
+		if b.Match == nil {
+			b.Match = s.Match
+		}
+		if b.Empty == "" {
+			b.Empty = s.Empty
+		}
+		if b.Offset == 0 {
+			b.Offset = s.Offset
+		}
 	}
 	if b.Group != nil && b.Agg == nil {
 		b.Agg = aggSum{}
 	}
-	if b.Match == nil {
-		b.Match = s.Match
-	}
-	if b.Empty == "" {
-		b.Empty = s.Empty
-	}
-	if b.Offset == 0 {
-		b.Offset = s.Offset
-	}
+	return &b, nil
+}
 
+func parseBlock(b *selectBlock, stmts ...ast.Stmt) (blockNode, error) {
 	for _, stmt := range stmts {
 		switch stmt := stmt.(type) {
 		case *ast.BlockStmt:
-			child, err := p.parseSelectBlock(&b, stmt.List...)
+			child, err := newSelectBlock(b, stmt.List...)
 			if err != nil {
 				return nil, err
 			}
-			b.Select = append(b.Select, blockNode(child.Select))
+			block, err := parseBlock(child, stmt.List...)
+			if err != nil {
+				return nil, err
+			}
+			b.Select = append(b.Select, block)
 		case *ast.ExprStmt:
 			e := stmt.X
 			var err error
 			switch e := e.(type) {
 			case *ast.StarExpr:
-				err = p.parseSelectClause(&b, e)
+				err = parseSelectClause(b, e)
 			default:
-				err = p.parseSelectExpr(&b, e)
+				err = parseSelectExpr(b, e)
 			}
 			if err != nil {
 				return nil, err
@@ -227,10 +178,10 @@ func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlo
 		}
 	}
 
-	return &b, nil
+	return b.Select, nil
 }
 
-func (p *Parser) parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
+func parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
 	fn, args := parseCall(star.X)
 	clause := getName(fn)
 	if strings.ToUpper(clause) != "SELECT" {
@@ -241,26 +192,23 @@ func (p *Parser) parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
 	}
 	s.Select = make([]evalNode, 0, len(args))
 	for _, a := range args {
-		if err := p.parseSelectExpr(s, a); err != nil {
-			return err
+		if err := parseSelectExpr(s, a); err != nil {
+			return errorf(a, "Invalid SELECT %s", err)
 		}
 	}
 	return nil
 }
 
-func (p *Parser) parseSelectExpr(s *selectBlock, e ast.Expr) error {
-	a, err := p.parseResult(s.Agg, s, e)
+func parseSelectExpr(s *selectBlock, e ast.Expr) error {
+	a, err := parseResult(s.Agg, s, e)
 	if err != nil {
-		return err
+		return errorf(e, "Invalid SELECT expression: %s", err)
 	}
 	if g := s.GroupNode(); g != nil {
-		// Give a name to the result
-		name, err := p.print(e)
-		if err != nil {
-			return err
-		}
-		n := namedAggResult{a, name}
-		g.Nodes = append(g.Nodes, &n)
+		g.Nodes = append(g.Nodes, &astAggResult{
+			Node:      e,
+			aggResult: a,
+		})
 		return nil
 	}
 	switch r := a.(type) {
@@ -274,7 +222,7 @@ func (p *Parser) parseSelectExpr(s *selectBlock, e ast.Expr) error {
 	}
 }
 
-func (p *Parser) parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, error) {
+func parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, error) {
 	v := valueNode{
 		Offset: s.Offset,
 	}
@@ -298,24 +246,24 @@ func (p *Parser) parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, 
 	}
 }
 
-func (p *Parser) parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggResult, error) {
+func parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggResult, error) {
 	switch exp := e.(type) {
 	case *ast.ParenExpr:
-		return p.parseResult(agg, s, exp.X)
+		return parseResult(agg, s, exp.X)
 	case *ast.UnaryExpr:
-		return p.parseAggExpr(agg, s, exp)
+		return parseAggExpr(agg, s, exp)
 	case *ast.BasicLit:
-		return p.parseValueNode(s, exp)
+		return parseValueNode(s, exp)
 	case *ast.BinaryExpr:
 		m := NewMerger(exp.Op)
 		if m == nil {
 			return nil, errorf(exp, "Invalid result operation %q", exp.Op)
 		}
-		x, err := p.parseResult(agg, s, exp.X)
+		x, err := parseResult(agg, s, exp.X)
 		if err != nil {
 			return nil, err
 		}
-		y, err := p.parseResult(agg, s, exp.Y)
+		y, err := parseResult(agg, s, exp.Y)
 		if err != nil {
 			return nil, err
 		}
@@ -326,7 +274,7 @@ func (p *Parser) parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggRes
 		}
 		return &op, nil
 	default:
-		scan, err := p.parseScanResult(s, e)
+		scan, err := parseScanResult(s, e)
 		if err != nil {
 			return nil, err
 		}
@@ -334,29 +282,29 @@ func (p *Parser) parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggRes
 	}
 
 }
-func (p *Parser) parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode, error) {
+func parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode, error) {
 	switch exp := exp.(type) {
 	case *ast.SliceExpr:
-		d, err := p.parseScanOffset(exp.Low, exp.High)
+		d, err := parseScanOffset(exp.Low, exp.High)
 		if err != nil {
 			return nil, err
 		}
-		scan, err := p.parseScanResult(s, exp.X)
+		scan, err := parseScanResult(s, exp.X)
 		if err != nil {
 			return nil, err
 		}
 		scan.Offset += d
 		return scan, nil
 	case *ast.CompositeLit:
-		m, err := p.parseMatch(nil, token.ADD, exp.Elts...)
+		m, err := parseMatch(nil, token.ADD, exp.Elts...)
 		if err != nil {
 			return nil, err
 		}
-		scan, err := p.parseScanResult(s, exp.Type)
+		scan, err := parseScanResult(s, exp.Type)
 		if err != nil {
 			return nil, err
 		}
-		scan.Match = scan.Match.Merge(m)
+		scan.Match = m.Merge(s.Match)
 		return scan, nil
 	case *ast.Ident:
 		return &scanResultNode{
@@ -369,7 +317,7 @@ func (p *Parser) parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode,
 	}
 }
 
-func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) (aggResult, error) {
+func parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) (aggResult, error) {
 	if exp.Op != token.NOT {
 		return nil, errorf(exp, "Invalid aggregator keyword prefix %q", exp.Op)
 	}
@@ -384,7 +332,7 @@ func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) 
 			Agg:    agg,
 		}
 		for _, arg := range args {
-			n, err := p.parseResult(a, s, arg)
+			n, err := parseResult(a, s, arg)
 			if err != nil {
 				return nil, err
 			}
@@ -400,7 +348,7 @@ func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) 
 	}
 
 	if prefix == 'V' {
-		a, err := p.parseResult(agg, s, args[0])
+		a, err := parseResult(agg, s, args[0])
 		if err != nil {
 			return nil, err
 		}
@@ -410,7 +358,7 @@ func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) 
 		}
 		return &n, nil
 	}
-	scan, err := p.parseScanResult(s, args[0])
+	scan, err := parseScanResult(s, args[0])
 	if err != nil {
 		return nil, err
 	}
@@ -421,21 +369,7 @@ func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) 
 	return &n, nil
 }
 
-func (p *Parser) Queries(t db.TimeRange) []db.ScanQuery {
-	return nodeQueries(nil, &t, p.root)
-}
-
-// func (p *Parser) Error(exp ast.Node, err error) error {
-// 	// panic(err)
-// 	pos := p.fset.Position(exp.Pos())
-// 	return errors.Errorf(`Parse error at position %s: %s`, pos, err)
-// }
-
-// func (p *Parser) Errorf(exp ast.Node, msg string, args ...interface{}) error {
-// 	return p.Error(exp, errors.Errorf(msg, args...))
-// }
-
-func (p *Parser) parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
+func parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
 	n, ok := parseOffset(lo)
 	if !ok {
 		return 0, errorf(lo, "Invalid offset")
@@ -448,18 +382,18 @@ func (p *Parser) parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
 	return time.Duration(n) * unit, nil
 }
 
-func (p *Parser) parseMatchAny(values []string, exp ast.Expr) ([]string, error) {
+func parseMatchAny(values []string, exp ast.Expr) ([]string, error) {
 	switch exp := exp.(type) {
 	case *ast.BinaryExpr:
 		if exp.Op != token.OR {
 			return nil, errorf(exp, "Invalid op %q", exp.Op)
 		}
 		var err error
-		values, err = p.parseMatchAny(values, exp.X)
+		values, err = parseMatchAny(values, exp.X)
 		if err != nil {
 			return nil, err
 		}
-		return p.parseMatchAny(values, exp.Y)
+		return parseMatchAny(values, exp.Y)
 	case *ast.BasicLit:
 		switch exp.Kind {
 		case token.STRING:
@@ -474,11 +408,11 @@ func (p *Parser) parseMatchAny(values []string, exp ast.Expr) ([]string, error) 
 	case *ast.Ident:
 		return append(values, exp.Name), nil
 	default:
-		return nil, errorf(exp, "Invalid match any expression")
+		return nil, errorf(exp, "Invalid match any expression %s", exp)
 	}
 }
 
-func (p *Parser) parseMatcher(exp ast.Expr) (db.Matcher, error) {
+func parseMatcher(exp ast.Expr) (db.Matcher, error) {
 	switch exp := exp.(type) {
 	case *ast.UnaryExpr:
 		fn, args := parseCall(exp.X)
@@ -505,7 +439,7 @@ func (p *Parser) parseMatcher(exp ast.Expr) (db.Matcher, error) {
 			return nil, errorf(fn, "Invalid matcher %s%s", exp.Op, name)
 		}
 	default:
-		values, err := p.parseMatchAny(nil, exp)
+		values, err := parseMatchAny(nil, exp)
 		if err != nil {
 			return nil, err
 		}
@@ -516,79 +450,8 @@ func (p *Parser) parseMatcher(exp ast.Expr) (db.Matcher, error) {
 	}
 }
 
-func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
-	switch exp := exp.(type) {
-	case *ast.ParenExpr:
-		return p.parseDuration(exp.X)
-	case *ast.Ident:
-		if d := durationUnit(exp.Name); d > 0 {
-			return d, nil
-		}
-		return 0, errorf(exp, "Invalid duration unit %q", exp.Name)
-	case *ast.BinaryExpr:
-		x, err := p.parseDuration(exp.X)
-		if err != nil {
-			return 0, err
-		}
-		y, err := p.parseDuration(exp.Y)
-		if err != nil {
-			return 0, err
-		}
-		switch exp.Op {
-		case token.ADD:
-			return x + y, nil
-		case token.SUB:
-			return x - y, nil
-		case token.MUL:
-			return x / y, nil
-		case token.REM:
-			return x % y, nil
-		case token.QUO:
-			return x / y, nil
-		default:
-			return 0, errorf(exp, "Invalid duration operand %q", exp.Op)
-		}
-	case *ast.BasicLit:
-		v := exp.Value
-		switch exp.Kind {
-		case token.STRING:
-			s, err := strconv.Unquote(v)
-			if err != nil {
-				return 0, err
-			}
-			if d := durationUnit(s); d > 0 {
-				return d, nil
-			}
-			return time.ParseDuration(s)
-		case token.INT:
-			n, err := strconv.ParseInt(v, 10, 64)
-			return time.Duration(n), err
-		default:
-			return 0, errorf(exp, "Invalid duration literal %s", exp.Kind)
-		}
-	default:
-		return 0, errorf(exp, "Invalid duration expression")
-	}
-}
-
-// Eval executes the query against some results
-func (p *Parser) Eval(out []interface{}, t db.TimeRange, results db.Results) []interface{} {
-	if p.root != nil {
-		out = p.root.Eval(out, &t, results)
-	}
-	return out
-}
-
-func (p *Parser) print(x interface{}) (string, error) {
-	w := new(strings.Builder)
-	if err := printer.Fprint(w, p.fset, x); err != nil {
-		return "", err
-	}
-	return w.String(), nil
-}
-
-func (p *Parser) parseMatch(m db.MatchFields, op token.Token, args ...ast.Expr) (db.MatchFields, error) {
-	match, err := p.parseMatchArgs(m, args...)
+func parseMatch(m db.MatchFields, op token.Token, args ...ast.Expr) (db.MatchFields, error) {
+	match, err := parseMatchArgs(m, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -600,7 +463,7 @@ func (p *Parser) parseMatch(m db.MatchFields, op token.Token, args ...ast.Expr) 
 	}
 }
 
-func (p *Parser) parseMatchArgs(match db.MatchFields, args ...ast.Expr) (db.MatchFields, error) {
+func parseMatchArgs(match db.MatchFields, args ...ast.Expr) (db.MatchFields, error) {
 	for _, el := range args {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
@@ -610,7 +473,7 @@ func (p *Parser) parseMatchArgs(match db.MatchFields, args ...ast.Expr) (db.Matc
 		if err != nil {
 			return nil, errorf(kv.Key, "Failed to parse match label: %s", err)
 		}
-		m, err := p.parseMatcher(kv.Value)
+		m, err := parseMatcher(kv.Value)
 		if err != nil {
 			return nil, errors.Errorf("Failed to parse match values for label %q: %s", label, err)
 		}
@@ -659,21 +522,6 @@ func (s *selectBlock) GroupNode() *groupNode {
 	}
 }
 
-type namedAggResult struct {
-	aggResult
-	Name string
-}
-
-func (n *namedAggResult) unwrap() noder { return n.aggResult }
-
-func (n *namedAggResult) Aggregate(r db.Results, t *db.TimeRange) db.Result {
-	out := n.aggResult.Aggregate(r, t)
-	out.Event = n.Name
-	out.TimeRange = *t
-	out.Fields = nil
-	return out
-}
-
 func nodeQueries(dst []db.ScanQuery, t *db.TimeRange, n noder) []db.ScanQuery {
 	type queryNode interface {
 		noder
@@ -713,13 +561,336 @@ func nodeQueries(dst []db.ScanQuery, t *db.TimeRange, n noder) []db.ScanQuery {
 	}
 }
 
+// func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
+// 	switch exp := exp.(type) {
+// 	case *ast.ParenExpr:
+// 		return p.parseDuration(exp.X)
+// 	case *ast.Ident:
+// 		if d := durationUnit(exp.Name); d > 0 {
+// 			return d, nil
+// 		}
+// 		return 0, errorf(exp, "Invalid duration unit %q", exp.Name)
+// 	case *ast.BinaryExpr:
+// 		x, err := p.parseDuration(exp.X)
+// 		if err != nil {
+// 			return 0, err
+// 		}
+// 		y, err := p.parseDuration(exp.Y)
+// 		if err != nil {
+// 			return 0, err
+// 		}
+// 		switch exp.Op {
+// 		case token.ADD:
+// 			return x + y, nil
+// 		case token.SUB:
+// 			return x - y, nil
+// 		case token.MUL:
+// 			return x / y, nil
+// 		case token.REM:
+// 			return x % y, nil
+// 		case token.QUO:
+// 			return x / y, nil
+// 		default:
+// 			return 0, errorf(exp, "Invalid duration operand %q", exp.Op)
+// 		}
+// 	case *ast.BasicLit:
+// 		v := exp.Value
+// 		switch exp.Kind {
+// 		case token.STRING:
+// 			s, err := strconv.Unquote(v)
+// 			if err != nil {
+// 				return 0, err
+// 			}
+// 			if d := durationUnit(s); d > 0 {
+// 				return d, nil
+// 			}
+// 			return time.ParseDuration(s)
+// 		case token.INT:
+// 			n, err := strconv.ParseInt(v, 10, 64)
+// 			return time.Duration(n), err
+// 		default:
+// 			return 0, errorf(exp, "Invalid duration literal %s", exp.Kind)
+// 		}
+// 	default:
+// 		return 0, errorf(exp, "Invalid duration expression")
+// 	}
+// }
+
+type scanResultNode struct {
+	Offset time.Duration
+	Event  string
+	Match  db.MatchFields
+}
+
+func (s *scanResultNode) node() {}
+
+func (s *scanResultNode) Query(tr db.TimeRange) db.ScanQuery {
+	return db.ScanQuery{
+		TimeRange: tr.Offset(s.Offset),
+		Event:     s.Event,
+		Fields:    s.Match,
+	}
+}
+
+func (s *scanResultNode) Results(results db.Results, tr db.TimeRange) db.Results {
+	tr = tr.Offset(s.Offset)
+	start, end := tr.Start.Unix(), tr.End.Unix()
+	out := db.Results{}
+	m := s.Match
+	for i := range results {
+		r := &results[i]
+		if r.Event == s.Event && m.Match(r.Fields) {
+			switch rel := r.TimeRange.Rel(&tr); rel {
+			case db.TimeRelEqual, db.TimeRelBetween:
+				out = append(out, *r)
+			case db.TimeRelAround:
+				s := *r
+				s.Data = r.Data.Slice(start, end)
+				if len(s.Data) > 0 {
+					out = append(out, s)
+				}
+			default:
+			}
+		}
+	}
+	return out
+}
+
+type scanEvalNode struct {
+	*scanResultNode
+}
+
+func (s *scanEvalNode) unwrap() noder { return s.scanResultNode }
+func (s *scanEvalNode) Eval(out []interface{}, t *db.TimeRange, r db.Results) []interface{} {
+	r = s.Results(r, *t)
+	for i := range r {
+		out = append(out, &r[i])
+	}
+	return out
+}
+
+type scanAggNode struct {
+	Agg Aggregator
+	*scanResultNode
+}
+
+func (s *scanAggNode) unwrap() noder { return s.scanResultNode }
+func (s *scanAggNode) Aggregate(results db.Results, tr *db.TimeRange) db.Result {
+	agg := BlankAggregator(s.Agg)
+	t := *tr
+	data := db.BlankData(tr, agg.Zero())
+	results = s.scanResultNode.Results(results, *tr)
+	for i := range data {
+		d := &data[i]
+		v := agg.Zero()
+		for j := range results {
+			r := &results[j]
+			if 0 <= i && i < len(r.Data) {
+				p := r.Data[i]
+				v = agg.Aggregate(v, p.Value)
+			} else {
+				v = agg.Aggregate(v, math.NaN())
+			}
+		}
+		d.Value = v
+	}
+	// No fields group op
+	return db.Result{
+		TimeRange: t,
+		Event:     s.Event,
+		// Fields:    s.Match.Fields,
+		Data: data,
+	}
+}
+
+type zipAggNode struct {
+	Offset time.Duration
+	Agg    Aggregator
+	Nodes  []aggResult
+}
+
+func (*zipAggNode) node() {}
+
+func (n *zipAggNode) Aggregate(results db.Results, tr *db.TimeRange) db.Result {
+	if n.Offset != 0 {
+		t := tr.Offset(n.Offset)
+		tr = &t
+	}
+	switch len(n.Nodes) {
+	case 0:
+		return db.Result{
+			Data: db.BlankData(tr, math.NaN()),
+		}
+	case 1:
+		return n.Nodes[0].Aggregate(results, tr)
+	}
+	var els []db.Result
+	for _, el := range n.Nodes {
+		els = append(els, el.Aggregate(results, tr))
+	}
+	out, tail := els[0], els[1:]
+	a := BlankAggregator(n.Agg)
+	for i := range out.Data {
+		d := &out.Data[i]
+		v := a.Zero()
+		v = a.Aggregate(v, d.Value)
+		for j := range tail {
+			el := &tail[j]
+			if 0 <= i && i < len(el.Data) {
+				d := &el.Data[i]
+				v = a.Aggregate(v, d.Value)
+			} else {
+				v = a.Aggregate(v, math.NaN())
+			}
+		}
+		d.Value = v
+	}
+	return out
+}
+
+type blockNode []evalNode
+
+func (blockNode) node() {}
+func (b blockNode) Eval(out []interface{}, t *db.TimeRange, results db.Results) []interface{} {
+	for _, n := range b {
+		out = n.Eval(out, t, results)
+	}
+	return out
+}
+
+type aggOp struct {
+	X  aggResult
+	Y  aggResult
+	Op Merger
+}
+
+func (op *aggOp) node() {}
+func (op *aggOp) Aggregate(r db.Results, tr *db.TimeRange) db.Result {
+	x := op.X.Aggregate(r, tr)
+	y := op.Y.Aggregate(r, tr)
+	for i := range x.Data {
+		p := &x.Data[i]
+		if 0 <= i && i < len(y.Data) {
+			pp := &y.Data[i]
+			p.Value = op.Op.Merge(p.Value, pp.Value)
+		}
+	}
+	return db.Result{
+		Data: x.Data,
+	}
+}
+
+type groupNode struct {
+	Nodes  []aggResult
+	Group  []string
+	Empty  string
+	Agg    Aggregator
+	groups []resultGroup
+}
+
+func (*groupNode) node() {}
+
+func (g *groupNode) reset(results db.Results) {
+	g.groups = nil
+	scratch := db.Fields(make([]db.Field, 0, len(g.Group)))
+	for i := range results {
+		r := &results[i]
+		scratch = r.Fields.AppendGrouped(scratch[:0], g.Empty, g.Group)
+		g.add(scratch, r)
+	}
+}
+func (g *groupNode) add(fields db.Fields, r *db.Result) {
+	for i := range g.groups {
+		group := &g.groups[i]
+		if group.Fields.Equal(fields) {
+			group.results = append(group.results, *r)
+			return
+		}
+	}
+	g.groups = append(g.groups, resultGroup{
+		Fields:  fields.Copy(),
+		results: db.Results{*r},
+	})
+}
+
+type resultGroup struct {
+	Fields  db.Fields
+	results db.Results
+}
+
+func (g resultGroup) Values() map[string]string {
+	v := make(map[string]string, len(g.Fields))
+	for i := range g.Fields {
+		f := &g.Fields[i]
+		v[f.Label] = f.Value
+	}
+	return v
+}
+
+func (g *groupNode) Aggregator() Aggregator {
+	if g.Agg == nil {
+		return aggSum{}
+	}
+	return g.Agg
+}
+
+func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *db.TimeRange) []interface{} {
+	for _, n := range g.Nodes {
+		r := n.Aggregate(group.results, tr)
+		r.Fields = group.Fields
+		r.TimeRange = *tr
+		out = append(out, &r)
+	}
+	return out
+}
+
+func (g *groupNode) Eval(out []interface{}, tr *db.TimeRange, results db.Results) []interface{} {
+	g.reset(results)
+	for i := range g.groups {
+		group := &g.groups[i]
+		out = g.evalGroup(out, group, tr)
+	}
+	return out
+}
+
+type valueNode struct {
+	Offset time.Duration
+	Value  float64
+}
+
+func (v *valueNode) node() {}
+func (v *valueNode) Aggregate(_ db.Results, t *db.TimeRange) db.Result {
+	if v.Offset > 0 {
+		tt := t.Offset(v.Offset)
+		t = &tt
+	}
+	return db.Result{
+		Data: db.BlankData(t, v.Value),
+	}
+}
+
+type namedAggResult struct {
+	aggResult
+	Name string
+}
+
+func (n *namedAggResult) unwrap() noder { return n.aggResult }
+
+func (n *namedAggResult) Aggregate(r db.Results, t *db.TimeRange) db.Result {
+	out := n.aggResult.Aggregate(r, t)
+	out.Event = n.Name
+	out.TimeRange = *t
+	out.Fields = nil
+	return out
+}
+
 // aggNode reduces a result to a value
 type aggNode struct {
 	aggResult
 	Agg Aggregator
 }
 
-func (n *aggNode) node()         {}
+// func (n *aggNode) node()         {}
 func (n *aggNode) unwrap() noder { return n.aggResult }
 
 func (n *aggNode) Aggregate(r db.Results, t *db.TimeRange) db.Result {
@@ -728,4 +899,227 @@ func (n *aggNode) Aggregate(r db.Results, t *db.TimeRange) db.Result {
 	v := AggregateData(a.Data, agg)
 	a.Data.Fill(v)
 	return a
+}
+
+type astAggResult struct {
+	ast.Node
+	aggResult
+}
+
+func (block blockNode) nameResults(fset *token.FileSet) {
+	for _, n := range block {
+		switch n := n.(type) {
+		case blockNode:
+			n.nameResults(fset)
+		case *groupNode:
+			group := n
+			for i, n := range group.Nodes {
+				if n, ok := n.(*astAggResult); ok {
+					w := new(strings.Builder)
+					printer.Fprint(w, fset, n.Node)
+					group.Nodes[i] = &namedAggResult{
+						Name:      w.String(),
+						aggResult: n.aggResult,
+					}
+				}
+			}
+		}
+	}
+}
+
+func unquote(lit *ast.BasicLit) (string, error) {
+	if lit.Kind == token.STRING {
+		return strconv.Unquote(lit.Value)
+	}
+	return lit.Value, nil
+}
+
+func getName(e ast.Expr) string {
+	if e != nil {
+		if id, ok := e.(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
+
+}
+
+func parseStrings(exp ...ast.Expr) ([]string, error) {
+	var values []string
+	for _, exp := range exp {
+		s, err := parseString(exp)
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, s)
+	}
+	return values, nil
+}
+func parseString(exp ast.Expr) (string, error) {
+	switch exp := exp.(type) {
+	case *ast.Ident:
+		return exp.Name, nil
+	case *ast.BasicLit:
+		return unquote(exp)
+	default:
+		return "", errors.Errorf("Invalid string expression type %s", reflect.TypeOf(exp))
+	}
+}
+
+// func parseClause(exp ast.Expr) (string, []ast.Expr) {
+// 	if star, ok := exp.(*ast.StarExpr); ok {
+// 		fn, args := parseCall(star.X)
+// 		return strings.ToUpper(getName(fn)), args
+// 	}
+// 	return "", nil
+// }
+
+func parseCall(exp ast.Expr) (ast.Expr, []ast.Expr) {
+	switch call := exp.(type) {
+	case *ast.CompositeLit:
+		return call.Type, call.Elts
+	case *ast.CallExpr:
+		return call.Fun, call.Args
+	case *ast.SliceExpr:
+		if call.Slice3 {
+			return call.X, []ast.Expr{call.Low, call.High, call.Max}
+		}
+		return call.X, []ast.Expr{call.Low, call.High}
+	case *ast.Ident:
+		return exp, nil
+	default:
+		return nil, nil
+	}
+}
+
+func parseDurationUnit(exp ast.Expr) time.Duration {
+	if unit, ok := exp.(*ast.Ident); ok {
+		return durationUnit(unit.Name)
+	}
+	return 0
+}
+
+func parseAggFn(exp ast.Expr) (prefix byte, name string, args []ast.Expr) {
+	fn, args := parseCall(exp)
+	name = getName(fn)
+	if len(name) > 0 {
+		switch name[0] {
+		case 'z', 'Z':
+			if len(name) > 3 {
+				p, n := name[:3], name[3:]
+				if strings.ToLower(p) != "zip" {
+					return
+				}
+				prefix, name = 'Z', n
+			}
+		case 'v', 'V':
+			prefix = 'V'
+			name = name[1:]
+		}
+	}
+	return
+}
+
+func parseAggregator(exp ast.Expr) (Aggregator, error) {
+	name, err := parseString(exp)
+	if err != nil {
+		return nil, err
+	}
+	if a := NewAggregator(name); a != nil {
+		return a, nil
+	}
+	return nil, errors.Errorf("Invalid aggregator name %q", name)
+}
+
+// func parseTime(exp ast.Expr, now time.Time) (time.Time, error) {
+// 	if exp == nil {
+// 		return now, nil
+// 	}
+// 	switch exp := exp.(type) {
+// 	case *ast.BasicLit:
+// 		switch lit := exp; lit.Kind {
+// 		case token.STRING:
+// 			v, err := strconv.Unquote(lit.Value)
+// 			if err != nil {
+// 				return time.Time{}, err
+// 			}
+// 			if strings.ToLower(v) == "now" {
+// 				return now, nil
+// 			}
+// 			return time.Parse(time.RFC3339Nano, v)
+// 		case token.INT:
+// 			n, err := strconv.ParseInt(lit.Value, 10, 64)
+// 			if err != nil {
+// 				return time.Time{}, errors.Errorf("Invalid timestamp value: %s", err)
+// 			}
+// 			return time.Unix(n, 0), nil
+// 		default:
+// 			return time.Time{}, errors.Errorf("Invalid time literal %s", exp)
+// 		}
+// 	case *ast.Ident:
+// 		switch strings.ToLower(exp.Name) {
+// 		case "now":
+// 			return now, nil
+// 		default:
+// 			return time.Time{}, errors.Errorf("Invalid time ident %s", exp.Name)
+// 		}
+// 	}
+// 	return time.Time{}, errors.Errorf("Invalid time expr: %s", reflect.TypeOf(exp))
+// }
+
+// func parseStrings(dst []string, exp ...ast.Expr) ([]string, error) {
+// 	for _, exp := range exp {
+// 		s, err := parseString(exp)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		dst = append(dst, s)
+// 	}
+// 	return dst, nil
+// }
+
+const y2k = 946684800
+
+func parseOffset(exp ast.Expr) (int64, bool) {
+	switch e := exp.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.INT {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(e.Value, 10, 64)
+		if err == nil && n < y2k {
+			return n, true
+		}
+	case *ast.UnaryExpr:
+		switch e.Op {
+		case token.ADD:
+			return parseOffset(e.X)
+		case token.SUB:
+			n, ok := parseOffset(e.X)
+			if ok {
+				return -n, true
+			}
+		}
+	}
+	return 0, false
+
+}
+
+func durationUnit(unit string) time.Duration {
+	switch strings.ToLower(unit) {
+	case "s", "sec", "second", "seconds":
+		return time.Minute
+	case "min", "minute", "m", "minutes":
+		return time.Minute
+	case "hour", "h":
+		return time.Hour
+	case "day", "d":
+		return 24 * time.Hour
+	case "w", "week", "weeks":
+		return 24 * 7 * time.Hour
+	case "month":
+		return 30 * 24 * time.Hour
+	default:
+		return 0
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/evutil"
 	redis "github.com/alxarch/fastredis"
 	"github.com/alxarch/fastredis/resp"
 	errors "golang.org/x/xerrors"
@@ -46,7 +47,7 @@ func (db *DB) storer(event string) evdb.Storer {
 			Resolution: res,
 		})
 	}
-	return evdb.TeeStore(storers...)
+	return evutil.TeeStore(storers...)
 }
 
 const (
