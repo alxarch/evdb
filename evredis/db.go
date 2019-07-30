@@ -14,6 +14,7 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
+// DB is an evdb backend using Redis
 type DB struct {
 	redis *redis.Pool
 	evdb.Scanner
@@ -25,39 +26,7 @@ type DB struct {
 
 var _ evdb.DB = (*DB)(nil)
 
-func (db *DB) Storer(event string) evdb.Storer {
-	if e, ok := db.events[event]; ok {
-		return e
-	}
-	return nil
-}
-
-type storer struct {
-	*DB
-	event string
-	Resolution
-}
-
-func (db *DB) storer(event string) evdb.Storer {
-	storers := make([]evdb.Storer, 0, len(db.resolutions))
-	for _, res := range db.resolutions {
-		storers = append(storers, &storer{
-			DB:         db,
-			event:      event,
-			Resolution: res,
-		})
-	}
-	return evutil.TeeStore(storers...)
-}
-
-const (
-	labelSeparator        = '\x1f'
-	fieldTerminator       = '\x1e'
-	nilByte          byte = 0
-	sNilByte              = "\x00"
-	defaultKeyPrefix      = "meter"
-)
-
+// Open opens a new DB
 func Open(options Options, events ...string) (*DB, error) {
 	byDuration, err := resolutionsByDuration(options.Resolutions...)
 	if err != nil {
@@ -84,11 +53,29 @@ func Open(options Options, events ...string) (*DB, error) {
 	return &db, nil
 }
 
+// Storer provides a Storer for an event
+func (db *DB) Storer(event string) evdb.Storer {
+	if e, ok := db.events[event]; ok {
+		return e
+	}
+	return nil
+}
+
+const (
+	labelSeparator        = '\x1f'
+	fieldTerminator       = '\x1e'
+	nilByte          byte = 0
+	sNilByte              = "\x00"
+	defaultKeyPrefix      = "meter"
+)
+
+// Close closes a DB
 func (db *DB) Close() error {
 	// return db.redis.Close()
 	return nil
 }
 
+// ScanQuery implements evdb.ScanQuerier interface
 func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	res, ok := db.resolutions[q.Step]
 	if !ok {
@@ -102,6 +89,23 @@ func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, e
 	return s.Scan(ctx, q.TimeRange, q.Fields)
 }
 
+type storer struct {
+	*DB
+	event string
+	Resolution
+}
+
+func (db *DB) storer(event string) evdb.Storer {
+	storers := make([]evdb.Storer, 0, len(db.resolutions))
+	for _, res := range db.resolutions {
+		storers = append(storers, &storer{
+			DB:         db,
+			event:      event,
+			Resolution: res,
+		})
+	}
+	return evutil.TeeStore(storers...)
+}
 func (db *storer) Store(s *evdb.Snapshot) error {
 	if len(s.Counters) == 0 {
 		return nil

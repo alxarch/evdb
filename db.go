@@ -15,7 +15,7 @@ type DB interface {
 }
 
 type Opener interface {
-	Open(configURL string) (DB, error)
+	Open(configURL string, events ...string) (DB, error)
 }
 
 var (
@@ -34,7 +34,7 @@ func Register(scheme string, op Opener) error {
 	return nil
 }
 
-func Open(configURL string) (DB, error) {
+func Open(configURL string, events ...string) (DB, error) {
 	u, err := url.Parse(configURL)
 	if err != nil {
 		return nil, err
@@ -46,5 +46,5 @@ func Open(configURL string) (DB, error) {
 	if opener == nil {
 		return nil, fmt.Errorf("Scheme %q not registered", scheme)
 	}
-	return opener.Open(configURL)
+	return opener.Open(configURL, events...)
 }

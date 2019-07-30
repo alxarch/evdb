@@ -1,3 +1,4 @@
+// Package evbadger provides an evdb backend using dgraph.io/badger key-value store
 package evbadger
 
 import (
@@ -11,8 +12,8 @@ import (
 
 type opener struct{}
 
-func (o opener) Open(configURL string) (evdb.DB, error) {
-	options, events, err := o.parseURL(configURL)
+func (o opener) Open(configURL string, events ...string) (evdb.DB, error) {
+	options, err := o.parseURL(configURL)
 	if err != nil {
 		return nil, err
 	}
@@ -29,17 +30,17 @@ func init() {
 	evdb.Register(urlScheme, opener{})
 }
 
-func (opener) parseURL(optionsURL string) (options badger.Options, events []string, err error) {
+func (opener) parseURL(optionsURL string) (options badger.Options, err error) {
 	u, err := url.Parse(optionsURL)
 	if err != nil {
 		return
 	}
-	if u.Scheme != "badger" {
-		err = errors.Errorf(`Invalid scheme %q`, u.Scheme)
+	if u.Scheme != urlScheme {
+		err = errors.Errorf(`Invalid scheme %q != %q`, u.Scheme, urlScheme)
 		return
 	}
 	q := u.Query()
-	options, events = badger.DefaultOptions, q["event"]
+	options = badger.DefaultOptions
 	// options.Logger = nil
 	options.Dir = u.Path
 	if options.ValueDir = q.Get("value-dir"); options.ValueDir == "" {
