@@ -2,6 +2,7 @@
 package evredis
 
 import (
+	"log"
 	"net/url"
 	"strconv"
 
@@ -13,8 +14,8 @@ type opener struct{}
 var _ evdb.Opener = opener{}
 
 // Open implements evdb.Opener interface
-func (o opener) Open(configURL string, events ...string) (evdb.DB, error) {
-	options, err := o.parseURL(configURL)
+func (opener) Open(configURL string, events ...string) (evdb.DB, error) {
+	options, err := ParseURL(configURL)
 	if err != nil {
 		return nil, err
 	}
@@ -23,10 +24,13 @@ func (o opener) Open(configURL string, events ...string) (evdb.DB, error) {
 
 }
 
-const urlScheme = "badger"
+const urlScheme = "redis"
 
 func init() {
-	evdb.Register(urlScheme, opener{})
+	o := opener{}
+	if err := evdb.Register(urlScheme, o); err != nil {
+		log.Fatal("Failed to register db opener", err)
+	}
 }
 
 // Options are options for a DB
@@ -38,8 +42,8 @@ type Options struct {
 }
 
 // ParseURL parses options from a URL
-func (opener) parseURL(rawurl string) (o Options, err error) {
-	u, _ := url.Parse(rawurl)
+func ParseURL(configURL string) (o Options, err error) {
+	u, _ := url.Parse(configURL)
 	q := u.Query()
 	o.ScanSize, _ = strconv.ParseInt(q.Get("scan-size"), 10, 32)
 	o.KeyPrefix = q.Get("key-prefix")

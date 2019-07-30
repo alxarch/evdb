@@ -2,6 +2,7 @@
 package evbadger
 
 import (
+	"log"
 	"net/url"
 	"strings"
 
@@ -12,8 +13,8 @@ import (
 
 type opener struct{}
 
-func (o opener) Open(configURL string, events ...string) (evdb.DB, error) {
-	options, err := o.parseURL(configURL)
+func (opener) Open(configURL string, events ...string) (evdb.DB, error) {
+	options, err := ParseURL(configURL)
 	if err != nil {
 		return nil, err
 	}
@@ -27,10 +28,13 @@ func (o opener) Open(configURL string, events ...string) (evdb.DB, error) {
 const urlScheme = "badger"
 
 func init() {
-	evdb.Register(urlScheme, opener{})
+	o := opener{}
+	if err := evdb.Register(urlScheme, o); err != nil {
+		log.Fatal("Failed to register db opener", err)
+	}
 }
 
-func (opener) parseURL(optionsURL string) (options badger.Options, err error) {
+func ParseURL(optionsURL string) (options badger.Options, err error) {
 	u, err := url.Parse(optionsURL)
 	if err != nil {
 		return
