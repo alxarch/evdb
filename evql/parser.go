@@ -491,24 +491,16 @@ type selectBlock struct {
 	Match  db.MatchFields
 }
 
-func (s *selectBlock) group() groupNode {
-	agg := s.Agg
-	if agg == nil {
-		agg = aggSum{}
-	}
-	return groupNode{
-		Group: s.Group,
-		Empty: s.Empty,
-		Agg:   agg,
-	}
-}
 func (s *selectBlock) GroupNode() *groupNode {
 	if s.Group == nil {
 		return nil
 	}
 	switch len(s.Select) {
 	case 0:
-		g := s.group()
+		g := groupNode{
+			Group: s.Group,
+			Empty: s.Empty,
+		}
 		s.Select = append(s.Select, &g)
 		return &g
 	case 1:
@@ -560,61 +552,6 @@ func nodeQueries(dst []db.ScanQuery, t *db.TimeRange, n noder) []db.ScanQuery {
 		return dst
 	}
 }
-
-// func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
-// 	switch exp := exp.(type) {
-// 	case *ast.ParenExpr:
-// 		return p.parseDuration(exp.X)
-// 	case *ast.Ident:
-// 		if d := durationUnit(exp.Name); d > 0 {
-// 			return d, nil
-// 		}
-// 		return 0, errorf(exp, "Invalid duration unit %q", exp.Name)
-// 	case *ast.BinaryExpr:
-// 		x, err := p.parseDuration(exp.X)
-// 		if err != nil {
-// 			return 0, err
-// 		}
-// 		y, err := p.parseDuration(exp.Y)
-// 		if err != nil {
-// 			return 0, err
-// 		}
-// 		switch exp.Op {
-// 		case token.ADD:
-// 			return x + y, nil
-// 		case token.SUB:
-// 			return x - y, nil
-// 		case token.MUL:
-// 			return x / y, nil
-// 		case token.REM:
-// 			return x % y, nil
-// 		case token.QUO:
-// 			return x / y, nil
-// 		default:
-// 			return 0, errorf(exp, "Invalid duration operand %q", exp.Op)
-// 		}
-// 	case *ast.BasicLit:
-// 		v := exp.Value
-// 		switch exp.Kind {
-// 		case token.STRING:
-// 			s, err := strconv.Unquote(v)
-// 			if err != nil {
-// 				return 0, err
-// 			}
-// 			if d := durationUnit(s); d > 0 {
-// 				return d, nil
-// 			}
-// 			return time.ParseDuration(s)
-// 		case token.INT:
-// 			n, err := strconv.ParseInt(v, 10, 64)
-// 			return time.Duration(n), err
-// 		default:
-// 			return 0, errorf(exp, "Invalid duration literal %s", exp.Kind)
-// 		}
-// 	default:
-// 		return 0, errorf(exp, "Invalid duration expression")
-// 	}
-// }
 
 type scanResultNode struct {
 	Offset time.Duration
@@ -781,62 +718,16 @@ func (op *aggOp) Aggregate(r db.Results, tr *db.TimeRange) db.Result {
 }
 
 type groupNode struct {
-	Nodes  []aggResult
-	Group  []string
-	Empty  string
-	Agg    Aggregator
-	groups []resultGroup
+	Nodes []aggResult
+	Group []string
+	Empty string
 }
 
 func (*groupNode) node() {}
 
-func (g *groupNode) reset(results db.Results) {
-	g.groups = nil
-	scratch := db.Fields(make([]db.Field, 0, len(g.Group)))
-	for i := range results {
-		r := &results[i]
-		scratch = r.Fields.AppendGrouped(scratch[:0], g.Empty, g.Group)
-		g.add(scratch, r)
-	}
-}
-func (g *groupNode) add(fields db.Fields, r *db.Result) {
-	for i := range g.groups {
-		group := &g.groups[i]
-		if group.Fields.Equal(fields) {
-			group.results = append(group.results, *r)
-			return
-		}
-	}
-	g.groups = append(g.groups, resultGroup{
-		Fields:  fields.Copy(),
-		results: db.Results{*r},
-	})
-}
-
-type resultGroup struct {
-	Fields  db.Fields
-	results db.Results
-}
-
-func (g resultGroup) Values() map[string]string {
-	v := make(map[string]string, len(g.Fields))
-	for i := range g.Fields {
-		f := &g.Fields[i]
-		v[f.Label] = f.Value
-	}
-	return v
-}
-
-func (g *groupNode) Aggregator() Aggregator {
-	if g.Agg == nil {
-		return aggSum{}
-	}
-	return g.Agg
-}
-
-func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *db.TimeRange) []interface{} {
+func (g *groupNode) evalGroup(out []interface{}, group *db.ResultGroup, tr *db.TimeRange) []interface{} {
 	for _, n := range g.Nodes {
-		r := n.Aggregate(group.results, tr)
+		r := n.Aggregate(group.Results, tr)
 		r.Fields = group.Fields
 		r.TimeRange = *tr
 		out = append(out, &r)
@@ -845,9 +736,9 @@ func (g *groupNode) evalGroup(out []interface{}, group *resultGroup, tr *db.Time
 }
 
 func (g *groupNode) Eval(out []interface{}, tr *db.TimeRange, results db.Results) []interface{} {
-	g.reset(results)
-	for i := range g.groups {
-		group := &g.groups[i]
+	groups := results.Group(g.Empty, g.Group...)
+	for i := range groups {
+		group := &groups[i]
 		out = g.evalGroup(out, group, tr)
 	}
 	return out
@@ -966,14 +857,6 @@ func parseString(exp ast.Expr) (string, error) {
 	}
 }
 
-// func parseClause(exp ast.Expr) (string, []ast.Expr) {
-// 	if star, ok := exp.(*ast.StarExpr); ok {
-// 		fn, args := parseCall(star.X)
-// 		return strings.ToUpper(getName(fn)), args
-// 	}
-// 	return "", nil
-// }
-
 func parseCall(exp ast.Expr) (ast.Expr, []ast.Expr) {
 	switch call := exp.(type) {
 	case *ast.CompositeLit:
@@ -1030,53 +913,6 @@ func parseAggregator(exp ast.Expr) (Aggregator, error) {
 	}
 	return nil, errors.Errorf("Invalid aggregator name %q", name)
 }
-
-// func parseTime(exp ast.Expr, now time.Time) (time.Time, error) {
-// 	if exp == nil {
-// 		return now, nil
-// 	}
-// 	switch exp := exp.(type) {
-// 	case *ast.BasicLit:
-// 		switch lit := exp; lit.Kind {
-// 		case token.STRING:
-// 			v, err := strconv.Unquote(lit.Value)
-// 			if err != nil {
-// 				return time.Time{}, err
-// 			}
-// 			if strings.ToLower(v) == "now" {
-// 				return now, nil
-// 			}
-// 			return time.Parse(time.RFC3339Nano, v)
-// 		case token.INT:
-// 			n, err := strconv.ParseInt(lit.Value, 10, 64)
-// 			if err != nil {
-// 				return time.Time{}, errors.Errorf("Invalid timestamp value: %s", err)
-// 			}
-// 			return time.Unix(n, 0), nil
-// 		default:
-// 			return time.Time{}, errors.Errorf("Invalid time literal %s", exp)
-// 		}
-// 	case *ast.Ident:
-// 		switch strings.ToLower(exp.Name) {
-// 		case "now":
-// 			return now, nil
-// 		default:
-// 			return time.Time{}, errors.Errorf("Invalid time ident %s", exp.Name)
-// 		}
-// 	}
-// 	return time.Time{}, errors.Errorf("Invalid time expr: %s", reflect.TypeOf(exp))
-// }
-
-// func parseStrings(dst []string, exp ...ast.Expr) ([]string, error) {
-// 	for _, exp := range exp {
-// 		s, err := parseString(exp)
-// 		if err != nil {
-// 			return nil, err
-// 		}
-// 		dst = append(dst, s)
-// 	}
-// 	return dst, nil
-// }
 
 const y2k = 946684800
 

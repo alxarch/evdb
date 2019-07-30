@@ -96,3 +96,33 @@ func (results Results) ScanQuery(_ context.Context, q *ScanQuery) (Results, erro
 	return scan, nil
 
 }
+
+type ResultGroup struct {
+	Fields  Fields
+	Results Results
+}
+type GroupedResults []ResultGroup
+
+func (results Results) Group(empty string, by ...string) (groups GroupedResults) {
+	scratch := Fields(make([]Field, 0, len(by)))
+	for i := range results {
+		r := &results[i]
+		scratch = r.Fields.AppendGrouped(scratch[:0], empty, by)
+		groups = groups.add(scratch, r)
+	}
+	return groups
+
+}
+func (g GroupedResults) add(fields Fields, r *Result) GroupedResults {
+	for i := range g {
+		group := &g[i]
+		if group.Fields.Equal(fields) {
+			group.Results = append(group.Results, *r)
+			return g
+		}
+	}
+	return append(g, ResultGroup{
+		Fields:  fields.Copy(),
+		Results: Results{*r},
+	})
+}
