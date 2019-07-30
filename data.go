@@ -74,7 +74,7 @@ func (s DataPoints) Get(i int) *DataPoint {
 func (s DataPoints) SeekRight(ts int64) DataPoints {
 	for i := len(s) - 1; 0 <= i && i < len(s); i-- {
 		if d := &s[i]; d.Timestamp <= ts {
-			return s[:i]
+			return s[:i+1]
 		}
 	}
 	return nil
@@ -185,7 +185,7 @@ func fillData(v float64, start, end, step int64) (data DataPoints) {
 	if n < 0 {
 		return
 	}
-	data = make([]DataPoint, n)
+	data = make([]DataPoint, n+1)
 	for i := range data {
 		ts := start + int64(i)*step
 		data[i] = DataPoint{
