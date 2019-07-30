@@ -77,12 +77,14 @@ func (a *aggAvg) Reset() {
 }
 
 func (*aggAvg) Zero() float64 {
-	return 0
+	return math.NaN()
 }
 
 func (a *aggAvg) Aggregate(_, v float64) float64 {
-	a.sum += v
-	a.count++
+	if !math.IsNaN(v) {
+		a.sum += v
+		a.count++
+	}
 	return a.sum / a.count
 }
 

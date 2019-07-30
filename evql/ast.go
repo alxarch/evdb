@@ -3,6 +3,7 @@ package evql
 import (
 	"go/ast"
 	"go/token"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -10,12 +11,12 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
-// func unquote(lit *ast.BasicLit) (string, error) {
-// 	if lit.Kind == token.STRING {
-// 		return strconv.Unquote(lit.Value)
-// 	}
-// 	return lit.Value, nil
-// }
+func unquote(lit *ast.BasicLit) (string, error) {
+	if lit.Kind == token.STRING {
+		return strconv.Unquote(lit.Value)
+	}
+	return lit.Value, nil
+}
 
 func getName(e ast.Expr) string {
 	if e != nil {
@@ -43,14 +44,9 @@ func parseString(exp ast.Expr) (string, error) {
 	case *ast.Ident:
 		return exp.Name, nil
 	case *ast.BasicLit:
-		switch exp.Kind {
-		case token.STRING:
-			return strconv.Unquote(exp.Value)
-		default:
-			return exp.Value, nil
-		}
+		return unquote(exp)
 	default:
-		return "", errors.Errorf("Invalid string expression %s", exp)
+		return "", errors.Errorf("Invalid string expression type %s", reflect.TypeOf(exp))
 	}
 }
 
@@ -109,14 +105,14 @@ func parseAggFn(exp ast.Expr) (prefix byte, name string, args []ast.Expr) {
 }
 
 func parseAggregator(exp ast.Expr) (Aggregator, error) {
-	fn, err := parseString(exp)
+	name, err := parseString(exp)
 	if err != nil {
 		return nil, err
 	}
-	if a := NewAggregator(fn); a != nil {
+	if a := NewAggregator(name); a != nil {
 		return a, nil
 	}
-	return nil, errors.Errorf("Invalid aggregator name: %q", fn)
+	return nil, errors.Errorf("Invalid aggregator name %q", name)
 }
 
 // func parseTime(exp ast.Expr, now time.Time) (time.Time, error) {

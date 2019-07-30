@@ -46,6 +46,9 @@ func (p *Parser) Reset(query string) error {
 	}
 	root, err := p.parseSelectBlock(&s, body.List...)
 	if err != nil {
+		if err, ok := err.(*nodeError); ok {
+			return err.ParseError(fset)
+		}
 		return err
 	}
 	p.root = blockNode(root.Select)
@@ -58,12 +61,12 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 	switch strings.ToUpper(clause) {
 	case "SELECT":
 		if op != token.MUL {
-			return p.Errorf(exp, "Invalid SELECT clause %s%s", op, clause)
+			return errorf(exp, "Invalid SELECT clause %s%s", op, clause)
 		}
 		return nil
 	case "WHERE":
 		if s.Match != nil {
-			return p.Errorf(exp, "Duplicate WHERE clause %s%s", op, clause)
+			return errorf(exp, "Duplicate WHERE clause %s%s", op, clause)
 		}
 		switch op {
 		case token.ADD:
@@ -82,7 +85,7 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 		case token.MUL:
 			s.Match, err = p.parseMatchArgs(nil, args...)
 		default:
-			return p.Errorf(exp, "Invalid WHERE clause %s%s", op, clause)
+			return errorf(exp, "Invalid WHERE clause %s%s", op, clause)
 		}
 	case "OFFSET":
 		if len(args) == 2 {
@@ -98,12 +101,12 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 			case token.MUL:
 				s.Offset = d
 			default:
-				return p.Errorf(fn, "Invalid clause %s%s", op, clause)
+				return errorf(fn, "Invalid clause %s%s", op, clause)
 			}
 			return nil
 
 		}
-		return p.Errorf(exp, "Invalid OFFSET clause")
+		return errorf(exp, "Invalid OFFSET clause")
 	// case "GROUP":
 	// 	if s.Agg != nil {
 	// 		return p.Errorf(exp, "Duplicate GROUP clause")
@@ -115,14 +118,14 @@ func (p *Parser) parseClause(s, parent *selectBlock, op token.Token, exp ast.Exp
 
 	case "BY", "GROUP", "GROUPBY":
 		if s.Group != nil {
-			return p.Errorf(exp, "Duplicate GROUP clause %s%s", op, clause)
+			return errorf(exp, "Duplicate GROUP clause %s%s", op, clause)
 		}
 		if op != token.MUL {
-			return p.Errorf(exp, "Invalid BY clause")
+			return errorf(exp, "Invalid BY clause")
 		}
 		return p.parseGroupClause(s, args...)
 	default:
-		return p.Errorf(fn, "Invalid clause %s%s", op, clause)
+		return errorf(fn, "Invalid clause %s%s", op, clause)
 	}
 	return
 }
@@ -135,22 +138,22 @@ func (p *Parser) parseGroupClause(s *selectBlock, args ...ast.Expr) (err error) 
 			case "agg":
 				agg, err := parseAggregator(arg.Value)
 				if err != nil {
-					return p.Error(arg.Value, err)
+					return errorf(arg.Value, "Invalid agg argument: %s", err)
 				}
 				s.Agg = agg
 			case "empty":
 				empty, err := parseString(arg.Value)
 				if err != nil {
-					return p.Error(arg.Value, err)
+					return errorf(arg.Value, "Invalid empty argument: %s", err)
 				}
 				s.Empty = empty
 			default:
-				return p.Errorf(arg.Key, "Invalid keyrord argument: %q", key)
+				return errorf(arg.Key, "Invalid keyrord argument: %q", key)
 			}
 		default:
 			v, err := parseString(arg)
 			if err != nil {
-				return p.Errorf(arg, "Invalid group label arg: %s", err)
+				return errorf(arg, "Invalid group label arg: %s", err)
 			}
 			labels = append(labels, v)
 		}
@@ -220,7 +223,7 @@ func (p *Parser) parseSelectBlock(s *selectBlock, stmts ...ast.Stmt) (*selectBlo
 				return nil, err
 			}
 		default:
-			return nil, p.Errorf(stmt, "Invalid block statement")
+			return nil, errorf(stmt, "Invalid block statement")
 		}
 	}
 
@@ -234,7 +237,7 @@ func (p *Parser) parseSelectClause(s *selectBlock, star *ast.StarExpr) error {
 		return nil
 	}
 	if s.Select != nil {
-		return p.Errorf(star, "Duplicate SELECT clause")
+		return errorf(star, "Duplicate SELECT clause")
 	}
 	s.Select = make([]evalNode, 0, len(args))
 	for _, a := range args {
@@ -267,7 +270,7 @@ func (p *Parser) parseSelectExpr(s *selectBlock, e ast.Expr) error {
 		s.Select = append(s.Select, &e)
 		return nil
 	default:
-		return p.Errorf(e, "Invalid aggregate expresion without GROUP clause")
+		return errorf(e, "Invalid aggregate expresion without GROUP clause")
 	}
 }
 
@@ -279,19 +282,19 @@ func (p *Parser) parseValueNode(s *selectBlock, exp *ast.BasicLit) (*valueNode, 
 	case token.INT:
 		n, err := strconv.ParseInt(exp.Value, 10, 64)
 		if err != nil {
-			return nil, p.Error(exp, err)
+			return nil, errorf(exp, "Failed to parse value: %s", err)
 		}
 		v.Value = float64(n)
 		return &v, nil
 	case token.FLOAT:
 		f, err := strconv.ParseFloat(exp.Value, 64)
 		if err != nil {
-			return nil, p.Error(exp, err)
+			return nil, errorf(exp, "Failed to parse value: %s", err)
 		}
 		v.Value = f
 		return &v, nil
 	default:
-		return nil, p.Errorf(exp, "Invalid scalar value")
+		return nil, errorf(exp, "Invalid scalar value %s", reflect.TypeOf(exp))
 	}
 }
 
@@ -306,7 +309,7 @@ func (p *Parser) parseResult(agg Aggregator, s *selectBlock, e ast.Expr) (aggRes
 	case *ast.BinaryExpr:
 		m := NewMerger(exp.Op)
 		if m == nil {
-			return nil, p.Errorf(exp, "Invalid result operation %q", exp.Op)
+			return nil, errorf(exp, "Invalid result operation %q", exp.Op)
 		}
 		x, err := p.parseResult(agg, s, exp.X)
 		if err != nil {
@@ -362,18 +365,18 @@ func (p *Parser) parseScanResult(s *selectBlock, exp ast.Expr) (*scanResultNode,
 			Offset: s.Offset,
 		}, nil
 	default:
-		return nil, p.Errorf(exp, "Invalid scan result")
+		return nil, errorf(exp, "Invalid scan result")
 	}
 }
 
 func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) (aggResult, error) {
 	if exp.Op != token.NOT {
-		return nil, p.Errorf(exp, "Invalid aggregator keyword prefix %q", exp.Op)
+		return nil, errorf(exp, "Invalid aggregator keyword prefix %q", exp.Op)
 	}
 	prefix, name, args := parseAggFn(exp.X)
 	agg := NewAggregator(name)
 	if agg == nil {
-		return nil, p.Errorf(exp, "Invalid aggregator %s%s", exp.Op, name)
+		return nil, errorf(exp, "Invalid aggregator %s%s", exp.Op, name)
 	}
 	if prefix == 'Z' {
 		z := zipAggNode{
@@ -391,9 +394,9 @@ func (p *Parser) parseAggExpr(a Aggregator, s *selectBlock, exp *ast.UnaryExpr) 
 	}
 	if len(args) != 1 {
 		if len(args) == 0 {
-			return nil, p.Errorf(exp, "No arguments for %s%s", exp.Op, name)
+			return nil, errorf(exp, "No arguments for %s%s", exp.Op, name)
 		}
-		return nil, p.Errorf(exp, "Too many arguments for %s%s", exp.Op, name)
+		return nil, errorf(exp, "Too many arguments for %s%s", exp.Op, name)
 	}
 
 	if prefix == 'V' {
@@ -422,25 +425,25 @@ func (p *Parser) Queries(t db.TimeRange) []db.ScanQuery {
 	return nodeQueries(nil, &t, p.root)
 }
 
-func (p *Parser) Error(exp ast.Node, err error) error {
-	// panic(err)
-	pos := p.fset.Position(exp.Pos())
-	return errors.Errorf(`Parse error at position %s: %s`, pos, err)
-}
+// func (p *Parser) Error(exp ast.Node, err error) error {
+// 	// panic(err)
+// 	pos := p.fset.Position(exp.Pos())
+// 	return errors.Errorf(`Parse error at position %s: %s`, pos, err)
+// }
 
-func (p *Parser) Errorf(exp ast.Node, msg string, args ...interface{}) error {
-	return p.Error(exp, errors.Errorf(msg, args...))
-}
+// func (p *Parser) Errorf(exp ast.Node, msg string, args ...interface{}) error {
+// 	return p.Error(exp, errors.Errorf(msg, args...))
+// }
 
 func (p *Parser) parseScanOffset(lo, hi ast.Expr) (time.Duration, error) {
 	n, ok := parseOffset(lo)
 	if !ok {
-		return 0, p.Errorf(lo, "Invalid offset")
+		return 0, errorf(lo, "Invalid offset")
 	}
 	name := getName(hi)
 	unit := durationUnit(name)
 	if unit == 0 {
-		return 0, p.Errorf(lo, "Invalid unit %q", name)
+		return 0, errorf(lo, "Invalid unit %q", name)
 	}
 	return time.Duration(n) * unit, nil
 }
@@ -449,7 +452,7 @@ func (p *Parser) parseMatchAny(values []string, exp ast.Expr) ([]string, error) 
 	switch exp := exp.(type) {
 	case *ast.BinaryExpr:
 		if exp.Op != token.OR {
-			return nil, p.Errorf(exp, "Invalid op %q", exp.Op)
+			return nil, errorf(exp, "Invalid op %q", exp.Op)
 		}
 		var err error
 		values, err = p.parseMatchAny(values, exp.X)
@@ -460,9 +463,9 @@ func (p *Parser) parseMatchAny(values []string, exp ast.Expr) ([]string, error) 
 	case *ast.BasicLit:
 		switch exp.Kind {
 		case token.STRING:
-			s, err := strconv.Unquote(exp.Value)
+			s, err := unquote(exp)
 			if err != nil {
-				return nil, p.Error(exp, err)
+				return nil, errorf(exp, "Invalid match value: %s", err)
 			}
 			return append(values, s), nil
 		default:
@@ -471,7 +474,7 @@ func (p *Parser) parseMatchAny(values []string, exp ast.Expr) ([]string, error) 
 	case *ast.Ident:
 		return append(values, exp.Name), nil
 	default:
-		return nil, p.Errorf(exp, "Invalid match any expression")
+		return nil, errorf(exp, "Invalid match any expression")
 	}
 }
 
@@ -481,15 +484,15 @@ func (p *Parser) parseMatcher(exp ast.Expr) (db.Matcher, error) {
 		fn, args := parseCall(exp.X)
 		name := getName(fn)
 		if len(args) != 1 {
-			return nil, p.Errorf(exp, "Invalid matcher %s%s", exp.Op, name)
+			return nil, errorf(exp, "Invalid matcher %s%s", exp.Op, name)
 		}
 		if exp.Op != token.NOT {
-			return nil, p.Errorf(exp, "Invalid matcher %s%s", exp.Op, name)
+			return nil, errorf(exp, "Invalid matcher %s%s", exp.Op, name)
 		}
 		arg := args[0]
 		v, err := parseString(arg)
 		if err != nil {
-			return nil, p.Errorf(exp, "Invalid arg for matcher %s%s: %s", exp.Op, name, err)
+			return nil, errorf(exp, "Invalid arg for matcher %s%s: %s", exp.Op, name, err)
 		}
 		switch strings.ToLower(name) {
 		case "regexp":
@@ -499,7 +502,7 @@ func (p *Parser) parseMatcher(exp ast.Expr) (db.Matcher, error) {
 		case "suffix":
 			return db.MatchSuffix(v), nil
 		default:
-			return nil, p.Errorf(fn, "Invalid matcher %s%s", exp.Op, name)
+			return nil, errorf(fn, "Invalid matcher %s%s", exp.Op, name)
 		}
 	default:
 		values, err := p.parseMatchAny(nil, exp)
@@ -521,7 +524,7 @@ func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
 		if d := durationUnit(exp.Name); d > 0 {
 			return d, nil
 		}
-		return 0, p.Errorf(exp, "Invalid duration unit %q", exp.Name)
+		return 0, errorf(exp, "Invalid duration unit %q", exp.Name)
 	case *ast.BinaryExpr:
 		x, err := p.parseDuration(exp.X)
 		if err != nil {
@@ -543,7 +546,7 @@ func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
 		case token.QUO:
 			return x / y, nil
 		default:
-			return 0, p.Errorf(exp, "Invalid duration operand %q", exp.Op)
+			return 0, errorf(exp, "Invalid duration operand %q", exp.Op)
 		}
 	case *ast.BasicLit:
 		v := exp.Value
@@ -561,10 +564,10 @@ func (p *Parser) parseDuration(exp ast.Expr) (time.Duration, error) {
 			n, err := strconv.ParseInt(v, 10, 64)
 			return time.Duration(n), err
 		default:
-			return 0, p.Errorf(exp, "Invalid duration literal %s", exp.Kind)
+			return 0, errorf(exp, "Invalid duration literal %s", exp.Kind)
 		}
 	default:
-		return 0, p.Errorf(exp, "Invalid duration expression")
+		return 0, errorf(exp, "Invalid duration expression")
 	}
 }
 
@@ -601,17 +604,17 @@ func (p *Parser) parseMatchArgs(match db.MatchFields, args ...ast.Expr) (db.Matc
 	for _, el := range args {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {
-			return nil, p.Errorf(el, "Invalid match expr type %s", reflect.TypeOf(el))
+			return nil, errorf(el, "Invalid match expr type %s", reflect.TypeOf(el))
 		}
-		key, err := parseString(kv.Key)
+		label, err := parseString(kv.Key)
 		if err != nil {
-			return nil, p.Errorf(kv.Key, "Failed to parse match label: %s", err)
+			return nil, errorf(kv.Key, "Failed to parse match label: %s", err)
 		}
-		matcher, err := p.parseMatcher(kv.Value)
+		m, err := p.parseMatcher(kv.Value)
 		if err != nil {
-			return nil, errors.Errorf("Failed to parse match values for label %q: %s", key, err)
+			return nil, errors.Errorf("Failed to parse match values for label %q: %s", label, err)
 		}
-		match[key] = matcher
+		match = match.Set(label, m)
 	}
 	return match, nil
 }
@@ -656,49 +659,6 @@ func (s *selectBlock) GroupNode() *groupNode {
 	}
 }
 
-var _ = `
-
-!match{country: GR|US|RU}
-
-bid{ex: epom} / win[-1:h] * 2
-!group{country}
-{
-	*match{country: GR}
-	!avg{
-		bid{color: blue},
-		bid{color: green}[-1:week],
-		bid{color: red},
-	}
-
-}
-
-{
-	+WHERE{}
-	!WHERE{foo: bar}
-	!GROUP{avg}
-	!BY{foo, bar, baz}
-}
-{
-	*match{foo: bar}
-	!avg{bid / bid[-1h]} + !sum{foo/bar}
-	*by{country, cid, empty: true}
-}
-!sum{
-	*match{foo: !rx{"bar$"}},
-	*match{foo: !suffix{"bar"}},
-	*match{foo: !prefix{"bar"}},
-	goo -
-	foo{bar: baz}[-1h],
-	*by{goo, bar, baz, empty: "-"},
-}
-
-
-!match{foo: baz}
-foo / !!avg{bar, goo}  
-
-
-`
-
 type namedAggResult struct {
 	aggResult
 	Name string
@@ -736,6 +696,11 @@ func nodeQueries(dst []db.ScanQuery, t *db.TimeRange, n noder) []db.ScanQuery {
 	case *aggOp:
 		dst = nodeQueries(dst, t, n.X)
 		dst = nodeQueries(dst, t, n.Y)
+		return dst
+	case *zipAggNode:
+		for _, n := range n.Nodes {
+			dst = nodeQueries(dst, t, n)
+		}
 		return dst
 	case *groupNode:
 		for _, n := range n.Nodes {

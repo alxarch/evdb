@@ -17,8 +17,8 @@ type querier struct {
 
 // Query implements Querier interface
 func (s *querier) Query(ctx context.Context, t evdb.TimeRange, q string) ([]interface{}, error) {
-	p := new(Parser)
-	if err := p.Reset(q); err != nil {
+	p, err := ParseQuery(q)
+	if err != nil {
 		return nil, err
 	}
 	r, err := s.Scanner.Scan(ctx, p.Queries(t)...)
@@ -38,4 +38,12 @@ func NewQuerier(scanner evdb.Scanner) Querier {
 	}
 	return &querier{scanner}
 
+}
+
+func ParseQuery(q string) (*Parser, error) {
+	p := new(Parser)
+	if err := p.Reset(q); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
