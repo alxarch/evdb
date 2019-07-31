@@ -53,7 +53,7 @@ func main() {
 	srv := http.Server{
 		Addr:     *addr,
 		ErrorLog: logError,
-		Handler:  evhttp.DefaultMux(db, events...),
+		Handler:  evhttp.DefaultMux(db, db),
 	}
 	if prefix := *basePath; prefix != "" {
 		prefix = "/" + strings.Trim(prefix, "/")

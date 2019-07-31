@@ -7,24 +7,23 @@ import (
 )
 
 // DefaultMux creates an HTTP endpoint for a evdb.DB
-func DefaultMux(db evdb.DB, events ...string) http.Handler {
+func DefaultMux(r evdb.Scanner, w evdb.Store) http.Handler {
 	mux := http.NewServeMux()
-	for _, event := range events {
-		storer := db.Storer(event)
-		handler := StoreHandler(storer)
-		handler = InflateRequest(handler)
-		mux.HandleFunc("/store/"+event, handler)
-	}
-	mux.HandleFunc("/scan", ScanQueryHandler(db))
-	mux.HandleFunc("/query", QueryHandler(db))
+	mux.HandleFunc("/scan", ScanQueryHandler(r))
+	mux.HandleFunc("/query", QueryHandler(r))
 	mux.HandleFunc("/", serveIndexHTML)
 	mux.HandleFunc("/index.html", serveIndexHTML)
+	if w != nil {
+		h := StoreHandler(w, "/store/")
+		h = InflateRequest(h)
+		mux.HandleFunc("/store/", h)
+	}
 	return mux
 }
 
 func serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 	const indexHTML = `
-<form method="POST">
+<form method="POST" action="query">
 <fieldset>
 <label for="start">Start: <input name="start" type="date"/></label>
 <label for="end">End: <input name="end" type="date"/></label>

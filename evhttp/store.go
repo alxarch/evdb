@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,25 +50,47 @@ func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	return
 }
 
-// StoreHandler returns an HTTP endpoint for an EventStore
-func StoreHandler(s meter.Storer) http.HandlerFunc {
+// StoreHandler returns an HTTP handler for a Store
+func StoreHandler(store meter.Store, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
-		req := meter.Snapshot{}
-		dec := json.NewDecoder(r.Body)
-		if err := dec.Decode(&req); err != nil {
-			httperr.RespondJSON(w, httperr.BadRequest(err))
+		path := r.URL.Path
+		path = strings.TrimPrefix(path, prefix)
+		event := strings.Trim(path, "/")
+		s := store.Storer(event)
+		if s == nil {
+			httperr.RespondJSON(w, httperr.NotFound(nil))
 			return
 		}
-		if req.Time.IsZero() {
-			req.Time = time.Now()
-		}
-		if err := s.Store(&req); err != nil {
-			httperr.RespondJSON(w, err)
-			return
-		}
-		httperr.RespondJSON(w, json.RawMessage(`{"statusCode":200,"message":"OK"}`))
+		h := storeHandler{s}
+		h.ServeHTTP(w, r)
 	}
+}
+
+type storeHandler struct {
+	meter.Storer
+}
+
+func (h *storeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	s := meter.Snapshot{}
+	dec := json.NewDecoder(r.Body)
+	if err := dec.Decode(&s); err != nil {
+		httperr.RespondJSON(w, httperr.BadRequest(err))
+		return
+	}
+	if s.Time.IsZero() {
+		s.Time = time.Now()
+	}
+	if err := h.Store(&s); err != nil {
+		httperr.RespondJSON(w, err)
+		return
+	}
+	httperr.RespondJSON(w, json.RawMessage(`{"statusCode":200,"message":"OK"}`))
+}
+
+// NewStoreHandler returns an HTTP endpoint for a Storer
+func NewStoreHandler(s meter.Storer) http.Handler {
+	return &storeHandler{s}
 }
 
 // InflateRequest middleware inflates request body

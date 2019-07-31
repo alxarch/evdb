@@ -8,6 +8,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/alxarch/evdb/evutil"
+
 	errors "golang.org/x/xerrors"
 
 	"github.com/alxarch/evdb"
@@ -20,6 +22,7 @@ type DB struct {
 	evdb.Scanner
 	badger *badger.DB
 	events map[string]*eventDB
+	extra  evutil.SyncStore
 }
 
 var _ evdb.DB = (*DB)(nil)
@@ -47,12 +50,35 @@ func Open(b *badger.DB, events ...string) (*DB, error) {
 	return &db, nil
 }
 
-// Storer implements Storerer interface
-func (db *DB) Storer(event string) evdb.Storer {
-	if e, ok := db.events[event]; ok {
-		return e
+// Register creates a new storer
+func (db *DB) Register(event string) (evdb.Storer, error) {
+	if w := db.Storer(event); w != nil {
+		return w, nil
 	}
-	return nil
+	ids, err := loadEventIDs(db.badger, event)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) == 1 {
+		id := ids[0]
+		e := eventDB{
+			badger: db.badger,
+			id:     eventID(id),
+		}
+		if db.extra.Register(event, &e) {
+			return &e, nil
+		}
+		return db.extra.Storer(event), nil
+	}
+	return nil, errors.Errorf("Could not register event")
+}
+
+// Storer implements Store interface
+func (db *DB) Storer(event string) evdb.Storer {
+	if w, ok := db.events[event]; ok {
+		return w
+	}
+	return db.extra.Storer(event)
 }
 
 // ScanQuery implements evdb.ScanQuerier interface
@@ -205,7 +231,7 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 		// Serialize registered event names
 		v := blob.WriteStrings(nil, dbEvents)
 
-		// Store event names
+		// Store event names at zero key
 		var key keyBuffer
 		if err := txn.Set(key[:], v); err != nil {
 			return nil, err

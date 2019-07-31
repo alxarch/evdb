@@ -22,6 +22,7 @@ type DB struct {
 	scanSize    int64
 	events      map[string]evdb.Storer
 	resolutions map[time.Duration]Resolution
+	extra       evutil.SyncStore
 }
 
 var _ evdb.DB = (*DB)(nil)
@@ -51,6 +52,20 @@ func Open(options Options, events ...string) (*DB, error) {
 	}
 	db.Scanner = evdb.NewScanner(&db)
 	return &db, nil
+}
+
+// Register registers a new event
+func (db *DB) Register(event string) (evdb.Storer, error) {
+	if w, ok := db.events[event]; ok {
+		return w, nil
+	}
+	if w := db.extra.Storer(event); w != nil {
+		return w, nil
+	}
+	if w := db.storer(event); db.extra.Register(event, w) {
+		return w, nil
+	}
+	return db.extra.Storer(event), nil
 }
 
 // Storer provides a Storer for an event

@@ -22,6 +22,7 @@ type MemoryStorer struct {
 	data []db.Snapshot
 }
 
+// MemoryStore is a Store collecting snapshots in memory
 type MemoryStore map[string]*MemoryStorer
 
 // Last retuns the last posted StoreRequest
@@ -49,6 +50,7 @@ func (m *MemoryStorer) Store(s *db.Snapshot) error {
 	return errors.New("Invalid time")
 }
 
+// NewMemoryStore creates a new MemoryStore
 func NewMemoryStore(events ...string) MemoryStore {
 	store := make(map[string]*MemoryStorer, len(events))
 	for _, e := range events {
@@ -56,6 +58,8 @@ func NewMemoryStore(events ...string) MemoryStore {
 	}
 	return store
 }
+
+// Storer implements Store interface
 func (m MemoryStore) Storer(event string) db.Storer {
 	if s := m[event]; s != nil {
 		return s
@@ -111,6 +115,13 @@ func TeeStore(stores ...db.Storer) db.Storer {
 
 type teeStorer []db.Storer
 
+func (tee teeStorer) Add(s db.Storer) teeStorer {
+	if s, ok := s.(teeStorer); ok {
+		return append(tee, s...)
+	}
+	return append(tee, s)
+}
+
 func (tee teeStorer) Store(s *db.Snapshot) error {
 	if len(tee) == 0 {
 		return nil
@@ -138,66 +149,101 @@ func (tee teeStorer) Store(s *db.Snapshot) error {
 	return nil
 }
 
+// MuxStore maps event names to Storers
 type MuxStore map[string]db.Storer
 
-func (m MuxStore) Add(s db.Storer, events ...string) MuxStore {
-	if m == nil {
-		m = make(map[string]db.Storer)
-	}
-	for _, event := range events {
-		m[event] = s
-	}
-	return m
-
-}
+// Storer implements Store interface
 func (m MuxStore) Storer(event string) db.Storer {
 	return m[event]
 }
 
-type MuxScanner map[string]db.ScanQuerier
-
-func (m MuxScanner) Add(s db.ScanQuerier, events ...string) MuxScanner {
+// Set sets a Storer for an event
+func (m MuxStore) Set(event string, s db.Storer) MuxStore {
 	if m == nil {
-		m = make(map[string]db.ScanQuerier)
+		m = make(map[string]db.Storer)
 	}
-	for _, event := range events {
-		m[event] = s
-	}
+	m[event] = s
 	return m
+}
+
+// Add set an additional Storer for an event
+func (m MuxStore) Add(event string, s db.Storer) (MuxStore, db.Storer) {
+	if m == nil {
+		m = make(map[string]db.Storer)
+		m[event] = s
+		return m, s
+	}
+	p := m[event]
+	if p == nil {
+		m[event] = s
+		return m, s
+	}
+	if p, ok := p.(teeStorer); ok {
+		p = p.Add(s)
+		m[event] = p
+		return m, p
+	}
+	var tee teeStorer
+	tee = tee.Add(p)
+	tee = tee.Add(s)
+	m[event] = tee
+	return m, tee
 
 }
 
-func (m MuxScanner) Scan(ctx context.Context, queries ...db.ScanQuery) (db.Results, error) {
-	queries = db.ScanQueries(queries).Compact()
-	wg := new(sync.WaitGroup)
-	errc := make(chan error, len(queries))
-	var out db.Results
-	var mu sync.Mutex
-	for i := range queries {
-		q := &queries[i]
-		s := m[q.Event]
-		if s == nil {
-			continue
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// Merge all overlapping queries
-			results, err := s.ScanQuery(ctx, q)
-			if err == nil {
-				mu.Lock()
-				out = append(out, results...)
-				mu.Unlock()
-			}
-			errc <- err
-		}()
+// SyncStore provides a mutable Store safe for concurrent use
+type SyncStore struct {
+	mu  sync.RWMutex
+	mux MuxStore
+}
+
+// Storer implements Store interface
+func (s *SyncStore) Storer(event string) (w db.Storer) {
+	s.mu.RLock()
+	w = s.mux.Storer(event)
+	s.mu.RUnlock()
+	return
+}
+
+// Register sets the Storer if none exists
+func (s *SyncStore) Register(event string, w db.Storer) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, duplicate := s.mux[event]; duplicate {
+		return false
 	}
-	wg.Wait()
-	close(errc)
-	for err := range errc {
-		if err != nil {
-			return nil, err
-		}
+	s.mux = s.mux.Set(event, w)
+	return true
+}
+
+// Set sets the Storer for an event
+func (s *SyncStore) Set(event string, w db.Storer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mux = s.mux.Set(event, w)
+}
+
+// Add sets an additional Storer for an event
+func (s *SyncStore) Add(event string, w db.Storer) db.Storer {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mux, w = s.mux.Add(event, w)
+	return w
+}
+
+// AutoStore is a Store that creates a new Storer if it is not Registered
+type AutoStore struct {
+	New   func(event string) db.Storer
+	store SyncStore
+}
+
+// Storer implements Store interface
+func (a *AutoStore) Storer(event string) (w db.Storer) {
+	if w := a.store.Storer(event); w != nil {
+		return w
 	}
-	return out, nil
+	if w := a.New(event); w != nil && a.store.Register(event, w) {
+		return w
+	}
+	return a.store.Storer(event)
 }
