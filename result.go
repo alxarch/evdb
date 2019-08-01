@@ -3,7 +3,6 @@ package evdb
 import (
 	"context"
 	"encoding/json"
-	"strings"
 )
 
 // Result is a query result
@@ -126,40 +125,4 @@ func (g GroupedResults) add(fields Fields, r *Result) GroupedResults {
 		Fields:  fields.Copy(),
 		Results: Results{*r},
 	})
-}
-
-func FlattenResults(multi ...Results) (flat Results) {
-	for _, m := range multi {
-		for _, r := range m {
-			flat = append(flat, r)
-		}
-	}
-	return
-}
-
-// FormatResults convers results to requested format
-func FormatResults(format string, rows ...Results) (interface{}, bool) {
-	switch strings.ToLower(format) {
-	case "table":
-		rr := FlattenResults(rows...)
-		tbl := rr.EventSummaries("").Table()
-		return tbl, true
-	case "totals":
-		var totals []Totals
-		for _, row := range rows {
-			totals = append(totals, row.Totals())
-		}
-		return totals, true
-	case "events":
-		var sums []FieldSummaries
-		for _, row := range rows {
-			sums = append(sums, row.FieldSummaries())
-		}
-		return sums, true
-	case "", "results":
-		return rows, true
-	default:
-		return nil, false
-	}
-
 }

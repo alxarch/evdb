@@ -1,17 +1,58 @@
-package evdb
+package evutil
 
-import "sort"
+import (
+	"sort"
+	"strings"
+
+	db "github.com/alxarch/evdb"
+)
+
+func FlattenResults(multi ...db.Results) (flat db.Results) {
+	for _, m := range multi {
+		for _, r := range m {
+			flat = append(flat, r)
+		}
+	}
+	return
+}
+
+// FormatResults convers results to requested format
+func FormatResults(format string, rows ...db.Results) (interface{}, bool) {
+	switch strings.ToLower(format) {
+	case "table":
+		rr := FlattenResults(rows...)
+		tbl := NewEventSummaries("", rr).Table()
+		return tbl, true
+	case "totals":
+		var totals []Totals
+		for _, row := range rows {
+			totals = append(totals, NewTotals(row))
+		}
+		return totals, true
+	case "events":
+		var sums []FieldSummaries
+		for _, row := range rows {
+			sums = append(sums, NewFieldSummaries(row))
+		}
+		return sums, true
+	case "", "results":
+		return rows, true
+	default:
+		return nil, false
+	}
+
+}
 
 type Total struct {
-	Event  string  `json:"event"`
-	Fields Fields  `json:"fields,omitempty"`
-	Total  float64 `json:"total"`
+	Event  string    `json:"event"`
+	Fields db.Fields `json:"fields,omitempty"`
+	Total  float64   `json:"total"`
 }
 
 type Totals []Total
 
 // Totals returns a totals-only Results slice
-func (results Results) Totals() (totals Totals) {
+func NewTotals(results db.Results) (totals Totals) {
 	totals = make([]Total, len(results))
 	for i := range results {
 		r := &results[i]
@@ -43,7 +84,7 @@ func (s *FieldSummary) Add(value string, n float64) {
 type FieldSummaries []FieldSummary
 
 // FieldSummaries converts a series of results to a slice of FieldSummary results
-func (results Results) FieldSummaries() (s FieldSummaries) {
+func NewFieldSummaries(results db.Results) (s FieldSummaries) {
 	for i := range results {
 		r := &results[i]
 		for j := range r.Fields {
@@ -82,8 +123,8 @@ type EventSummary struct {
 	Totals map[string]float64
 }
 
-// EventSummaries groups results as EventSummaries
-func (results Results) EventSummaries(empty string) *EventSummaries {
+// NewEventSummaries groups results as EventSummaries
+func NewEventSummaries(empty string, results db.Results) *EventSummaries {
 	s := new(EventSummaries)
 	for i := range results {
 		r := &results[i]
@@ -156,4 +197,35 @@ func (s *EventSummaries) Table() Table {
 type Table struct {
 	Columns []interface{}   `json:"cols"`
 	Data    [][]interface{} `json:"data"`
+}
+
+func appendDistinct(dst []string, src ...string) []string {
+	for i, s := range src {
+		if indexOf(dst, s[:i]) == -1 {
+			dst = append(dst, s)
+		}
+	}
+	return dst
+}
+
+func indexOf(values []string, s string) int {
+	for i := 0; 0 <= i && i < len(values); i++ {
+		if values[i] == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func stringsEqual(a, b []string) bool {
+	if len(a) == len(b) {
+		b = b[:len(a)]
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

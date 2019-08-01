@@ -12,6 +12,7 @@ import (
 
 	"github.com/alxarch/evdb"
 	"github.com/alxarch/evdb/evql"
+	"github.com/alxarch/evdb/evutil"
 	"github.com/alxarch/httperr"
 	errors "golang.org/x/xerrors"
 )
@@ -125,7 +126,7 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 			return
 		}
 		rows := e.Eval(nil, q.TimeRange, results)
-		if out, ok := evdb.FormatResults(q.Format, rows...); ok {
+		if out, ok := evutil.FormatResults(q.Format, rows...); ok {
 			httperr.RespondJSON(w, out)
 			return
 		}

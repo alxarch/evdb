@@ -13,6 +13,7 @@ import (
 	"time"
 
 	db "github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/evutil"
 	errors "golang.org/x/xerrors"
 )
 
@@ -684,7 +685,7 @@ func (b selectNode) Eval(out []db.Results, t *db.TimeRange, results db.Results) 
 	for _, n := range b {
 		tmp = n.Eval(tmp, t, results)
 	}
-	if flat := db.FlattenResults(tmp...); len(flat) > 0 {
+	if flat := evutil.FlattenResults(tmp...); len(flat) > 0 {
 		out = append(out, flat)
 	}
 	return out
