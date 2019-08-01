@@ -50,6 +50,7 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 		case http.MethodGet:
 			values := r.URL.Query()
 			q.Query = values.Get("query")
+			q.Format = values.Get("format")
 			t, err := TimeRangeFromURL(values)
 			if err != nil {
 				httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -79,7 +80,7 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 				}
 				q.TimeRange = t
 				q.Query = values.Get("query")
-
+				q.Format = values.Get("format")
 			case "application/json":
 				if err := json.Unmarshal(data, &q); err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -123,21 +124,28 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 			httperr.RespondJSON(w, errors.Errorf("Query evaluation failed: %s", err))
 			return
 		}
-		out := e.Eval(nil, q.TimeRange, results)
-		httperr.RespondJSON(w, out)
+		rows := e.Eval(nil, q.TimeRange, results)
+		if out, ok := evdb.FormatResults(q.Format, rows...); ok {
+			httperr.RespondJSON(w, out)
+			return
+		}
+		err = errors.Errorf("Invalid query format: %q", q.Format)
+		httperr.RespondJSON(w, httperr.BadRequest(err))
 	}
 }
 
 type query struct {
 	Query string
 	evdb.TimeRange
+	Format string
 }
 
 type jsonQuery struct {
-	Query string `json:"query"`
-	Start string `json:"start"`
-	End   string `json:"end"`
-	Step  string `json:"step"`
+	Query  string `json:"query"`
+	Format string `json:"format,omitempty"`
+	Start  string `json:"start"`
+	End    string `json:"end"`
+	Step   string `json:"step"`
 }
 
 func (q *query) MarshalJSON() ([]byte, error) {
@@ -156,6 +164,7 @@ func (q *query) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	q.Query = tmp.Query
+	q.Format = tmp.Format
 	start, err := ParseTime(tmp.Start)
 	if err != nil {
 		return err

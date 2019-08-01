@@ -11,7 +11,7 @@ import (
 
 // Execer executes evql queries
 type Execer interface {
-	Exec(ctx context.Context, t db.TimeRange, q string) ([]interface{}, error)
+	Exec(ctx context.Context, t db.TimeRange, q string) ([]db.Results, error)
 }
 
 type execer struct {
@@ -19,7 +19,7 @@ type execer struct {
 }
 
 // Exec implements Execer interface
-func (s *execer) Exec(ctx context.Context, t db.TimeRange, query string) ([]interface{}, error) {
+func (s *execer) Exec(ctx context.Context, t db.TimeRange, query string) ([]db.Results, error) {
 	q, err := Parse(query)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func Parse(query string) (*Query, error) {
 		}
 		return nil, err
 	}
-	root.nameResults(fset)
+	nameResults(fset, root)
 	q := Query{
 		root: root,
 	}
@@ -75,7 +75,7 @@ func (q *Query) Queries(t db.TimeRange) []db.ScanQuery {
 }
 
 // Eval executes the query against some results
-func (q *Query) Eval(out []interface{}, t db.TimeRange, results db.Results) []interface{} {
+func (q *Query) Eval(out []db.Results, t db.TimeRange, results db.Results) []db.Results {
 	if q.root != nil {
 		out = q.root.Eval(out, &t, results)
 	}

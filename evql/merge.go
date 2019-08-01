@@ -8,8 +8,7 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
-// Merger provides a method to merge values
-type Merger interface {
+type merger interface {
 	Merge(a, b float64) float64
 }
 
@@ -61,7 +60,7 @@ func (mergeMul) Merge(a, b float64) float64 {
 	return a * b
 }
 
-func NewMerger(op token.Token) Merger {
+func newMerger(op token.Token) merger {
 	switch op {
 	case token.ADD:
 		return mergeAdd{}
@@ -118,7 +117,7 @@ func NewMerger(op token.Token) Merger {
 
 // }
 
-func MergeData(m Merger, s, v evdb.DataPoints) error {
+func mergeData(m merger, s, v evdb.DataPoints) error {
 	if len(v) == len(s) {
 		v = v[:len(s)]
 		for i := range s {

@@ -91,6 +91,7 @@ func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
 		if err != nil {
 			httperr.RespondJSON(w, httperr.InternalServerError(err))
 		}
+
 		httperr.RespondJSON(w, results)
 	}
 }

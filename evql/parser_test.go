@@ -18,6 +18,7 @@ func TestParser_Reset(t *testing.T) {
 		{`foo`, false},
 		{`foo{bar: baz}`, false},
 		{`foo{bar: "baz"}`, false},
+		{`*GROUP{foo}; (foo/bar)/(foo[-1:h]/bar[-1:h])`, false},
 		{`foo{bar: baz|"foo-bar"|goo}`, false},
 		{`foo{bar: baz, bar: foo}`, false},
 		{`foo[-1:h]; *WHERE{foo: bar}; {*WHERE{bar: baz}; bar}`, false},
@@ -92,67 +93,65 @@ func TestParser(t *testing.T) {
 		query       string
 		tr          db.TimeRange
 		wantErr     bool
-		wantResults []interface{}
+		wantResults []db.Results
 	}{
-		{`foo`, tr, false, []interface{}{&all[0], &all[1]}},
-		{`foo{color: red}`, tr, false, []interface{}{&all[0], &all[1]}},
-		{`foo{color: blue}`, tr, false, nil},
-		{`foo{size: s|m}`, tr, false, []interface{}{&all[0], &all[1]}},
-		{`foo{size: s}`, tr, false, []interface{}{&all[0]}},
-		{`foo + bar; *BY{size}; *WHERE{color:blue|red}`, tr, false, []interface{}{
-			&db.Result{
+		{`foo`, tr, false, []db.Results{{all[0], all[1]}}},
+		{`foo{color: red}`, tr, false, []db.Results{{all[0], all[1]}}},
+		{`foo{color: blue}`, tr, false, []db.Results{{}}},
+		{`foo{color: blue}; *BY{size}`, tr, false, []db.Results{{}}},
+		{`foo{size: s|m}`, tr, false, []db.Results{{all[0], all[1]}}},
+		{`foo{size: s}`, tr, false, []db.Results{{all[0]}}},
+		{`foo + bar; *BY{size}; *WHERE{color:blue|red}`, tr, false, []db.Results{{
+			{
 				Event:     "foo + bar",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "s"}},
 				Data:      db.BlankData(&tr, 18),
 			},
-			&db.Result{
+			{
 				Event:     "foo + bar",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "xl"}},
 				Data:      db.BlankData(&tr, 11),
 			},
-			&db.Result{
+			{
 				Event:     "foo + bar",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "m"}},
 				Data:      db.BlankData(&tr, 9),
-			},
-		}},
-		{`!ZIPAVG{foo, bar}; *BY{size}`, tr, false, []interface{}{
-			&db.Result{
+			}}}},
+		{`!ZIPAVG{foo, bar}; *BY{size}`, tr, false, []db.Results{{
+			{
 				Event:     "!ZIPAVG{foo, bar}",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "s"}},
 				Data:      db.BlankData(&tr, 9),
 			},
-			&db.Result{
+			{
 				Event:     "!ZIPAVG{foo, bar}",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "xl"}},
 				Data:      db.BlankData(&tr, 11/2.0),
 			},
-			&db.Result{
+			{
 				Event:     "!ZIPAVG{foo, bar}",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "m"}},
 				Data:      db.BlankData(&tr, 9/2.0),
-			},
-		}},
-		{`!avg{foo}; *BY{size}`, tr, false, []interface{}{
-			&db.Result{
+			}}}},
+		{`!avg{foo}; *BY{size}`, tr, false, []db.Results{{
+			{
 				Event:     "!avg{foo}",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "s"}},
 				Data:      db.BlankData(&tr, 8),
 			},
-			&db.Result{
+			{
 				Event:     "!avg{foo}",
 				TimeRange: tr,
 				Fields:    db.Fields{{"size", "m"}},
 				Data:      db.BlankData(&tr, 9),
-			},
-		}},
+			}}}},
 		// {`foo{bar: baz}`, false},
 		// {`foo{bar: "baz"}`, false},
 		// {`foo{bar: baz|"foo-bar"|goo}`, false},
