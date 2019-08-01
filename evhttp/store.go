@@ -6,6 +6,8 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
+	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -20,7 +22,7 @@ type Storer struct {
 	URL string
 }
 
-// Store implements EventStore interface
+// Store implements Storer interface
 func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	body := getSyncBuffer()
 	defer putSyncBuffer(body)
@@ -48,6 +50,25 @@ func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	}
 	defer res.Body.Close()
 	return
+}
+
+// Store is implements Store over HTTP
+type Store struct {
+	HTTPClient
+	BaseURL string
+}
+
+// Storer implements Store interface
+func (s *Store) Storer(event string) meter.Storer {
+	u, err := url.Parse(s.BaseURL)
+	if err != nil {
+		return nil
+	}
+	u.Path = path.Join(u.Path, event)
+	return &Storer{
+		HTTPClient: s.HTTPClient,
+		URL:        u.String(),
+	}
 }
 
 // StoreHandler returns an HTTP handler for a Store

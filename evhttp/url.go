@@ -11,6 +11,7 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
+// TimeRangeURL sets URL query values for a TimeRange
 func TimeRangeURL(rawURL string, t *evdb.TimeRange) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -21,6 +22,8 @@ func TimeRangeURL(rawURL string, t *evdb.TimeRange) (string, error) {
 	u.RawQuery = values.Encode()
 	return u.String(), nil
 }
+
+// TimeRangeFromURL parses a TimeRange from URL query
 func TimeRangeFromURL(values url.Values) (t evdb.TimeRange, err error) {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
@@ -49,6 +52,7 @@ func TimeRangeFromURL(values url.Values) (t evdb.TimeRange, err error) {
 
 }
 
+// ScanURL sets URL query from a ScanQuery
 func ScanURL(baseURL string, q *evdb.ScanQuery) (string, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -75,6 +79,7 @@ func ScanQueryFromURL(values url.Values) (q evdb.ScanQuery, err error) {
 	return
 }
 
+// MatchFieldsFromURL parses MatchFields from URL query
 func MatchFieldsFromURL(values url.Values) (m evdb.MatchFields, err error) {
 	for key := range values {
 		if !strings.HasPrefix(key, "match.") {
@@ -108,12 +113,14 @@ func MatchFieldsFromURL(values url.Values) (m evdb.MatchFields, err error) {
 
 }
 
+// EncodeTimeRange sets URL query values for a TimeRange
 func EncodeTimeRange(values url.Values, q evdb.TimeRange) {
 	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
 	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
 	values.Set("step", q.Step.String())
 }
 
+// EncodeScanQuery sets URL query values for a ScanQuery
 func EncodeScanQuery(values url.Values, q *evdb.ScanQuery) error {
 	for label, m := range q.Fields {
 		switch m := m.(type) {

@@ -18,6 +18,7 @@ type ScanQuerier struct {
 	HTTPClient
 }
 
+// ScanQuery implements ScanQuerier interface
 func (s *ScanQuerier) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
 	u, err := ScanURL(s.URL, q)
 	if err != nil {
@@ -35,6 +36,7 @@ func (s *ScanQuerier) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Re
 
 }
 
+// ScanQueryHandler returns a handler that serves ScanQuery HTTP requests
 func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var queries []evdb.ScanQuery
