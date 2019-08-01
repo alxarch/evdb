@@ -27,15 +27,6 @@ func hashFNVa32(data []byte) uint32 {
 	return h
 }
 
-func indexOf(values []string, s string) int {
-	for i := 0; 0 <= i && i < len(values); i++ {
-		if values[i] == s {
-			return i
-		}
-	}
-	return -1
-}
-
 var buffers sync.Pool
 
 const kiB = 1024

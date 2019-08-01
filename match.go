@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/alxarch/evdb/internal/misc"
 )
 
 type Matcher interface {
@@ -78,7 +80,7 @@ func (prefix MatchPrefix) MatchString(s string) bool {
 // MatchAny creates a Matcher matching any value
 func MatchAny(values ...string) Matcher {
 	distinct := make([]string, 0, len(values))
-	distinct = appendDistinct(distinct, values...)
+	distinct = misc.AppendDistinct(distinct, values...)
 	for i, s := range distinct {
 		distinct[i] = regexp.QuoteMeta(s)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alxarch/evdb/evutil"
+	"github.com/alxarch/evdb/internal/misc"
 
 	errors "golang.org/x/xerrors"
 
@@ -217,7 +218,7 @@ func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
 	n := len(dbEvents)
 	ids := make([]eventID, len(events))
 	for i, event := range events {
-		id := indexOf(dbEvents, event) + 1
+		id := misc.IndexOf(dbEvents, event) + 1
 		if id == 0 {
 			// Event is not registered in DB
 			dbEvents = append(dbEvents, event)

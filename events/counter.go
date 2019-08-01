@@ -1,6 +1,7 @@
 package events
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -45,7 +46,17 @@ func (cs *Counters) Pack() {
 
 // Match checks if values match counter's own values
 func (c *Counter) Match(values []string) bool {
-	return stringsEqual(c.Values, values)
+	a, b := c.Values, values
+	if len(a) == len(b) {
+		b = b[:len(a)]
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // Add increments a counter matching values by n
@@ -180,10 +191,9 @@ func (s CounterSlice) Zero() {
 	}
 }
 
-// Flush appends counters to a CounterSlice and resets all counters to zero
 func (cs *Counters) Flush(s []Counter) []Counter {
-	src := cs.counters.counters
 	cs.mu.RLock()
+	src := cs.counters.counters
 	for i := range src {
 		c := &src[i]
 		s = append(s, Counter{
@@ -204,4 +214,28 @@ func NewCounters(size int) *Counters {
 		},
 	}
 	return &cs
+}
+
+func vdeepcopy(values []string) []string {
+	n := 0
+	b := strings.Builder{}
+	for _, v := range values {
+		n += len(v)
+	}
+	b.Grow(n)
+	for _, v := range values {
+		b.WriteString(v)
+	}
+	tmp := b.String()
+	cp := make([]string, len(values))
+	if len(cp) == len(values) {
+		cp = cp[:len(values)]
+		for i := range values {
+			n = len(values[i])
+			cp[i] = tmp[:n]
+			tmp = tmp[n:]
+		}
+	}
+	return cp
+
 }

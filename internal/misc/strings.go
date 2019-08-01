@@ -1,15 +1,15 @@
-package evdb
+package misc
 
-func appendDistinct(dst []string, src ...string) []string {
+func AppendDistinct(dst []string, src ...string) []string {
 	for i, s := range src {
-		if indexOf(dst, s[:i]) == -1 {
+		if IndexOf(dst, s[:i]) == -1 {
 			dst = append(dst, s)
 		}
 	}
 	return dst
 }
 
-func indexOf(values []string, s string) int {
+func IndexOf(values []string, s string) int {
 	for i := 0; 0 <= i && i < len(values); i++ {
 		if values[i] == s {
 			return i
@@ -18,7 +18,7 @@ func indexOf(values []string, s string) int {
 	return -1
 }
 
-func stringsEqual(a, b []string) bool {
+func StringsEqual(a, b []string) bool {
 	if len(a) == len(b) {
 		b = b[:len(a)]
 		for i := range a {

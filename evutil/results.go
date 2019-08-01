@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	db "github.com/alxarch/evdb"
+	"github.com/alxarch/evdb/internal/misc"
 )
 
 func FlattenResults(multi ...db.Results) (flat db.Results) {
@@ -128,10 +129,10 @@ func NewEventSummaries(empty string, results db.Results) *EventSummaries {
 	s := new(EventSummaries)
 	for i := range results {
 		r := &results[i]
-		s.Events = appendDistinct(s.Events, r.Event)
+		s.Events = misc.AppendDistinct(s.Events, r.Event)
 		for i := range r.Fields {
 			f := &r.Fields[i]
-			s.Labels = appendDistinct(s.Labels, f.Label)
+			s.Labels = misc.AppendDistinct(s.Labels, f.Label)
 		}
 	}
 	sort.Strings(s.Labels)
@@ -165,7 +166,7 @@ func (r *EventSummary) TableRow(events []string) []interface{} {
 func (s *EventSummaries) add(event string, values []string, n float64) {
 	for i := range s.Data {
 		sum := &s.Data[i]
-		if stringsEqual(sum.Values, values) {
+		if misc.StringsEqual(sum.Values, values) {
 			sum.Totals[event] = n
 			return
 		}
@@ -197,35 +198,4 @@ func (s *EventSummaries) Table() Table {
 type Table struct {
 	Columns []interface{}   `json:"cols"`
 	Data    [][]interface{} `json:"data"`
-}
-
-func appendDistinct(dst []string, src ...string) []string {
-	for i, s := range src {
-		if indexOf(dst, s[:i]) == -1 {
-			dst = append(dst, s)
-		}
-	}
-	return dst
-}
-
-func indexOf(values []string, s string) int {
-	for i := 0; 0 <= i && i < len(values); i++ {
-		if values[i] == s {
-			return i
-		}
-	}
-	return -1
-}
-
-func stringsEqual(a, b []string) bool {
-	if len(a) == len(b) {
-		b = b[:len(a)]
-		for i := range a {
-			if a[i] != b[i] {
-				return false
-			}
-		}
-		return true
-	}
-	return false
 }
