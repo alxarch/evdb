@@ -17,16 +17,18 @@ import (
 	errors "golang.org/x/xerrors"
 )
 
-// Querier runs queries over http
-type Querier struct {
+// Execer runs queries over http
+type Execer struct {
 	URL string
 	HTTPClient
 }
 
-// Query implements evdb.Evaler interface
-func (qr *Querier) Query(ctx context.Context, r evdb.TimeRange, q string) ([]interface{}, error) {
+var _ evql.Execer = (*Execer)(nil)
+
+// Exec implements evql.Execet interface over HTTP
+func (ex *Execer) Exec(ctx context.Context, r evdb.TimeRange, q string) ([]evdb.Results, error) {
 	body := strings.NewReader(q)
-	u, err := TimeRangeURL(qr.URL, &r)
+	u, err := TimeRangeURL(ex.URL, &r)
 	if err != nil {
 		return nil, err
 
@@ -35,8 +37,9 @@ func (qr *Querier) Query(ctx context.Context, r evdb.TimeRange, q string) ([]int
 	if err != nil {
 		return nil, err
 	}
-	var results []interface{}
-	if err := sendJSON(ctx, qr.HTTPClient, req, &results); err != nil {
+	req.Header.Set("Content-Type", "application/evql")
+	var results []evdb.Results
+	if err := sendJSON(ctx, ex.HTTPClient, req, &results); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -82,6 +85,16 @@ func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
 				q.TimeRange = t
 				q.Query = values.Get("query")
 				q.Format = values.Get("format")
+			case "application/evql":
+				q.Query = string(data)
+				values := r.URL.Query()
+				q.Format = values.Get("format")
+				t, err := TimeRangeFromURL(values)
+				if err != nil {
+					httperr.RespondJSON(w, httperr.BadRequest(err))
+					return
+				}
+				q.TimeRange = t
 			case "application/json":
 				if err := json.Unmarshal(data, &q); err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
