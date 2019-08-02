@@ -176,6 +176,7 @@ func (e *eventDB) resolver(m evdb.MatchFields) resolver {
 
 func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evdb.Results, err error) {
 	var (
+		ok         bool
 		resolver   = e.resolver(q.Fields)
 		minT, maxT = q.Start.Unix(), q.End.Unix()
 		ts         int64
@@ -204,7 +205,7 @@ func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evd
 	for ; iter.Valid(); iter.Next() {
 		item := iter.Item()
 		key := item.Key()
-		ts, ok := parseEventKey(e.id, key)
+		ts, ok = parseEventKey(e.id, key)
 		if ok && minT <= ts && ts < maxT {
 			err = item.Value(scanValue)
 			if err != nil {
