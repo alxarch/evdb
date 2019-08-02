@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"time"
 
 	"github.com/alxarch/evdb"
 	"github.com/alxarch/evdb/events"
@@ -179,6 +180,7 @@ func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evd
 		ok         bool
 		resolver   = e.resolver(q.Fields)
 		minT, maxT = q.Start.Unix(), q.End.Unix()
+		step       = fixStep(q.Step)
 		ts         int64
 		scanValue  = func(value []byte) error {
 			var id, n uint64
@@ -207,6 +209,7 @@ func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evd
 		key := item.Key()
 		ts, ok = parseEventKey(e.id, key)
 		if ok && minT <= ts && ts < maxT {
+			ts = stepTS(ts, step)
 			err = item.Value(scanValue)
 			if err != nil {
 				return nil, err
@@ -214,4 +217,27 @@ func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evd
 		}
 	}
 	return
+}
+
+func fixStep(step time.Duration) int64 {
+	switch {
+	case step >= time.Second:
+		return int64(step / time.Second)
+	case 0 < step && step < time.Second:
+		return 1
+	case step < 0:
+		return -1
+	default:
+		return 0
+	}
+}
+
+func stepTS(ts, step int64) int64 {
+	if step > 0 {
+		return ts - ts%step
+	}
+	if step == 0 {
+		return ts
+	}
+	return 0
 }
