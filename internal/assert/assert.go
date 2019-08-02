@@ -9,7 +9,7 @@ import (
 func Equal(t *testing.T, a interface{}, b interface{}) {
 	t.Helper()
 	if !reflect.DeepEqual(a, b) {
-		t.Errorf("a != b %v %v", a, b)
+		t.Errorf("a != b\n%v\n%v\n", a, b)
 	}
 }
 
