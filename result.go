@@ -3,6 +3,7 @@ package evdb
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Result is a query result
@@ -14,12 +15,6 @@ type Result struct {
 }
 
 func (r *Result) MarshalJSON() ([]byte, error) {
-	type jsonResult struct {
-		TimeRange [3]int64   `json:"time"`
-		Event     string     `json:"event,omitempty"`
-		Fields    Fields     `json:"fields,omitempty"`
-		Data      DataPoints `json:"data,omitempty"`
-	}
 	var start, end int64
 	if !r.Start.IsZero() {
 		start = r.Start.Unix()
@@ -36,6 +31,31 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 		Data:   r.Data,
 	}
 	return json.Marshal(&tmp)
+}
+
+type jsonResult struct {
+	TimeRange [3]int64   `json:"time"`
+	Event     string     `json:"event,omitempty"`
+	Fields    Fields     `json:"fields,omitempty"`
+	Data      DataPoints `json:"data,omitempty"`
+}
+
+func (r *Result) UnmarshalJSON(data []byte) error {
+	tmp := jsonResult{}
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+	*r = Result{
+		Event: tmp.Event,
+		TimeRange: TimeRange{
+			Start: time.Unix(tmp.TimeRange[0], 0),
+			End:   time.Unix(tmp.TimeRange[1], 0),
+			Step:  time.Duration(tmp.TimeRange[2]) * time.Second,
+		},
+		Fields: tmp.Fields,
+		Data:   tmp.Data,
+	}
+	return nil
 }
 
 // Results is a slice of results
