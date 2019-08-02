@@ -85,6 +85,9 @@ func MatchFieldsFromURL(values url.Values) (m evdb.MatchFields, err error) {
 		if !strings.HasPrefix(key, "match.") {
 			continue
 		}
+		if m == nil {
+			m = make(map[string]evdb.Matcher)
+		}
 		label := strings.TrimPrefix(key, "match.")
 		var typ string
 		if parts := strings.SplitN(label, ".", 2); len(parts) == 2 {
