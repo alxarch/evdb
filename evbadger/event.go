@@ -216,6 +216,9 @@ func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evd
 			}
 		}
 	}
+	for i := range results {
+		results[i].TimeRange = q.TimeRange
+	}
 	return
 }
 
