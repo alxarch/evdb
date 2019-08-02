@@ -32,6 +32,7 @@ func init() {
 	if err := evdb.Register(urlScheme, o); err != nil {
 		log.Fatal("Failed to register db opener", err)
 	}
+	evdb.Register("file", o)
 }
 
 // ParseURL parses config url from options
