@@ -41,6 +41,9 @@ func (m *MemoryStorer) Len() int {
 
 // Store implements EventStore interface
 func (m *MemoryStorer) Store(s *db.Snapshot) error {
+	if s.Time.IsZero() {
+		s.Time = time.Now()
+	}
 	last := m.Last()
 	if last == nil || s.Time.After(last.Time) {
 		s = s.Copy()
@@ -92,6 +95,12 @@ func (m MemoryStore) Scan(ctx context.Context, queries ...db.ScanQuery) (db.Resu
 					tm := stepTS(d.Time.Unix(), step)
 					results = results.Add(q.Event, fields, tm, float64(c.Count))
 				}
+			}
+		}
+		for i := range results {
+			r := &results[i]
+			if r.Step == 0 {
+				r.TimeRange = q.TimeRange
 			}
 		}
 	}
