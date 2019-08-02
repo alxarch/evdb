@@ -27,7 +27,9 @@ func TimeRangeURL(rawURL string, t *evdb.TimeRange) (string, error) {
 func TimeRangeFromURL(values url.Values) (t evdb.TimeRange, err error) {
 	if step, ok := values["step"]; ok {
 		if len(step) > 0 {
-			t.Step, _ = time.ParseDuration(step[0])
+			if t.Step, err = time.ParseDuration(step[0]); err != nil {
+				return
+			}
 		} else {
 			t.Step = 0
 		}
@@ -76,17 +78,20 @@ func ScanQueryFromURL(values url.Values) (q evdb.ScanQuery, err error) {
 	if err != nil {
 		return
 	}
+	q.Event = values.Get("event")
+	if q.Event == "" {
+		err = errors.Errorf("Missing query.event")
+		return
+	}
 	return
 }
 
 // MatchFieldsFromURL parses MatchFields from URL query
 func MatchFieldsFromURL(values url.Values) (m evdb.MatchFields, err error) {
+	m = make(map[string]evdb.Matcher)
 	for key := range values {
 		if !strings.HasPrefix(key, "match.") {
 			continue
-		}
-		if m == nil {
-			m = make(map[string]evdb.Matcher)
 		}
 		label := strings.TrimPrefix(key, "match.")
 		var typ string
@@ -118,13 +123,22 @@ func MatchFieldsFromURL(values url.Values) (m evdb.MatchFields, err error) {
 
 // EncodeTimeRange sets URL query values for a TimeRange
 func EncodeTimeRange(values url.Values, q evdb.TimeRange) {
-	values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
-	values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
-	values.Set("step", q.Step.String())
+	if !q.Start.IsZero() {
+		values.Set("start", strconv.FormatInt(q.Start.Unix(), 10))
+	}
+	if !q.End.IsZero() {
+		values.Set("end", strconv.FormatInt(q.End.Unix(), 10))
+	}
+	if q.Step != 0 {
+		values.Set("step", q.Step.String())
+	}
 }
 
 // EncodeScanQuery sets URL query values for a ScanQuery
 func EncodeScanQuery(values url.Values, q *evdb.ScanQuery) error {
+	if q == nil {
+		return errors.Errorf("Nil query")
+	}
 	for label, m := range q.Fields {
 		switch m := m.(type) {
 		case *regexp.Regexp:
@@ -140,7 +154,9 @@ func EncodeScanQuery(values url.Values, q *evdb.ScanQuery) error {
 		}
 	}
 	EncodeTimeRange(values, q.TimeRange)
-	values.Set("event", q.Event)
+	if q.Event != "" {
+		values.Set("event", q.Event)
+	}
 	return nil
 }
 
