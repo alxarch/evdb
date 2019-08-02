@@ -25,7 +25,7 @@ func (r *Result) MarshalJSON() ([]byte, error) {
 		start = r.Start.Unix()
 	}
 	if !r.End.IsZero() {
-		start = r.End.Unix()
+		end = r.End.Unix()
 	}
 	tmp := jsonResult{
 		TimeRange: [3]int64{
