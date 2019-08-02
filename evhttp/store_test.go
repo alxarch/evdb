@@ -43,5 +43,6 @@ func TestStore(t *testing.T) {
 	err := fooStore.Store(snap)
 	assert.NoError(t, err)
 	ss := s.Storer("foo").(*evutil.MemoryStorer).Last()
+	assert.Equal(t, ss.Labels, snap.Labels)
 	assert.Equal(t, ss.Counters, snap.Counters)
 }

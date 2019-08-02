@@ -23,18 +23,18 @@ type Storer struct {
 }
 
 // Store implements Storer interface
-func (c *Storer) Store(r *meter.Snapshot) (err error) {
-	body := getSyncBuffer()
-	defer putSyncBuffer(body)
-	err = body.Encode(r)
-	if err != nil {
-		return
+func (c *Storer) Store(r *meter.Snapshot) error {
+
+	body := getBuffer()
+	defer putBuffer(body)
+	enc := json.NewEncoder(body)
+	if err := enc.Encode(r); err != nil {
+		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.URL, &body.buffer)
+	req, err := http.NewRequest(http.MethodPost, c.URL, body)
 	if err != nil {
-		return
+		return err
 	}
-	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Content-Type", "application/json")
 
 	client := c.HTTPClient
@@ -43,13 +43,13 @@ func (c *Storer) Store(r *meter.Snapshot) (err error) {
 	}
 	res, err := client.Do(req)
 	if err != nil {
-		return
+		return err
 	}
 	if httperr.IsError(res.StatusCode) {
 		return httperr.FromResponse(res)
 	}
 	defer res.Body.Close()
-	return
+	return nil
 }
 
 // Store is implements Store over HTTP
@@ -134,37 +134,52 @@ func InflateRequest(next http.Handler) http.HandlerFunc {
 	}
 }
 
-type syncBuffer struct {
-	buffer bytes.Buffer
-	gzip   *gzip.Writer
-	json   *json.Encoder
+var buffers sync.Pool
+
+func getBuffer() *bytes.Buffer {
+	if x := buffers.Get(); x != nil {
+		return x.(*bytes.Buffer)
+	}
+	return new(bytes.Buffer)
+}
+func putBuffer(b *bytes.Buffer) {
+	if b != nil {
+		b.Reset()
+		buffers.Put(b)
+	}
 }
 
-var syncBuffers sync.Pool
+// type syncBuffer struct {
+// 	buffer bytes.Buffer
+// 	gzip   *gzip.Writer
+// 	json   *json.Encoder
+// }
 
-func getSyncBuffer() *syncBuffer {
-	if x := syncBuffers.Get(); x != nil {
-		return x.(*syncBuffer)
-	}
-	return new(syncBuffer)
-}
+// var syncBuffers sync.Pool
 
-func putSyncBuffer(b *syncBuffer) {
-	syncBuffers.Put(b)
-}
+// func getSyncBuffer() *syncBuffer {
+// 	if x := syncBuffers.Get(); x != nil {
+// 		return x.(*syncBuffer)
+// 	}
+// 	return new(syncBuffer)
+// }
 
-func (b *syncBuffer) Encode(x interface{}) error {
-	b.buffer.Reset()
-	if b.gzip == nil {
-		b.gzip = gzip.NewWriter(&b.buffer)
-	} else {
-		b.gzip.Reset(&b.buffer)
-	}
-	if b.json == nil {
-		b.json = json.NewEncoder(b.gzip)
-	}
-	if err := b.json.Encode(x); err != nil {
-		return err
-	}
-	return b.gzip.Close()
-}
+// func putSyncBuffer(b *syncBuffer) {
+// 	syncBuffers.Put(b)
+// }
+
+// func (b *syncBuffer) Encode(x interface{}) error {
+// 	b.buffer.Reset()
+// 	if b.gzip == nil {
+// 		b.gzip = gzip.NewWriter(&b.buffer)
+// 	} else {
+// 		b.gzip.Reset(&b.buffer)
+// 	}
+// 	if b.json == nil {
+// 		b.json = json.NewEncoder(b.gzip)
+// 	}
+// 	if err := b.json.Encode(x); err != nil {
+// 		return err
+// 	}
+// 	return b.gzip.Close()
+// }
