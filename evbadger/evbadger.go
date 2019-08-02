@@ -34,6 +34,7 @@ func init() {
 	}
 }
 
+// ParseURL parses config url from options
 func ParseURL(optionsURL string) (options badger.Options, err error) {
 	u, err := url.Parse(optionsURL)
 	if err != nil {
@@ -45,7 +46,6 @@ func ParseURL(optionsURL string) (options badger.Options, err error) {
 	}
 	q := u.Query()
 	options = badger.DefaultOptions
-	// options.Logger = nil
 	options.Dir = u.Path
 	if options.ValueDir = q.Get("value-dir"); options.ValueDir == "" {
 		options.ValueDir = options.Dir
@@ -57,6 +57,16 @@ func ParseURL(optionsURL string) (options badger.Options, err error) {
 		default:
 			options.ReadOnly = true
 		}
+	}
+	options.Logger = nil
+	if _, ok := q["debug"]; ok {
+		switch strings.ToLower(q.Get("debug")) {
+		case "true", "on", "yes", "1", "":
+			options.Logger = newDebugLogger()
+		}
+	}
+	if options.Logger == nil {
+		options.Logger = newLogger()
 	}
 	return
 }
