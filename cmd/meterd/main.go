@@ -14,6 +14,7 @@ import (
 	_ "github.com/alxarch/evdb/evbadger"
 	"github.com/alxarch/evdb/evhttp"
 	_ "github.com/alxarch/evdb/evredis"
+	"github.com/gorilla/handlers"
 )
 
 var (
@@ -64,6 +65,10 @@ func main() {
 	if prefix := *basePath; prefix != "" {
 		prefix = "/" + strings.Trim(prefix, "/")
 		srv.Handler = http.StripPrefix(prefix, srv.Handler)
+	}
+
+	if *debug {
+		srv.Handler = handlers.CombinedLoggingHandler(os.Stdout, srv.Handler)
 	}
 
 	logInfo.Printf("Serving %s on %s...\n", *dbURL, srv.Addr)
