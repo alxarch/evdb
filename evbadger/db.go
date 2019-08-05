@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"time"
 
-	"github.com/alxarch/evdb/evutil"
 	"github.com/alxarch/evdb/internal/misc"
 
 	errors "golang.org/x/xerrors"
@@ -22,64 +22,67 @@ import (
 type DB struct {
 	evdb.Scanner
 	badger *badger.DB
+	mu     sync.RWMutex
 	events map[string]*eventDB
-	extra  evutil.SyncStore
 }
 
 var _ evdb.DB = (*DB)(nil)
 
 // Open opens a new Event collection stored in BadgerDB
-func Open(b *badger.DB, events ...string) (*DB, error) {
-	eventIDs, err := loadEventIDs(b, events...)
+func Open(b *badger.DB) (*DB, error) {
+	eventIDs, err := loadEventIDs(b)
 	if err != nil {
 		return nil, err
 	}
 	db := DB{
 		badger: b,
-		events: make(map[string]*eventDB, len(events)),
+		events: make(map[string]*eventDB, len(eventIDs)),
 	}
 	db.Scanner = evdb.NewScanner(&db)
 
-	for i, event := range events {
-		id := eventIDs[i]
+	for event, id := range eventIDs {
 		db.events[event] = &eventDB{
 			badger: b,
-			id:     eventID(id),
+			id:     id,
 		}
 	}
 
 	return &db, nil
 }
 
-// Register creates a new storer
-func (db *DB) Register(event string) (evdb.Storer, error) {
-	if w := db.Storer(event); w != nil {
+// Storer implements Store interface
+func (db *DB) Storer(event string) (w evdb.Storer, err error) {
+	db.mu.RLock()
+	w = db.events[event]
+	db.mu.RUnlock()
+	if w != nil {
 		return w, nil
 	}
+
 	ids, err := loadEventIDs(db.badger, event)
 	if err != nil {
-		return nil, err
+		return
 	}
-	if len(ids) == 1 {
-		id := ids[0]
-		e := eventDB{
-			badger: db.badger,
-			id:     eventID(id),
-		}
-		if db.extra.Register(event, &e) {
-			return &e, nil
-		}
-		return db.extra.Storer(event), nil
+	id, ok := ids[event]
+	if !ok {
+		return nil, errors.Errorf("Failed to register event id")
 	}
-	return nil, errors.Errorf("Could not register event")
-}
+	e := eventDB{
+		badger: db.badger,
+		id:     id,
+	}
 
-// Storer implements Store interface
-func (db *DB) Storer(event string) evdb.Storer {
-	if w, ok := db.events[event]; ok {
-		return w
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if w = db.events[event]; w != nil {
+		return
 	}
-	return db.extra.Storer(event)
+	if db.events == nil {
+		db.events = make(map[string](*eventDB))
+	}
+	db.events[event] = &e
+	w = &e
+	return
 }
 
 // ScanQuery implements evdb.ScanQuerier interface
@@ -208,23 +211,31 @@ func loadEvents(txn *badger.Txn) ([]string, error) {
 	return dbEvents, nil
 }
 
-func loadEventIDs(db *badger.DB, events ...string) ([]eventID, error) {
+func loadEventIDs(db *badger.DB, events ...string) (map[string]eventID, error) {
 	txn := db.NewTransaction(true)
 	defer txn.Discard()
 	dbEvents, err := loadEvents(txn)
 	if err != nil {
 		return nil, err
 	}
+	if len(events) == 0 {
+		// Just return events in store
+		ids := make(map[string]eventID, len(dbEvents))
+		for id, name := range dbEvents {
+			ids[name] = eventID(id + 1)
+		}
+		return ids, nil
+	}
 	n := len(dbEvents)
-	ids := make([]eventID, len(events))
-	for i, event := range events {
+	ids := make(map[string]eventID, len(events))
+	for _, event := range events {
 		id := misc.IndexOf(dbEvents, event) + 1
 		if id == 0 {
 			// Event is not registered in DB
 			dbEvents = append(dbEvents, event)
 			id = len(dbEvents)
 		}
-		ids[i] = eventID(id)
+		ids[event] = eventID(id)
 	}
 	if len(dbEvents) != n {
 		// New events have been added

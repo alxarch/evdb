@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	meter "github.com/alxarch/evdb"
+	db "github.com/alxarch/evdb"
 	"github.com/alxarch/httperr"
 )
 
@@ -23,7 +23,7 @@ type Storer struct {
 }
 
 // Store implements Storer interface
-func (c *Storer) Store(r *meter.Snapshot) error {
+func (c *Storer) Store(r *db.Snapshot) error {
 
 	body := getBuffer()
 	defer putBuffer(body)
@@ -59,7 +59,7 @@ type Store struct {
 }
 
 // Storer implements Store interface
-func (s *Store) Storer(event string) meter.Storer {
+func (s *Store) Storer(event string) db.Storer {
 	u, err := url.Parse(s.BaseURL)
 	if err != nil {
 		return nil
@@ -72,12 +72,16 @@ func (s *Store) Storer(event string) meter.Storer {
 }
 
 // StoreHandler returns an HTTP handler for a Store
-func StoreHandler(store meter.Store, prefix string) http.HandlerFunc {
+func StoreHandler(store db.Store, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		path = strings.TrimPrefix(path, prefix)
 		event := strings.Trim(path, "/")
-		s := store.Storer(event)
+		s, err := store.Storer(event)
+		if err != nil {
+			httperr.RespondJSON(w, err)
+			return
+		}
 		if s == nil {
 			httperr.RespondJSON(w, httperr.NotFound(nil))
 			return
@@ -88,12 +92,12 @@ func StoreHandler(store meter.Store, prefix string) http.HandlerFunc {
 }
 
 type storeHandler struct {
-	meter.Storer
+	db.Storer
 }
 
 func (h *storeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	s := meter.Snapshot{}
+	s := db.Snapshot{}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&s); err != nil {
 		httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -110,7 +114,7 @@ func (h *storeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewStoreHandler returns an HTTP endpoint for a Storer
-func NewStoreHandler(s meter.Storer) http.Handler {
+func NewStoreHandler(s db.Storer) http.Handler {
 	return &storeHandler{s}
 }
 

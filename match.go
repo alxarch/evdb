@@ -136,19 +136,33 @@ func (mf MatchFields) Set(label string, m Matcher) MatchFields {
 	mf[label] = m
 	return mf
 }
+func mergeMatchers(a, b Matcher) Matcher {
+	switch a := a.(type) {
+	case nil:
+		return b
+	case Matchers:
+		if b, ok := b.(Matchers); ok {
+			return append(a, b...)
+		}
+		return append(a, b)
+	default:
+		m := Matchers{a}
+		if b, ok := b.(Matchers); ok {
+			return append(m, b...)
+		}
+		return append(m, b)
+	}
+
+}
 
 func (mf MatchFields) Add(label string, m Matcher) MatchFields {
+	if m == nil {
+		return mf
+	}
 	if mf == nil {
 		return MatchFields{label: m}
 	}
-	switch mm := mf[label].(type) {
-	case nil:
-		mf[label] = m
-	case Matchers:
-		mf[label] = append(mm, m)
-	default:
-		mf[label] = Matchers{mm, m}
-	}
+	mf[label] = mergeMatchers(mf[label], m)
 	return mf
 }
 

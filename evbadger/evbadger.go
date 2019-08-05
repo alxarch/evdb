@@ -13,7 +13,7 @@ import (
 
 type opener struct{}
 
-func (opener) Open(configURL string, events ...string) (evdb.DB, error) {
+func (opener) Open(configURL string) (evdb.DB, error) {
 	options, err := ParseURL(configURL)
 	if err != nil {
 		return nil, err
@@ -22,7 +22,7 @@ func (opener) Open(configURL string, events ...string) (evdb.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Open(db, events...)
+	return Open(db)
 }
 
 const urlScheme = "badger"

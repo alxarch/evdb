@@ -9,7 +9,12 @@ import (
 
 // Store provides snapshot storers for events
 type Store interface {
-	Storer(event string) Storer
+	Storer(event string) (Storer, error)
+}
+
+// Storer stores event snapshots
+type Storer interface {
+	Store(s *Snapshot) error
 }
 
 // Snapshot is a snaphot of event counters
@@ -19,11 +24,14 @@ type Snapshot struct {
 	Counters []events.Counter `json:"counters"`
 }
 
+// Reset resets a snapshot
 func (s *Snapshot) Reset() {
 	*s = Snapshot{
 		Counters: events.CounterSlice(s.Counters).Reset(),
 	}
 }
+
+// Copy copies a snapshot
 func (s *Snapshot) Copy() *Snapshot {
 	if s == nil {
 		return nil
@@ -36,12 +44,20 @@ func (s *Snapshot) Copy() *Snapshot {
 	return &cp
 }
 
-// Storer stores event snapshots
-type Storer interface {
-	Store(s *Snapshot) error
+func stringsEqual(a, b []string) bool {
+	if len(a) == len(b) {
+		b = b[:len(a)]
+		for i := range a {
+			if a[i] != b[i] {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
-// SyncTask dumps an Event to an EventStore
+// SyncTask dumps an Event to a Storer
 func SyncTask(e *events.Event, db Storer) func(time.Time) error {
 	return func(tm time.Time) error {
 		s := getSnapshot()

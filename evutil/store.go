@@ -40,7 +40,7 @@ func (m *MemoryStorer) Len() int {
 	return len(m.data)
 }
 
-// Store implements EventStore interface
+// Store implements Storer interface
 func (m *MemoryStorer) Store(s *db.Snapshot) error {
 	if s.Time.IsZero() {
 		s.Time = time.Now()
@@ -64,11 +64,11 @@ func NewMemoryStore(events ...string) MemoryStore {
 }
 
 // Storer implements Store interface
-func (m MemoryStore) Storer(event string) db.Storer {
+func (m MemoryStore) Storer(event string) (db.Storer, error) {
 	if s := m[event]; s != nil {
-		return s
+		return s, nil
 	}
-	return nil
+	return nil, nil
 }
 
 // Scan implements the Scanner interface
@@ -163,8 +163,8 @@ func (tee teeStorer) Store(s *db.Snapshot) error {
 type MuxStore map[string]db.Storer
 
 // Storer implements Store interface
-func (m MuxStore) Storer(event string) db.Storer {
-	return m[event]
+func (m MuxStore) Storer(event string) (db.Storer, error) {
+	return m[event], nil
 }
 
 // Set sets a Storer for an event
@@ -210,10 +210,13 @@ type SyncStore struct {
 }
 
 // Storer implements Store interface
-func (s *SyncStore) Storer(event string) (w db.Storer) {
+func (s *SyncStore) Storer(event string) (w db.Storer, err error) {
 	s.mu.RLock()
-	w = s.mux.Storer(event)
+	w, _ = s.mux.Storer(event)
 	s.mu.RUnlock()
+	if w != nil {
+		return
+	}
 	if s.Factory == nil {
 		return
 	}
@@ -222,10 +225,11 @@ func (s *SyncStore) Storer(event string) (w db.Storer) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if w = s.mux.Storer(event); w == nil {
-		w = s.Factory.Storer(event)
-		s.mux.Set(event, w)
+	w, err = s.mux.Storer(event)
+	if err != nil {
+		return nil, err
 	}
+	s.mux.Set(event, w)
 	return
 }
 

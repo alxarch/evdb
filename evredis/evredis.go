@@ -14,13 +14,13 @@ type opener struct{}
 var _ evdb.Opener = opener{}
 
 // Open implements evdb.Opener interface
-func (opener) Open(configURL string, events ...string) (evdb.DB, error) {
+func (opener) Open(configURL string) (evdb.DB, error) {
 	options, err := ParseURL(configURL)
 	if err != nil {
 		return nil, err
 	}
 
-	return Open(options, events...)
+	return Open(options)
 
 }
 
@@ -33,26 +33,29 @@ func init() {
 	}
 }
 
-// Options are options for a DB
-type Options struct {
+// Config is configuration for a Redis DB
+type Config struct {
 	Redis       string
 	ScanSize    int64
 	KeyPrefix   string
 	Resolutions []Resolution
 }
 
-// ParseURL parses options from a URL
-func ParseURL(configURL string) (o Options, err error) {
+// ParseURL parses config from a URL
+func ParseURL(configURL string) (o Config, err error) {
 	u, _ := url.Parse(configURL)
 	q := u.Query()
 	o.ScanSize, _ = strconv.ParseInt(q.Get("scan-size"), 10, 32)
+	delete(q, "scan-size")
 	o.KeyPrefix = q.Get("key-prefix")
+	delete(q, "key-prefix")
 	// TODO: parse resolutions from URL
 	o.Resolutions = []Resolution{
 		ResolutionHourly.WithTTL(Weekly),
 		ResolutionDaily.WithTTL(Yearly),
 		ResolutionWeekly.WithTTL(10 * Yearly),
 	}
+	u.RawQuery = q.Encode()
 	o.Redis = u.String()
 	return
 }

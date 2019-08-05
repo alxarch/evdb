@@ -20,15 +20,14 @@ type DB struct {
 	evdb.Scanner
 	keyPrefix   string
 	scanSize    int64
-	events      map[string]evdb.Storer
 	resolutions map[time.Duration]Resolution
-	extra       evutil.SyncStore
+	events      evutil.SyncStore
 }
 
 var _ evdb.DB = (*DB)(nil)
 
 // Open opens a new DB
-func Open(options Options, events ...string) (*DB, error) {
+func Open(options Config) (*DB, error) {
 	byDuration, err := resolutionsByDuration(options.Resolutions...)
 	if err != nil {
 		return nil, err
@@ -44,36 +43,22 @@ func Open(options Options, events ...string) (*DB, error) {
 		redis:       pool,
 		scanSize:    options.ScanSize,
 		keyPrefix:   options.KeyPrefix,
-		events:      make(map[string]evdb.Storer),
 		resolutions: byDuration,
-	}
-	for _, event := range events {
-		db.events[event] = db.storer(event)
 	}
 	db.Scanner = evdb.NewScanner(&db)
 	return &db, nil
 }
 
-// Register registers a new event
-func (db *DB) Register(event string) (evdb.Storer, error) {
-	if w, ok := db.events[event]; ok {
+// Storer implements Store interface
+func (db *DB) Storer(event string) (evdb.Storer, error) {
+	if w, _ := db.events.Storer(event); w != nil {
 		return w, nil
 	}
-	if w := db.extra.Storer(event); w != nil {
+	w := db.storer(event)
+	if db.events.Register(event, w) {
 		return w, nil
 	}
-	if w := db.storer(event); db.extra.Register(event, w) {
-		return w, nil
-	}
-	return db.extra.Storer(event), nil
-}
-
-// Storer provides a Storer for an event
-func (db *DB) Storer(event string) evdb.Storer {
-	if e, ok := db.events[event]; ok {
-		return e
-	}
-	return nil
+	return db.events.Storer(event)
 }
 
 const (
