@@ -2,6 +2,7 @@ package evutil
 
 import (
 	"context"
+	"regexp"
 	"sync"
 	"time"
 
@@ -202,8 +203,10 @@ func (m MuxStore) Add(event string, s db.Storer) (MuxStore, db.Storer) {
 
 // SyncStore provides a mutable Store safe for concurrent use
 type SyncStore struct {
-	mu  sync.RWMutex
-	mux MuxStore
+	Factory db.Store
+	Match   *regexp.Regexp
+	mu      sync.RWMutex
+	mux     MuxStore
 }
 
 // Storer implements Store interface
@@ -211,6 +214,18 @@ func (s *SyncStore) Storer(event string) (w db.Storer) {
 	s.mu.RLock()
 	w = s.mux.Storer(event)
 	s.mu.RUnlock()
+	if s.Factory == nil {
+		return
+	}
+	if s.Match != nil && !s.Match.MatchString(event) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w = s.mux.Storer(event); w == nil {
+		w = s.Factory.Storer(event)
+		s.mux.Set(event, w)
+	}
 	return
 }
 
@@ -238,21 +253,4 @@ func (s *SyncStore) Add(event string, w db.Storer) db.Storer {
 	defer s.mu.Unlock()
 	s.mux, w = s.mux.Add(event, w)
 	return w
-}
-
-// AutoStore is a Store that creates a new Storer if it is not Registered
-type AutoStore struct {
-	New   func(event string) db.Storer
-	store SyncStore
-}
-
-// Storer implements Store interface
-func (a *AutoStore) Storer(event string) (w db.Storer) {
-	if w := a.store.Storer(event); w != nil {
-		return w
-	}
-	if w := a.New(event); w != nil && a.store.Register(event, w) {
-		return w
-	}
-	return a.store.Storer(event)
 }

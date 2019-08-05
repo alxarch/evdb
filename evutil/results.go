@@ -8,6 +8,7 @@ import (
 	"github.com/alxarch/evdb/internal/misc"
 )
 
+// FlattenResults concatenates results to a single slice
 func FlattenResults(multi ...db.Results) (flat db.Results) {
 	for _, m := range multi {
 		for _, r := range m {
@@ -44,15 +45,17 @@ func FormatResults(format string, rows ...db.Results) (interface{}, bool) {
 
 }
 
+// Total is a scalar value result
 type Total struct {
 	Event  string    `json:"event"`
 	Fields db.Fields `json:"fields,omitempty"`
 	Total  float64   `json:"total"`
 }
 
+// Totals is a slice of Total
 type Totals []Total
 
-// Totals returns a totals-only Results slice
+// NewTotals returns a totals-only Results slice
 func NewTotals(results db.Results) (totals Totals) {
 	totals = make([]Total, len(results))
 	for i := range results {
@@ -84,7 +87,7 @@ func (s *FieldSummary) Add(value string, n float64) {
 // FieldSummaries is a slice of FieldSummary results
 type FieldSummaries []FieldSummary
 
-// FieldSummaries converts a series of results to a slice of FieldSummary results
+// NewFieldSummaries converts a series of results to a slice of FieldSummary results
 func NewFieldSummaries(results db.Results) (s FieldSummaries) {
 	for i := range results {
 		r := &results[i]
