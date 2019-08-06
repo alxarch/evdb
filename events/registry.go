@@ -4,24 +4,22 @@ import (
 	"sync"
 )
 
+// Registry maps event names to events
 type Registry struct {
 	mu     sync.RWMutex
 	events map[string]*Event
 }
 
-func (r *Registry) Events() map[string]*Event {
-	events := r.appendEvents(make([]*Event, 0, 8))
-	if len(events) == 0 {
-		return nil
-	}
-	m := make(map[string]*Event, len(events))
-	for _, e := range events {
-		m[e.Name] = e
-	}
-	return m
+// Len returns the number of events in the registry
+func (r *Registry) Len() (n int) {
+	r.mu.RLock()
+	n = len(r.events)
+	r.mu.RUnlock()
+	return
 }
 
-func (r *Registry) appendEvents(events []*Event) []*Event {
+// AppendEvents appends registered events
+func (r *Registry) AppendEvents(events []*Event) []*Event {
 	r.mu.RLock()
 	for _, event := range r.events {
 		events = append(events, event)
@@ -30,6 +28,7 @@ func (r *Registry) appendEvents(events []*Event) []*Event {
 	return events
 }
 
+// Get finds a registered event by name
 func (r *Registry) Get(name string) (e *Event) {
 	r.mu.RLock()
 	e = r.events[name]
@@ -37,6 +36,7 @@ func (r *Registry) Get(name string) (e *Event) {
 	return
 }
 
+// Register registers an event if not already registered
 func (r *Registry) Register(event *Event) bool {
 	if event == nil {
 		return false
