@@ -13,18 +13,19 @@ import (
 
 func TestDB(t *testing.T) {
 	now := time.Now().In(time.UTC)
-	options := evredis.Options{
+	options := evredis.Config{
 		Redis:       "",
 		KeyPrefix:   fmt.Sprintf("evredis:test:%d", now.UnixNano()),
 		ScanSize:    1000,
 		Resolutions: []evredis.Resolution{evredis.ResolutionHourly},
 	}
-	db, err := evredis.Open(options, "cost")
+	db, err := evredis.Open(options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	db.Storer("cost").Store(&evdb.Snapshot{
+	s, _ := db.Storer("cost")
+	s.Store(&evdb.Snapshot{
 		Time:   now,
 		Labels: []string{"foo", "bar"},
 		Counters: []events.Counter{

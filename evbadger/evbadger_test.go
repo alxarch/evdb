@@ -28,7 +28,7 @@ func TestBadgerEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal("Failed to open badger", err)
 	}
-	edb, err := evbadger.Open(db, "test")
+	edb, err := evbadger.Open(db)
 	if err != nil {
 		t.Fatal("Failed to open badger store", err)
 	}
@@ -59,7 +59,11 @@ func TestBadgerEvents(t *testing.T) {
 			},
 		},
 	}
-	if err := edb.Storer("test").Store(&req); err != nil {
+	st, err := edb.Storer("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Store(&req); err != nil {
 		t.Fatal("Failed to store counters", err)
 	}
 	ctx := context.Background()

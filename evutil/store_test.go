@@ -56,12 +56,11 @@ func Test_MemoryStore(t *testing.T) {
 	}
 
 	e := events.NewEvent("foo", "bar", "baz")
-	task := meter.SyncTask(e, m)
 	now := time.Now()
-	assert.NoError(t, task(now))
+	assert.NoError(t, meter.FlushAt(e, m, now))
 	n := e.Add(42, "baz", "goo")
 	assert.Equal(t, n, int64(42))
-	assert.NoError(t, task(time.Now()))
+	assert.NoError(t, meter.FlushAt(e, m, time.Now()))
 	snap := m.Last()
 	assert.OK(t, snap != nil, "Non nil snap")
 	assert.Equal(t, len(snap.Counters), 1)
@@ -69,7 +68,7 @@ func Test_MemoryStore(t *testing.T) {
 	// assert.Equal(t, snap.Counters, events.CounterSlice{
 	// 	{Count: 42, Values: []string{"baz", "goo"}},
 	// })
-	sto := evutil.NewMemoryStore("foo").Storer("foo")
+	sto, _ := evutil.NewMemoryStore("foo").Storer("foo")
 	assert.OK(t, m != nil, "Non nil memstore")
 	assert.NoError(t, sto.Store(&r1))
 	s1 := new(evutil.MemoryStorer)

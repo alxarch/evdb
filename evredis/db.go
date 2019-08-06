@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alxarch/evdb"
@@ -21,7 +22,8 @@ type DB struct {
 	keyPrefix   string
 	scanSize    int64
 	resolutions map[time.Duration]Resolution
-	events      evutil.SyncStore
+	mu          sync.RWMutex
+	events      map[string]evdb.Storer
 }
 
 var _ evdb.DB = (*DB)(nil)
@@ -51,14 +53,23 @@ func Open(options Config) (*DB, error) {
 
 // Storer implements Store interface
 func (db *DB) Storer(event string) (evdb.Storer, error) {
-	if w, _ := db.events.Storer(event); w != nil {
+	db.mu.RLock()
+	w := db.events[event]
+	db.mu.RUnlock()
+	if w != nil {
 		return w, nil
 	}
-	w := db.storer(event)
-	if db.events.Register(event, w) {
+	w = db.storer(event)
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if w := db.events[event]; w != nil {
 		return w, nil
 	}
-	return db.events.Storer(event)
+	if db.events == nil {
+		db.events = make(map[string]evdb.Storer)
+	}
+	db.events[event] = w
+	return w, nil
 }
 
 const (

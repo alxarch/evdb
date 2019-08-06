@@ -21,7 +21,7 @@ func TestQuery(t *testing.T) {
 			{Count: 34, Values: []string{"red", "sweet"}},
 		},
 	}
-	fooStore := s.Storer("foo")
+	fooStore, _ := s.Storer("foo")
 	if err := fooStore.Store(snap); err != nil {
 		t.Fatal(err)
 	}

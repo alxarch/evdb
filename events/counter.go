@@ -12,35 +12,35 @@ type Counter struct {
 	Values []string `json:"v,omitempty"`
 }
 
-// UnsafeCounters is an index of counters not safe for concurrent use
-type UnsafeCounters struct {
-	counters CounterSlice
+// UnsafeCounterIndex is an index of counters not safe for concurrent use
+type UnsafeCounterIndex struct {
+	counters Counters
 	index    map[uint64][]int
 }
 
 // Len returns the number of counters in an Event
-func (cs *UnsafeCounters) Len() int {
+func (cs *UnsafeCounterIndex) Len() int {
 	return len(cs.counters)
 }
 
-// Counters is an index of counters safe for councurrent use
-type Counters struct {
-	mu       sync.RWMutex
-	counters UnsafeCounters
+// CounterIndex is an index of counters safe for councurrent use
+type CounterIndex struct {
+	mu    sync.RWMutex
+	index UnsafeCounterIndex
 }
 
 // Len returns the number of counters in an Event
-func (cs *Counters) Len() (n int) {
+func (cs *CounterIndex) Len() (n int) {
 	cs.mu.RLock()
-	n = cs.counters.Len()
+	n = cs.index.Len()
 	cs.mu.RUnlock()
 	return
 }
 
 // Pack packs the counter index dropping zero counters
-func (cs *Counters) Pack() {
+func (cs *CounterIndex) Pack() {
 	cs.mu.Lock()
-	cs.counters.Pack()
+	cs.index.Pack()
 	cs.mu.Unlock()
 }
 
@@ -60,7 +60,7 @@ func (c *Counter) Match(values []string) bool {
 }
 
 // Add increments a counter matching values by n
-func (cs *UnsafeCounters) Add(n int64, values ...string) int64 {
+func (cs *UnsafeCounterIndex) Add(n int64, values ...string) int64 {
 	h := vhash(values)
 	c := cs.findOrCreate(h, values)
 	c.Count += n
@@ -68,13 +68,13 @@ func (cs *UnsafeCounters) Add(n int64, values ...string) int64 {
 }
 
 // Flush appends all counters to a snapshot and resets them to zero
-func (cs *UnsafeCounters) Flush(s CounterSlice) CounterSlice {
+func (cs *UnsafeCounterIndex) Flush(s Counters) Counters {
 	s = append(s, cs.counters...)
 	cs.counters.Zero()
 	return s
 }
 
-func (cs *UnsafeCounters) findOrCreate(h uint64, values []string) *Counter {
+func (cs *UnsafeCounterIndex) findOrCreate(h uint64, values []string) *Counter {
 	if cs.index == nil {
 		cs.index = make(map[uint64][]int, 64)
 	} else if c := cs.find(h, values); c != nil {
@@ -89,7 +89,7 @@ func (cs *UnsafeCounters) findOrCreate(h uint64, values []string) *Counter {
 
 }
 
-func (cs *UnsafeCounters) find(h uint64, values []string) *Counter {
+func (cs *UnsafeCounterIndex) find(h uint64, values []string) *Counter {
 	for _, i := range cs.index[h] {
 		if 0 <= i && i < len(cs.counters) {
 			c := &cs.counters[i]
@@ -102,7 +102,7 @@ func (cs *UnsafeCounters) find(h uint64, values []string) *Counter {
 }
 
 // Get returns the counter at index i
-func (cs *UnsafeCounters) Get(i int) *Counter {
+func (cs *UnsafeCounterIndex) Get(i int) *Counter {
 	if 0 <= i && i < len(cs.counters) {
 		return &cs.counters[i]
 	}
@@ -110,21 +110,21 @@ func (cs *UnsafeCounters) Get(i int) *Counter {
 }
 
 // Add adds n to a specific counter
-func (cs *Counters) Add(n int64, values ...string) int64 {
+func (cs *CounterIndex) Add(n int64, values ...string) int64 {
 	h := vhash(values)
 	cs.mu.RLock()
-	c := cs.counters.find(h, values)
+	c := cs.index.find(h, values)
 	cs.mu.RUnlock()
 	if c == nil {
 		cs.mu.Lock()
-		c = cs.counters.findOrCreate(h, values)
+		c = cs.index.findOrCreate(h, values)
 		cs.mu.Unlock()
 	}
 	return atomic.AddInt64(&c.Count, n)
 }
 
 // Merge adds all counters from a CounterSlice
-func (cs *Counters) Merge(s CounterSlice) {
+func (cs *CounterIndex) Merge(s Counters) {
 	for i := range s {
 		c := &s[i]
 		cs.Add(c.Count, c.Values...)
@@ -132,7 +132,7 @@ func (cs *Counters) Merge(s CounterSlice) {
 }
 
 // Pack packs the counter index dropping zero counters
-func (cs *UnsafeCounters) Pack() {
+func (cs *UnsafeCounterIndex) Pack() {
 	if len(cs.counters) == 0 {
 		return
 	}
@@ -158,11 +158,11 @@ func (cs *UnsafeCounters) Pack() {
 	cs.counters = counters
 }
 
-// CounterSlice is a slice of counters
-type CounterSlice []Counter
+// Counters is a slice of counters
+type Counters []Counter
 
 // FilterZero filters out empty counters in-place
-func (s CounterSlice) FilterZero() CounterSlice {
+func (s Counters) FilterZero() Counters {
 	j := 0
 	for i := range s {
 		c := &s[i]
@@ -176,7 +176,7 @@ func (s CounterSlice) FilterZero() CounterSlice {
 }
 
 // Reset resets a snapshot
-func (s CounterSlice) Reset() CounterSlice {
+func (s Counters) Reset() Counters {
 	for i := range s {
 		s[i] = Counter{}
 	}
@@ -184,31 +184,32 @@ func (s CounterSlice) Reset() CounterSlice {
 }
 
 // Zero resets all counters to zero count
-func (s CounterSlice) Zero() {
+func (s Counters) Zero() {
 	for i := range s {
 		c := &s[i]
 		c.Count = 0
 	}
 }
 
-func (cs *Counters) Flush(s []Counter) []Counter {
+// Flush resets non zero counters and appends them to s
+func (cs *CounterIndex) Flush(s []Counter) []Counter {
 	cs.mu.RLock()
-	src := cs.counters.counters
+	src := cs.index.counters
 	for i := range src {
 		c := &src[i]
-		s = append(s, Counter{
-			Count:  atomic.SwapInt64(&c.Count, 0),
-			Values: c.Values,
-		})
+		n := atomic.SwapInt64(&c.Count, 0)
+		if n != 0 {
+			s = append(s, Counter{n, c.Values})
+		}
 	}
 	cs.mu.RUnlock()
 	return s
 }
 
-// NewCounters creates a new counter index of size capacity
-func NewCounters(size int) *Counters {
-	cs := Counters{
-		counters: UnsafeCounters{
+// NewCounterIndex creates a new counter index of size capacity
+func NewCounterIndex(size int) *CounterIndex {
+	cs := CounterIndex{
+		index: UnsafeCounterIndex{
 			counters: make([]Counter, 0, size),
 			index:    make(map[uint64][]int, size),
 		},

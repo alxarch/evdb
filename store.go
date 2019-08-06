@@ -27,7 +27,7 @@ type Snapshot struct {
 // Reset resets a snapshot
 func (s *Snapshot) Reset() {
 	*s = Snapshot{
-		Counters: events.CounterSlice(s.Counters).Reset(),
+		Counters: events.Counters(s.Counters).Reset(),
 	}
 }
 
@@ -57,22 +57,25 @@ func stringsEqual(a, b []string) bool {
 	return false
 }
 
-// SyncTask dumps an Event to a Storer
-func SyncTask(e *events.Event, db Storer) func(time.Time) error {
-	return func(tm time.Time) error {
-		s := getSnapshot()
-		defer putSnapshot(s)
-		if s.Counters = e.Flush(s.Counters[:0]); len(s.Counters) == 0 {
-			return nil
-		}
-		s.Labels, s.Time = e.Labels, tm
-		if err := db.Store(s); err != nil {
-			e.Merge(s.Counters)
-			return err
-		}
-		return nil
+// Flush flushes an event a Storer
+func Flush(e *events.Event, db Storer) error {
+	return FlushAt(e, db, time.Now())
+}
 
+// FlushAt flushes an event a Storer
+func FlushAt(e *events.Event, db Storer, tm time.Time) error {
+	s := getSnapshot()
+	defer putSnapshot(s)
+	s.Counters = e.Flush(s.Counters[:0])
+	if len(s.Counters) == 0 {
+		return nil
 	}
+	s.Labels, s.Time = e.Labels, tm
+	if err := db.Store(s); err != nil {
+		e.Merge(s.Counters)
+		return err
+	}
+	return nil
 }
 
 var snapshotPool sync.Pool

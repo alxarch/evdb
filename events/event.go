@@ -4,16 +4,16 @@ package events
 type Event struct {
 	Name   string   `json:"name"`
 	Labels []string `json:"labels"`
-	*Counters
+	*CounterIndex
 }
 
 // NewEvent creates a new Event using the specified labels
 func NewEvent(name string, labels ...string) *Event {
 	const defaultEventSize = 64
 	e := Event{
-		Name:     name,
-		Labels:   labels,
-		Counters: NewCounters(defaultEventSize),
+		Name:         name,
+		Labels:       labels,
+		CounterIndex: NewCounterIndex(defaultEventSize),
 	}
 
 	return &e
@@ -37,9 +37,9 @@ func MergeTask(dst, src *Event, static map[string]string) func() {
 			}
 		}
 	}
-	var scratch CounterSlice
+	var scratch Counters
 	return func() {
-		scratch = src.Counters.Flush(scratch.Reset())
+		scratch = src.CounterIndex.Flush(scratch.Reset())
 		for i := range scratch {
 			c := &scratch[i]
 			for j := range values {

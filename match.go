@@ -1,11 +1,13 @@
 package evdb
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
 
 	"github.com/alxarch/evdb/internal/misc"
+	errors "golang.org/x/xerrors"
 )
 
 type Matcher interface {
@@ -174,4 +176,46 @@ func (mf MatchFields) Merge(other MatchFields) MatchFields {
 		mf = mf.Add(label, m)
 	}
 	return mf
+}
+
+type matchDB struct {
+	match Matcher
+	DB
+}
+
+func newMatchDB(db DB, m Matcher) (DB, error) {
+	if db, ok := db.(*matchDB); ok {
+		db.match = mergeMatchers(db.match, m)
+		return db, nil
+	}
+	return &matchDB{
+		match: m,
+		DB:    db,
+	}, nil
+}
+
+func (m *matchDB) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
+	cp := make([]ScanQuery, 0, len(queries))
+	for _, q := range queries {
+		if m.match.MatchString(q.Event) {
+			cp = append(cp, q)
+		}
+	}
+	return m.DB.Scan(ctx, cp...)
+}
+
+func (m *matchDB) Storer(event string) (Storer, error) {
+	if !m.match.MatchString(event) {
+		return nil, errors.Errorf("Event %q does not match %s", event, m.match)
+	}
+	return m.DB.Storer(event)
+}
+
+func (m *matchDB) apply(db DB) (DB, error) {
+	return newMatchDB(db, m.match)
+}
+
+// MatchEvents filters queries and stores for a db
+func MatchEvents(m Matcher) Option {
+	return &matchDB{match: m}
 }

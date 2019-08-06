@@ -29,8 +29,13 @@ var (
 
 func main() {
 	flag.Parse()
+	var opts []evdb.Option
 	events := flag.Args()
-	db, err := evdb.Open(*dbURL, events...)
+	if len(events) > 0 {
+		opts = append(opts, evdb.MatchEvents(evdb.MatchAny(events...)))
+	}
+
+	db, err := evdb.Open(*dbURL, opts...)
 	if err != nil {
 		logError.Fatal(err)
 	}

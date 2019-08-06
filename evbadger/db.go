@@ -51,9 +51,9 @@ func Open(b *badger.DB) (*DB, error) {
 }
 
 // Storer implements Store interface
-func (db *DB) Storer(event string) (w evdb.Storer, err error) {
+func (db *DB) Storer(event string) (evdb.Storer, error) {
 	db.mu.RLock()
-	w = db.events[event]
+	w := db.events[event]
 	db.mu.RUnlock()
 	if w != nil {
 		return w, nil
@@ -61,7 +61,7 @@ func (db *DB) Storer(event string) (w evdb.Storer, err error) {
 
 	ids, err := loadEventIDs(db.badger, event)
 	if err != nil {
-		return
+		return nil, err
 	}
 	id, ok := ids[event]
 	if !ok {
@@ -75,14 +75,13 @@ func (db *DB) Storer(event string) (w evdb.Storer, err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	if w = db.events[event]; w != nil {
-		return
+		return w, nil
 	}
 	if db.events == nil {
 		db.events = make(map[string](*eventDB))
 	}
 	db.events[event] = &e
-	w = &e
-	return
+	return &e, nil
 }
 
 // ScanQuery implements evdb.ScanQuerier interface
