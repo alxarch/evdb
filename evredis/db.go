@@ -51,6 +51,14 @@ func Open(options Config) (*DB, error) {
 	return &db, nil
 }
 
+// Ping pings redis
+func (db *DB) Ping() error {
+	p := db.redis.Pipeline()
+	defer redis.ReleasePipeline(p)
+	p.Ping("PING")
+	return db.redis.Do(p, nil)
+}
+
 // Storer implements Store interface
 func (db *DB) Storer(event string) (evdb.Storer, error) {
 	db.mu.RLock()
@@ -73,11 +81,10 @@ func (db *DB) Storer(event string) (evdb.Storer, error) {
 }
 
 const (
-	labelSeparator        = '\x1f'
-	fieldTerminator       = '\x1e'
-	nilByte          byte = 0
-	sNilByte              = "\x00"
-	defaultKeyPrefix      = "meter"
+	labelSeparator       = '\x1f'
+	fieldTerminator      = '\x1e'
+	nilByte         byte = 0
+	sNilByte             = "\x00"
 )
 
 // Close closes a DB
