@@ -60,7 +60,7 @@ func (b *batchEvent) Store(s *Snapshot) error {
 		e.Merge(s.Counters)
 		return nil
 	}
-	e = events.NewEvent(b.name, s.Labels...)
+	e = events.New(b.name, s.Labels...)
 	e.Merge(s.Counters)
 	b.events = append(b.events, e)
 	return nil

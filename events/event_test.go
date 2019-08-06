@@ -9,13 +9,13 @@ import (
 
 func BenchmarkEvent_Add(b *testing.B) {
 	b.ReportAllocs()
-	e := meter.NewEvent("foo", "bar", "baz")
+	e := meter.New("foo", "bar", "baz")
 	for i := 0; i <= b.N; i++ {
 		e.Add(1, "BAR", "BAZ")
 	}
 }
 func Test_Event(t *testing.T) {
-	e := meter.NewEvent("foo", "bar", "baz")
+	e := meter.New("foo", "bar", "baz")
 	e.Add(1, "BAR", "BAZ")
 
 	s := e.Flush(nil)

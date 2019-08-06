@@ -55,7 +55,7 @@ func Test_MemoryStore(t *testing.T) {
 		t.Errorf("Invalid number of items %d", len(results))
 	}
 
-	e := events.NewEvent("foo", "bar", "baz")
+	e := events.New("foo", "bar", "baz")
 	now := time.Now()
 	assert.NoError(t, meter.FlushAt(e, m, now))
 	n := e.Add(42, "baz", "goo")

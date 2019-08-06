@@ -22,6 +22,9 @@ type ScanQuerier interface {
 
 // NewScanner convers a ScanQuerier to a Scanner
 func NewScanner(q ScanQuerier) Scanner {
+	if s, ok := q.(Scanner); ok {
+		return s
+	}
 	s := scanner{q}
 	return &s
 

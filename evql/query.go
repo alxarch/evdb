@@ -36,7 +36,7 @@ func NewExecer(scanner db.Scanner) Execer {
 	if scanner == nil {
 		return nil
 	}
-	if e, ok := scanner.(*execer); ok {
+	if e, ok := scanner.(Execer); ok {
 		return e
 	}
 	return &execer{scanner}

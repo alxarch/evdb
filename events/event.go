@@ -7,8 +7,8 @@ type Event struct {
 	*CounterIndex
 }
 
-// NewEvent creates a new Event using the specified labels
-func NewEvent(name string, labels ...string) *Event {
+// New creates a new Event using the specified labels
+func New(name string, labels ...string) *Event {
 	const defaultEventSize = 64
 	e := Event{
 		Name:         name,

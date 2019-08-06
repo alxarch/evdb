@@ -32,7 +32,12 @@ func TestStore(t *testing.T) {
 		HTTPClient: &mockHTTPClient{h},
 		BaseURL:    "http://example.com/events",
 	}
-	fooStore := client.Storer("foo")
+	fooStore, err := client.Storer("foo")
+	if err != nil {
+		t.Fatal(err)
+
+	}
+
 	snap := &evdb.Snapshot{
 		Labels: []string{"color", "taste"},
 		Counters: []events.Counter{
@@ -40,7 +45,7 @@ func TestStore(t *testing.T) {
 			{Count: 34, Values: []string{"red", "sweet"}},
 		},
 	}
-	err := fooStore.Store(snap)
+	err = fooStore.Store(snap)
 	assert.NoError(t, err)
 	st, _ := s.Storer("foo")
 	ss := st.(*evutil.MemoryStorer).Last()
