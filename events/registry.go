@@ -10,6 +10,17 @@ type Registry struct {
 	events map[string]*Event
 }
 
+// NewRegistry creates a new registry
+func NewRegistry(events ...*Event) *Registry {
+	r := Registry{
+		events: make(map[string]*Event, len(events)),
+	}
+	for _, event := range events {
+		r.events[event.Name] = event
+	}
+	return &r
+}
+
 // Len returns the number of events in the registry
 func (r *Registry) Len() (n int) {
 	r.mu.RLock()
