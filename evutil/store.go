@@ -206,7 +206,9 @@ func (c *cacheStore) Storer(event string) (db.Storer, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if w := c.storers[event]; w != nil {
+	if c.storers == nil {
+		c.storers = make(map[string]db.Storer)
+	} else if w := c.storers[event]; w != nil {
 		return w, nil
 	}
 	c.storers[event] = w
