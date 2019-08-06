@@ -22,6 +22,8 @@ type Storer struct {
 	URL string
 }
 
+var _ db.Storer = (*Storer)(nil)
+
 // Store implements Storer interface
 func (c *Storer) Store(r *db.Snapshot) error {
 
@@ -58,17 +60,19 @@ type Store struct {
 	BaseURL string
 }
 
+var _ db.Store = (*Store)(nil)
+
 // Storer implements Store interface
-func (s *Store) Storer(event string) db.Storer {
+func (s *Store) Storer(event string) (db.Storer, error) {
 	u, err := url.Parse(s.BaseURL)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	u.Path = path.Join(u.Path, event)
 	return &Storer{
 		HTTPClient: s.HTTPClient,
 		URL:        u.String(),
-	}
+	}, nil
 }
 
 // StoreHandler returns an HTTP handler for a Store
