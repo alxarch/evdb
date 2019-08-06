@@ -12,14 +12,14 @@ import (
 	"github.com/alxarch/httperr"
 )
 
-// ScanQuerier runs scan queries over http
-type ScanQuerier struct {
+// Querier runs scan queries over http
+type Querier struct {
 	URL string
 	HTTPClient
 }
 
-// ScanQuery implements ScanQuerier interface
-func (s *ScanQuerier) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
+// Query implements Querier interface
+func (s *Querier) Query(ctx context.Context, q *evdb.Query) (evdb.Results, error) {
 	u, err := ScanURL(s.URL, q)
 	if err != nil {
 		return nil, err
@@ -36,14 +36,14 @@ func (s *ScanQuerier) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Re
 
 }
 
-// ScanQueryHandler returns a handler that serves ScanQuery HTTP requests
-func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
+// QueryHandler returns a handler that serves Query HTTP requests
+func QueryHandler(scan evdb.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var queries []evdb.ScanQuery
+		var queries []evdb.Query
 		switch r.Method {
 		case http.MethodGet:
 			values := r.URL.Query()
-			q, err := ScanQueryFromURL(values)
+			q, err := QueryFromURL(values)
 			if err != nil {
 				httperr.RespondJSON(w, httperr.BadRequest(err))
 				return
@@ -67,7 +67,7 @@ func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
 					return
 				}
-				q, err := ScanQueryFromURL(values)
+				q, err := QueryFromURL(values)
 				if err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
 					return
@@ -77,7 +77,7 @@ func ScanQueryHandler(scan evdb.Scanner) http.HandlerFunc {
 					queries = append(queries, q)
 				}
 			case "application/json":
-				var q evdb.ScanQuery
+				var q evdb.Query
 				if err := json.Unmarshal(data, &q); err != nil {
 					httperr.RespondJSON(w, httperr.BadRequest(err))
 					return

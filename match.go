@@ -194,8 +194,8 @@ func newMatchDB(db DB, m Matcher) (DB, error) {
 	}, nil
 }
 
-func (m *matchDB) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
-	cp := make([]ScanQuery, 0, len(queries))
+func (m *matchDB) Scan(ctx context.Context, queries ...Query) (Results, error) {
+	cp := make([]Query, 0, len(queries))
 	for _, q := range queries {
 		if m.match.MatchString(q.Event) {
 			cp = append(cp, q)

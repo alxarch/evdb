@@ -5,23 +5,23 @@ import (
 	"sync"
 )
 
-// ScanQuery is a query over a range of time
-type ScanQuery struct {
+// Query is a query over a range of time
+type Query struct {
 	Event string
 	TimeRange
 	Fields MatchFields
 }
 
 type Scanner interface {
-	Scan(ctx context.Context, queries ...ScanQuery) (Results, error)
+	Scan(ctx context.Context, queries ...Query) (Results, error)
 }
 
-type ScanQuerier interface {
-	ScanQuery(ctx context.Context, q *ScanQuery) (Results, error)
+type Querier interface {
+	Query(ctx context.Context, q *Query) (Results, error)
 }
 
-// NewScanner convers a ScanQuerier to a Scanner
-func NewScanner(q ScanQuerier) Scanner {
+// NewScanner convers a Querier to a Scanner
+func NewScanner(q Querier) Scanner {
 	if s, ok := q.(Scanner); ok {
 		return s
 	}
@@ -31,11 +31,11 @@ func NewScanner(q ScanQuerier) Scanner {
 }
 
 type scanner struct {
-	q ScanQuerier
+	q Querier
 }
 
 // Scan implements Scanner interface
-func (s *scanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
+func (s *scanner) Scan(ctx context.Context, queries ...Query) (Results, error) {
 	// Merge all overlapping queries
 	queries = ScanQueries(queries).Compact()
 	wg := new(sync.WaitGroup)
@@ -47,7 +47,7 @@ func (s *scanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, erro
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results, err := s.q.ScanQuery(ctx, q)
+			results, err := s.q.Query(ctx, q)
 			if err == nil {
 				mu.Lock()
 				out = append(out, results...)
@@ -66,7 +66,7 @@ func (s *scanner) Scan(ctx context.Context, queries ...ScanQuery) (Results, erro
 	return out, nil
 }
 
-type ScanQueries []ScanQuery
+type ScanQueries []Query
 
 // Compact merges overlapping queries
 func (queries ScanQueries) Compact() ScanQueries {
@@ -77,7 +77,7 @@ func (queries ScanQueries) Compact() ScanQueries {
 }
 
 // MergeQuery merges a query if it overlaps or appends it to the query list
-func (queries ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
+func (queries ScanQueries) MergeQuery(q *Query) ScanQueries {
 	for i := range queries {
 		s := &queries[i]
 		if q.Event != s.Event {
@@ -109,14 +109,14 @@ func (queries ScanQueries) MergeQuery(q *ScanQuery) ScanQueries {
 		// }
 		return queries
 	}
-	return append(queries, ScanQuery{
+	return append(queries, Query{
 		Event:     q.Event,
 		Fields:    q.Fields.Copy(),
 		TimeRange: q.TimeRange,
 	})
 }
 
-func (queries ScanQueries) Merge(other ...ScanQuery) ScanQueries {
+func (queries ScanQueries) Merge(other ...Query) ScanQueries {
 	for i := range other {
 		q := &other[i]
 		queries = queries.MergeQuery(q)

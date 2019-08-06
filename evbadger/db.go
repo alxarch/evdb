@@ -84,10 +84,10 @@ func (db *DB) Storer(event string) (evdb.Storer, error) {
 	return &e, nil
 }
 
-// ScanQuery implements evdb.ScanQuerier interface
-func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
+// Query implements evdb.Querier interface
+func (db *DB) Query(ctx context.Context, q *evdb.Query) (evdb.Results, error) {
 	if s, ok := db.events[q.Event]; ok {
-		return s.ScanQuery(ctx, q)
+		return s.Query(ctx, q)
 	}
 	return nil, errors.Errorf("Invalid event %q", q.Event)
 }

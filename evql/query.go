@@ -70,7 +70,7 @@ func Parse(query string) (*Query, error) {
 	return &q, nil
 }
 
-func (q *Query) Queries(t db.TimeRange) []db.ScanQuery {
+func (q *Query) Queries(t db.TimeRange) []db.Query {
 	return nodeQueries(nil, &t, q.root)
 }
 

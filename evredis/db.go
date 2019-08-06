@@ -86,8 +86,8 @@ func (db *DB) Close() error {
 	return nil
 }
 
-// ScanQuery implements evdb.ScanQuerier interface
-func (db *DB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (evdb.Results, error) {
+// Query implements evdb.Querier interface
+func (db *DB) Query(ctx context.Context, q *evdb.Query) (evdb.Results, error) {
 	res, ok := db.resolutions[q.Step]
 	if !ok {
 		return nil, errors.Errorf("Invalid query step: %s", q.Step)

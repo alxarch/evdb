@@ -54,22 +54,22 @@ func TimeRangeFromURL(values url.Values) (t evdb.TimeRange, err error) {
 
 }
 
-// ScanURL sets URL query from a ScanQuery
-func ScanURL(baseURL string, q *evdb.ScanQuery) (string, error) {
+// ScanURL sets URL query from a Query
+func ScanURL(baseURL string, q *evdb.Query) (string, error) {
 	u, err := url.Parse(baseURL)
 	if err != nil {
 		return "", err
 	}
 	values := u.Query()
-	if err := EncodeScanQuery(values, q); err != nil {
+	if err := EncodeQuery(values, q); err != nil {
 		return "", err
 	}
 	u.RawQuery = values.Encode()
 	return u.String(), nil
 }
 
-// ScanQueryFromURL parses a ScanQuery from a URL query
-func ScanQueryFromURL(values url.Values) (q evdb.ScanQuery, err error) {
+// QueryFromURL parses a Query from a URL query
+func QueryFromURL(values url.Values) (q evdb.Query, err error) {
 	q.TimeRange, err = TimeRangeFromURL(values)
 	if err != nil {
 		return
@@ -134,8 +134,8 @@ func EncodeTimeRange(values url.Values, q evdb.TimeRange) {
 	}
 }
 
-// EncodeScanQuery sets URL query values for a ScanQuery
-func EncodeScanQuery(values url.Values, q *evdb.ScanQuery) error {
+// EncodeQuery sets URL query values for a Query
+func EncodeQuery(values url.Values, q *evdb.Query) error {
 	if q == nil {
 		return errors.Errorf("Nil query")
 	}

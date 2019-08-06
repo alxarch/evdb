@@ -67,7 +67,7 @@ func TestBadgerEvents(t *testing.T) {
 		t.Fatal("Failed to store counters", err)
 	}
 	ctx := context.Background()
-	q := evdb.ScanQuery{
+	q := evdb.Query{
 		Event: "test",
 		TimeRange: evdb.TimeRange{
 			Step:  time.Second,
@@ -78,7 +78,7 @@ func TestBadgerEvents(t *testing.T) {
 			"country": evdb.MatchString("USA"),
 		},
 	}
-	results, err := edb.ScanQuery(ctx, &q)
+	results, err := edb.Query(ctx, &q)
 	if err != nil {
 		t.Fatal("Query failed", err)
 	}

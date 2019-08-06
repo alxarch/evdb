@@ -71,7 +71,7 @@ func (m MemoryStore) Storer(event string) (db.Storer, error) {
 }
 
 // Scan implements the Scanner interface
-func (m MemoryStore) Scan(ctx context.Context, queries ...db.ScanQuery) (db.Results, error) {
+func (m MemoryStore) Scan(ctx context.Context, queries ...db.Query) (db.Results, error) {
 	var results db.Results
 	for _, q := range queries {
 		store, ok := m[q.Event]

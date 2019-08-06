@@ -175,7 +175,7 @@ func (e *eventDB) resolver(m evdb.MatchFields) resolver {
 
 }
 
-func (e *eventDB) ScanQuery(ctx context.Context, q *evdb.ScanQuery) (results evdb.Results, err error) {
+func (e *eventDB) Query(ctx context.Context, q *evdb.Query) (results evdb.Results, err error) {
 	var (
 		ok         bool
 		resolver   = e.resolver(q.Fields)

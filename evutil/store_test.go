@@ -35,7 +35,7 @@ func Test_MemoryStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	q1 := meter.ScanQuery{
+	q1 := meter.Query{
 		Event: "foo",
 		TimeRange: meter.TimeRange{
 			Start: time.Now().Add(-1 * time.Hour),

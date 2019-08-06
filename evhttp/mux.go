@@ -9,7 +9,7 @@ import (
 // DefaultMux creates an HTTP endpoint for a evdb.DB
 func DefaultMux(r evdb.Scanner, w evdb.Store) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/scan", ScanQueryHandler(r))
+	mux.HandleFunc("/scan", QueryHandler(r))
 	mux.HandleFunc("/query", QueryHandler(r))
 	mux.HandleFunc("/", serveIndexHTML)
 	mux.HandleFunc("/index.html", serveIndexHTML)

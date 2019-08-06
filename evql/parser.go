@@ -517,10 +517,10 @@ type unwraper interface {
 	unwrap() noder
 }
 
-func nodeQueries(dst []db.ScanQuery, t *db.TimeRange, n noder) []db.ScanQuery {
+func nodeQueries(dst []db.Query, t *db.TimeRange, n noder) []db.Query {
 	type queryNode interface {
 		noder
-		Query(db.TimeRange) db.ScanQuery
+		Query(db.TimeRange) db.Query
 	}
 
 	switch n := n.(type) {
@@ -566,8 +566,8 @@ type scanResultNode struct {
 
 func (s *scanResultNode) node() {}
 
-func (s *scanResultNode) Query(tr db.TimeRange) db.ScanQuery {
-	return db.ScanQuery{
+func (s *scanResultNode) Query(tr db.TimeRange) db.Query {
+	return db.Query{
 		TimeRange: tr.Offset(s.Offset),
 		Event:     s.Event,
 		Fields:    s.Match,

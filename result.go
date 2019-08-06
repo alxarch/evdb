@@ -3,6 +3,7 @@ package evdb
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"time"
 )
 
@@ -82,10 +83,10 @@ func (results Results) Add(event string, fields Fields, t int64, v float64) Resu
 
 }
 
-var _ ScanQuerier = (Results)(nil)
+var _ Querier = (Results)(nil)
 
-// ScanQuery implements ScanQuerier interface
-func (results Results) ScanQuery(_ context.Context, q *ScanQuery) (Results, error) {
+// Query implements Querier interface
+func (results Results) Query(_ context.Context, q *Query) (Results, error) {
 	var scan Results
 	t := &q.TimeRange
 	start, end := t.Start.Unix(), t.End.Unix()
@@ -115,6 +116,20 @@ func (results Results) ScanQuery(_ context.Context, q *ScanQuery) (Results, erro
 	}
 	return scan, nil
 
+}
+
+// Sort sorts fields and datapoints
+func (r *Result) Sort() {
+	sort.Stable(r.Data)
+	sort.Stable(r.Fields)
+}
+
+// Sort sorts fields and datapoints in all results
+func (results Results) Sort() {
+	for i := range results {
+		r := &results[i]
+		r.Sort()
+	}
 }
 
 type ResultGroup struct {

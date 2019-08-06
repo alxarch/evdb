@@ -25,8 +25,8 @@ func TestScan(t *testing.T) {
 	if err := fooStore.Store(snap); err != nil {
 		t.Fatal(err)
 	}
-	h := evhttp.ScanQueryHandler(s)
-	scan := evhttp.ScanQuerier{
+	h := evhttp.QueryHandler(s)
+	scan := evhttp.Querier{
 		HTTPClient: &mockHTTPClient{h},
 		URL:        "http://example.com/scan",
 	}
@@ -40,7 +40,7 @@ func TestScan(t *testing.T) {
 		End:   now.Add(time.Hour),
 		Step:  time.Hour,
 	}
-	q := evdb.ScanQuery{
+	q := evdb.Query{
 		TimeRange: tr,
 		Event:     "foo",
 		Fields:    match,
@@ -65,7 +65,7 @@ func TestScan(t *testing.T) {
 	}
 	{
 
-		results, err := scan.ScanQuery(ctx, &q)
+		results, err := scan.Query(ctx, &q)
 		assert.NoError(t, err)
 		assert.Equal(t, results, evdb.Results{
 			{

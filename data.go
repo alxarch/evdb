@@ -3,6 +3,7 @@ package evdb
 import (
 	"encoding/json"
 	"math"
+	"sort"
 	"strconv"
 	"time"
 )
@@ -52,6 +53,18 @@ func (p *DataPoint) UnmarshalJSON(data []byte) error {
 
 // DataPoints is a collection of DataPoints
 type DataPoints []DataPoint
+
+var _ sort.Interface = (DataPoints)(nil)
+
+func (s DataPoints) Len() int {
+	return len(s)
+}
+func (s DataPoints) Swap(i, j int) {
+	s[i], s[j] = s[j], s[i]
+}
+func (s DataPoints) Less(i, j int) bool {
+	return s[i].Timestamp < s[j].Timestamp
+}
 
 // Copy creates a copy of s
 func (s DataPoints) Copy() DataPoints {

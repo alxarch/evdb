@@ -47,7 +47,7 @@ func (db *db) Exec(ctx context.Context, t evdb.TimeRange, q string) ([]evdb.Resu
 }
 
 // Scan implements evdb.Scanner
-func (db *db) Scan(ctx context.Context, queries ...evdb.ScanQuery) (evdb.Results, error) {
+func (db *db) Scan(ctx context.Context, queries ...evdb.Query) (evdb.Results, error) {
 	return db.scanner.Scan(ctx, queries...)
 }
 
@@ -88,7 +88,7 @@ func (opener) Open(baseURL string) (evdb.DB, error) {
 
 	scanURL := *u
 	scanURL.Path = path.Join(u.Path, "scan")
-	sq := ScanQuerier{
+	sq := Querier{
 		URL:        scanURL.String(),
 		HTTPClient: c,
 	}

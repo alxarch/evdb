@@ -7,13 +7,13 @@ import (
 	db "github.com/alxarch/evdb"
 )
 
-// MuxScanner multiplexes ScanQuerier instances into a Scanner
-type MuxScanner map[string]db.ScanQuerier
+// MuxScanner multiplexes Querier instances into a Scanner
+type MuxScanner map[string]db.Querier
 
-// Set assigns a ScanQuerier instance to some events
-func (m MuxScanner) Set(s db.ScanQuerier, events ...string) MuxScanner {
+// Set assigns a Querier instance to some events
+func (m MuxScanner) Set(s db.Querier, events ...string) MuxScanner {
 	if m == nil {
-		m = make(map[string]db.ScanQuerier)
+		m = make(map[string]db.Querier)
 	}
 	for _, event := range events {
 		m[event] = s
@@ -23,7 +23,7 @@ func (m MuxScanner) Set(s db.ScanQuerier, events ...string) MuxScanner {
 }
 
 // Scan implements Scanner
-func (m MuxScanner) Scan(ctx context.Context, queries ...db.ScanQuery) (db.Results, error) {
+func (m MuxScanner) Scan(ctx context.Context, queries ...db.Query) (db.Results, error) {
 	queries = db.ScanQueries(queries).Compact()
 	wg := new(sync.WaitGroup)
 	errc := make(chan error, len(queries))
@@ -39,7 +39,7 @@ func (m MuxScanner) Scan(ctx context.Context, queries ...db.ScanQuery) (db.Resul
 		go func() {
 			defer wg.Done()
 			// Merge all overlapping queries
-			results, err := s.ScanQuery(ctx, q)
+			results, err := s.Query(ctx, q)
 			if err == nil {
 				mu.Lock()
 				out = append(out, results...)

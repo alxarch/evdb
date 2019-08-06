@@ -12,7 +12,7 @@ import (
 	"github.com/alxarch/evdb/internal/assert"
 )
 
-func TestQuery(t *testing.T) {
+func TestExecer(t *testing.T) {
 	s := evutil.NewMemoryStore("foo", "bar")
 	snap := &evdb.Snapshot{
 		Labels: []string{"color", "taste"},
@@ -25,7 +25,7 @@ func TestQuery(t *testing.T) {
 	if err := fooStore.Store(snap); err != nil {
 		t.Fatal(err)
 	}
-	h := evhttp.QueryHandler(s)
+	h := evhttp.ExecHandler(s)
 	exec := evhttp.Execer{
 		HTTPClient: &mockHTTPClient{h},
 		URL:        "http://example.com/scan",
@@ -41,6 +41,10 @@ func TestQuery(t *testing.T) {
 
 		results, err := exec.Exec(ctx, tr, `foo{color:blue}`)
 		assert.NoError(t, err)
+		for i := range results {
+			r := &results[i]
+			r.Sort()
+		}
 		assert.Equal(t, results, []evdb.Results{{
 			{
 				Event:     "foo",

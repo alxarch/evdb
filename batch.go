@@ -99,7 +99,7 @@ func (b *batchDB) Storer(event string) (Storer, error) {
 	b.events[event] = e
 	return e, nil
 }
-func (b *batchDB) Scan(ctx context.Context, queries ...ScanQuery) (Results, error) {
+func (b *batchDB) Scan(ctx context.Context, queries ...Query) (Results, error) {
 	return b.db.Scan(ctx, queries...)
 }
 func (b *batchDB) Close() error {

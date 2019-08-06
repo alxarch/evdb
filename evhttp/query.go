@@ -46,8 +46,8 @@ func (ex *Execer) Exec(ctx context.Context, r evdb.TimeRange, q string) ([]evdb.
 
 }
 
-// QueryHandler returns an HTTP endpoint for a QueryRunner
-func QueryHandler(scanner evdb.Scanner) http.HandlerFunc {
+// ExecHandler returns an HTTP endpoint that executes evql queries
+func ExecHandler(scanner evdb.Scanner) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var q query
 		switch r.Method {

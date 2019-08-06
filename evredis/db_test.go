@@ -34,7 +34,7 @@ func TestDB(t *testing.T) {
 		},
 	})
 	ctx := context.Background()
-	q := evdb.ScanQuery{
+	q := evdb.Query{
 		Event: "cost",
 		TimeRange: evdb.TimeRange{
 			Start: now,
@@ -42,7 +42,7 @@ func TestDB(t *testing.T) {
 			Step:  time.Hour,
 		},
 	}
-	results, err := db.ScanQuery(ctx, &q)
+	results, err := db.Query(ctx, &q)
 	if err != nil {
 		t.Fatal(err)
 	}
