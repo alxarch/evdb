@@ -67,3 +67,18 @@ func Open(configURL string, options ...Option) (DB, error) {
 type Option interface {
 	apply(db DB) (DB, error)
 }
+
+type readOnlyDB struct {
+	DB
+}
+
+func (ro *readOnlyDB) Storer(string) (Storer, error) {
+	return nil, errors.Errorf("Readonly DB")
+}
+
+// ReadOnly disables the Store interface of a DB
+func ReadOnly() Option {
+	return fnOption(func(db DB) (DB, error) {
+		return &readOnlyDB{db}, nil
+	})
+}
