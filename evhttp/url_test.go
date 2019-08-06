@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	db "github.com/alxarch/evdb"
+	"github.com/alxarch/evdb"
 )
 
 func tm(s string) time.Time {
@@ -19,56 +19,56 @@ func tm(s string) time.Time {
 }
 
 func TestScanQueryFromURL(t *testing.T) {
-	tr := db.TimeRange{
+	tr := evdb.TimeRange{
 		Start: tm("2019-08-01"),
 		End:   tm("2019-08-02"),
 		Step:  time.Hour,
 	}
 	tests := []struct {
 		values  string
-		wantQ   db.ScanQuery
+		wantQ   evdb.ScanQuery
 		wantErr bool
 	}{
-		{"", db.ScanQuery{TimeRange: db.TimeRange{Step: -1}}, true},
-		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.foo=bar&match.foo=baz", db.ScanQuery{
+		{"", evdb.ScanQuery{TimeRange: evdb.TimeRange{Step: -1}}, true},
+		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.foo=bar&match.foo=baz", evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchAny("bar", "baz"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchAny("bar", "baz"),
 			},
 		}, false},
-		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.suffix.foo=bar", db.ScanQuery{
+		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.suffix.foo=bar", evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchSuffix("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchSuffix("bar"),
 			},
 		}, false},
-		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.prefix.foo=bar", db.ScanQuery{
+		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.prefix.foo=bar", evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchPrefix("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchPrefix("bar"),
 			},
 		}, false},
-		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.equals.foo=bar", db.ScanQuery{
+		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.equals.foo=bar", evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchString("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchString("bar"),
 			},
 		}, false},
-		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.regexp.foo=bar.*", db.ScanQuery{
+		{"start=2019-08-01&end=2019-08-02&step=1h0m0s&event=win&match.regexp.foo=bar.*", evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
+			Fields: evdb.MatchFields{
 				"foo": regexp.MustCompile("bar.*"),
 			},
 		}, false},
-		{`start=2019-08-01&end=2019-08-02&step=1h&event=win&match.regexp.foo=bar%28foo`, db.ScanQuery{
+		{`start=2019-08-01&end=2019-08-02&step=1h&event=win&match.regexp.foo=bar%28foo`, evdb.ScanQuery{
 			TimeRange: tr,
 		}, true},
-		{`start=2019-08-01&end=2019-08-02&step=1h&event=win&match.invalid.foo=bar%28foo`, db.ScanQuery{
+		{`start=2019-08-01&end=2019-08-02&step=1h&event=win&match.invalid.foo=bar%28foo`, evdb.ScanQuery{
 			TimeRange: tr,
 		}, true},
 	}
@@ -92,49 +92,49 @@ func TestScanQueryFromURL(t *testing.T) {
 }
 
 func TestEncodeScanQuery(t *testing.T) {
-	tr := db.TimeRange{
+	tr := evdb.TimeRange{
 		Start: tm("2019-08-01"),
 		End:   tm("2019-08-02"),
 		Step:  time.Hour,
 	}
 	tests := []struct {
 		wantStr string
-		q       *db.ScanQuery
+		q       *evdb.ScanQuery
 		wantErr bool
 	}{
 		{"", nil, true},
-		{"end=1564704000&event=win&match.regexp.foo=%5E%28bar%7Cbaz%29%24&start=1564617600&step=1h0m0s", &db.ScanQuery{
+		{"end=1564704000&event=win&match.regexp.foo=%5E%28bar%7Cbaz%29%24&start=1564617600&step=1h0m0s", &evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchAny("bar", "baz"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchAny("bar", "baz"),
 			},
 		}, false},
-		{"end=1564704000&event=win&match.suffix.foo=bar&start=1564617600&step=1h0m0s", &db.ScanQuery{
+		{"end=1564704000&event=win&match.suffix.foo=bar&start=1564617600&step=1h0m0s", &evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchSuffix("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchSuffix("bar"),
 			},
 		}, false},
-		{"end=1564704000&event=win&match.prefix.foo=bar&start=1564617600&step=1h0m0s", &db.ScanQuery{
+		{"end=1564704000&event=win&match.prefix.foo=bar&start=1564617600&step=1h0m0s", &evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchPrefix("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchPrefix("bar"),
 			},
 		}, false},
-		{"end=1564704000&event=win&match.foo=bar&start=1564617600&step=1h0m0s", &db.ScanQuery{
+		{"end=1564704000&event=win&match.foo=bar&start=1564617600&step=1h0m0s", &evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
-				"foo": db.MatchString("bar"),
+			Fields: evdb.MatchFields{
+				"foo": evdb.MatchString("bar"),
 			},
 		}, false},
-		{"end=1564704000&event=win&match.regexp.foo=bar.%2A&start=1564617600&step=1h0m0s", &db.ScanQuery{
+		{"end=1564704000&event=win&match.regexp.foo=bar.%2A&start=1564617600&step=1h0m0s", &evdb.ScanQuery{
 			TimeRange: tr,
 			Event:     "win",
-			Fields: db.MatchFields{
+			Fields: evdb.MatchFields{
 				"foo": regexp.MustCompile("bar.*"),
 			},
 		}, false},

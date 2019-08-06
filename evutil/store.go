@@ -2,7 +2,6 @@ package evutil
 
 import (
 	"context"
-	"regexp"
 	"sync"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 // StorerFunc is a function that implements Storer interface
 type StorerFunc func(s *db.Snapshot) error
 
-// Store implements storer interface
+// Store implements Storer interface
 func (fn StorerFunc) Store(s *db.Snapshot) error {
 	return fn(s)
 }
@@ -159,102 +158,140 @@ func (tee teeStorer) Store(s *db.Snapshot) error {
 	return nil
 }
 
-// MuxStore maps event names to Storers
-type MuxStore map[string]db.Storer
+// MuxStore maps event names to Store
+type MuxStore map[string]db.Store
 
 // Storer implements Store interface
 func (m MuxStore) Storer(event string) (db.Storer, error) {
-	return m[event], nil
+	if s := m[event]; s != nil {
+		return s.Storer(event)
+	}
+	return nil, errors.Errorf("Unregistered event %q", event)
 }
 
-// Set sets a Storer for an event
-func (m MuxStore) Set(event string, s db.Storer) MuxStore {
+// Register registers a store for some events
+func (m MuxStore) Register(s db.Store, events ...string) MuxStore {
 	if m == nil {
-		m = make(map[string]db.Storer)
+		m = make(map[string]db.Store)
 	}
-	m[event] = s
+	for _, event := range events {
+		m[event] = s
+	}
 	return m
 }
 
-// Add set an additional Storer for an event
-func (m MuxStore) Add(event string, s db.Storer) (MuxStore, db.Storer) {
-	if m == nil {
-		m = make(map[string]db.Storer)
-		m[event] = s
-		return m, s
-	}
-	p := m[event]
-	if p == nil {
-		m[event] = s
-		return m, s
-	}
-	if p, ok := p.(teeStorer); ok {
-		p = p.Add(s)
-		m[event] = p
-		return m, p
-	}
-	var tee teeStorer
-	tee = tee.Add(p)
-	tee = tee.Add(s)
-	m[event] = tee
-	return m, tee
-
-}
-
-// SyncStore provides a mutable Store safe for concurrent use
-type SyncStore struct {
-	Factory db.Store
-	Match   *regexp.Regexp
+type cacheStore struct {
 	mu      sync.RWMutex
-	mux     MuxStore
+	storers map[string]db.Storer
+	db.Store
 }
 
-// Storer implements Store interface
-func (s *SyncStore) Storer(event string) (w db.Storer, err error) {
-	s.mu.RLock()
-	w, _ = s.mux.Storer(event)
-	s.mu.RUnlock()
+// CacheStore caches Storers from a Store
+func CacheStore(s db.Store) db.Store {
+	return &cacheStore{
+		Store: s,
+	}
+}
+
+func (c *cacheStore) Storer(event string) (db.Storer, error) {
+	c.mu.RLock()
+	w := c.storers[event]
+	c.mu.RUnlock()
 	if w != nil {
-		return
+		return w, nil
 	}
-	if s.Factory == nil {
-		return
-	}
-	if s.Match != nil && !s.Match.MatchString(event) {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	w, err = s.mux.Storer(event)
+	w, err := c.Store.Storer(event)
 	if err != nil {
 		return nil, err
 	}
-	s.mux.Set(event, w)
-	return
-}
-
-// Register sets the Storer if none exists
-func (s *SyncStore) Register(event string, w db.Storer) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, duplicate := s.mux[event]; duplicate {
-		return false
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if w := c.storers[event]; w != nil {
+		return w, nil
 	}
-	s.mux = s.mux.Set(event, w)
-	return true
+	c.storers[event] = w
+	return w, nil
 }
 
-// Set sets the Storer for an event
-func (s *SyncStore) Set(event string, w db.Storer) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mux = s.mux.Set(event, w)
-}
+// // Add set an additional Storer for an event
+// func (m MuxStore) Add(event string, s db.Storer) (MuxStore, db.Storer) {
+// 	if m == nil {
+// 		m = make(map[string]db.Storer)
+// 		m[event] = s
+// 		return m, s
+// 	}
+// 	p := m[event]
+// 	if p == nil {
+// 		m[event] = s
+// 		return m, s
+// 	}
+// 	if p, ok := p.(teeStorer); ok {
+// 		p = p.Add(s)
+// 		m[event] = p
+// 		return m, p
+// 	}
+// 	var tee teeStorer
+// 	tee = tee.Add(p)
+// 	tee = tee.Add(s)
+// 	m[event] = tee
+// 	return m, tee
 
-// Add sets an additional Storer for an event
-func (s *SyncStore) Add(event string, w db.Storer) db.Storer {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.mux, w = s.mux.Add(event, w)
-	return w
-}
+// }
+
+// // SyncStore provides a mutable Store safe for concurrent use
+// type SyncStore struct {
+// 	Factory db.Store
+// 	Match   *regexp.Regexp
+// 	mu      sync.RWMutex
+// 	mux     MuxStore
+// }
+
+// // Storer implements Store interface
+// func (s *SyncStore) Storer(event string) (w db.Storer, err error) {
+// 	s.mu.RLock()
+// 	w, _ = s.mux.Storer(event)
+// 	s.mu.RUnlock()
+// 	if w != nil {
+// 		return
+// 	}
+// 	if s.Factory == nil {
+// 		return
+// 	}
+// 	if s.Match != nil && !s.Match.MatchString(event) {
+// 		return
+// 	}
+// 	s.mu.Lock()
+// 	defer s.mu.Unlock()
+// 	w, err = s.mux.Storer(event)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	s.mux.Set(event, w)
+// 	return
+// }
+
+// // Register sets the Storer if none exists
+// func (s *SyncStore) Register(event string, w db.Storer) bool {
+// 	s.mu.Lock()
+// 	defer s.mu.Unlock()
+// 	if _, duplicate := s.mux[event]; duplicate {
+// 		return false
+// 	}
+// 	s.mux = s.mux.Set(event, w)
+// 	return true
+// }
+
+// // Set sets the Storer for an event
+// func (s *SyncStore) Set(event string, w db.Storer) {
+// 	s.mu.Lock()
+// 	defer s.mu.Unlock()
+// 	s.mux = s.mux.Set(event, w)
+// }
+
+// // Add sets an additional Storer for an event
+// func (s *SyncStore) Add(event string, w db.Storer) db.Storer {
+// 	s.mu.Lock()
+// 	defer s.mu.Unlock()
+// 	s.mux, w = s.mux.Add(event, w)
+// 	return w
+// }

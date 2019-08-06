@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	db "github.com/alxarch/evdb"
+	"github.com/alxarch/evdb"
 	"github.com/alxarch/httperr"
 )
 
@@ -22,10 +22,10 @@ type Storer struct {
 	URL string
 }
 
-var _ db.Storer = (*Storer)(nil)
+var _ evdb.Storer = (*Storer)(nil)
 
 // Store implements Storer interface
-func (c *Storer) Store(r *db.Snapshot) error {
+func (c *Storer) Store(r *evdb.Snapshot) error {
 
 	body := getBuffer()
 	defer putBuffer(body)
@@ -60,10 +60,10 @@ type Store struct {
 	BaseURL string
 }
 
-var _ db.Store = (*Store)(nil)
+var _ evdb.Store = (*Store)(nil)
 
 // Storer implements Store interface
-func (s *Store) Storer(event string) (db.Storer, error) {
+func (s *Store) Storer(event string) (evdb.Storer, error) {
 	u, err := url.Parse(s.BaseURL)
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func (s *Store) Storer(event string) (db.Storer, error) {
 }
 
 // StoreHandler returns an HTTP handler for a Store
-func StoreHandler(store db.Store, prefix string) http.HandlerFunc {
+func StoreHandler(store evdb.Store, prefix string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		path = strings.TrimPrefix(path, prefix)
@@ -96,12 +96,12 @@ func StoreHandler(store db.Store, prefix string) http.HandlerFunc {
 }
 
 type storeHandler struct {
-	db.Storer
+	evdb.Storer
 }
 
 func (h *storeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	s := db.Snapshot{}
+	s := evdb.Snapshot{}
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&s); err != nil {
 		httperr.RespondJSON(w, httperr.BadRequest(err))
@@ -118,7 +118,7 @@ func (h *storeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewStoreHandler returns an HTTP endpoint for a Storer
-func NewStoreHandler(s db.Storer) http.Handler {
+func NewStoreHandler(s evdb.Storer) http.Handler {
 	return &storeHandler{s}
 }
 
